@@ -235,6 +235,7 @@ Run from the repository root.
    | 1 | 2.97 GB | `npm run typecheck`; `npm run lint`; `node scripts/check-invariants.cjs`; `npm test` | typecheck exit 0 (28 s); lint exit 0 (19 s); invariants ok, reachability 189/199; suite 240 files, **5042 passed, 1 failed**, 8 skipped (299 s) |
    | 2 | 3.86 GB | `npx vitest run --reporter=json` | the same one failure, and nothing else |
    | 3 | 2.95 GB | `npm run test:coverage`; `node scripts/check-coverage.cjs` (CI's two steps) | **240 files passed; 5043 passed, 8 skipped** (174 s); "coverage floors ok (17 subsystems on win32; 19 untested modules, all recorded)" |
+   | 4 | 2.55 GB | all of the above, plus `check-readme-current` and `check-attribution`, on the merge of `main` at `8a3a3a7` (#73) into this branch: commit `6f28c4b`, tree `3370b9c` | typecheck exit 0 (28 s); lint exit 0 (34 s); invariants ok; **241 files passed; 5055 passed, 8 skipped** (168 s); floors ok; README current for M8; attribution ok |
 
    **The failure in runs 1 and 2** was `test/scripts/check-invariants.test.ts` › "the
    CLI, run as CI runs it › exits 0 over this repository". Its `spawnSync` child was
