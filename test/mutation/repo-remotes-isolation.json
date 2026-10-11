@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "package": "repo-remotes host-config isolation (fix/hermetic-git-remotes-test, 2026-10-11)",
+  "about": "the 'against git itself' cases cannot be passed or failed by the host's git config: every line of the isolation is needed against a hostile host played on every machine, and each route that host uses really does rewrite the push URL",
+  "tests": ["test/main/repo-remotes.test.ts"],
+  "mutants": [
+    {
+      "id": "control-comment",
+      "control": true,
+      "file": "test/main/repo-remotes.test.ts",
+      "find": " * The host that broke this file, played on every machine.",
+      "replace": " * The host that broke this file, played on any machine.",
+      "why": "a no-op: a doc comment reworded, nothing a test can see"
+    },
+    {
+      "id": "no-isolation",
+      "file": "test/main/repo-remotes.test.ts",
+      "find": "    actAsTheHostileHost(HOSTILE_ROUTES)\n    isolateGitFromTheHost()\n",
+      "replace": "    actAsTheHostileHost(HOSTILE_ROUTES)\n",
+      "why": "the isolation as a whole: without it the host's rewrite reaches git and the separate push URL collapses into the fetch URL"
+    },
+    {
+      "id": "parameters-kept",
+      "file": "test/main/repo-remotes.test.ts",
+      "find": "const CONFIG_VALUES_FROM_ENV = /^GIT_CONFIG_(COUNT|KEY_\\d+|VALUE_\\d+|PARAMETERS)$/\n",
+      "replace": "const CONFIG_VALUES_FROM_ENV = /^GIT_CONFIG_(COUNT|KEY_\\d+|VALUE_\\d+)$/\n",
+      "why": "GIT_CONFIG_PARAMETERS is deleted: a parent git -c hands its flags down through it"
+    },
+    {
+      "id": "count-kept",
+      "file": "test/main/repo-remotes.test.ts",
+      "find": "const CONFIG_VALUES_FROM_ENV = /^GIT_CONFIG_(COUNT|KEY_\\d+|VALUE_\\d+|PARAMETERS)$/\n",
+      "replace": "const CONFIG_VALUES_FROM_ENV = /^GIT_CONFIG_(PARAMETERS)$/\n",
+      "why": "GIT_CONFIG_COUNT, KEY_n and VALUE_n are deleted: the route the 2026-10-11 container used"
+    },
+    {
+      "id": "system-file-read",
+      "file": "test/main/repo-remotes.test.ts",
+      "find": "  vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1')\n",
+      "replace": "",
+      "why": "GIT_CONFIG_NOSYSTEM skips the system file, whatever GIT_CONFIG_SYSTEM names"
+    },
+    {
+      "id": "global-file-read",
+      "file": "test/main/repo-remotes.test.ts",
+      "find": "  vi.stubEnv('GIT_CONFIG_GLOBAL', '/dev/null')\n",
+      "replace": "",
+      "why": "GIT_CONFIG_GLOBAL=/dev/null replaces the user's global file"
+    },
+    {
+      "id": "system-route-inert",
+      "file": "test/main/repo-remotes.test.ts",
+      "find": "GIT_CONFIG_SYSTEM: configFile, GIT_CONFIG_NOSYSTEM: undefined",
+      "replace": "GIT_CONFIG_SYSTEM: configFile, GIT_CONFIG_NOSYSTEM: '1'",
+      "why": "the premise: a route that no longer rewrites anything is caught, not left as a guard that proves nothing"
+    }
+  ]
+}
