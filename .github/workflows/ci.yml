@@ -79,6 +79,18 @@ jobs:
       - name: Install
         if: steps.scaffold.outputs.present == 'true'
         run: npm ci
+      # GYM-012: a spec whose anchor no longer matches its code fails here,
+      # naming the mutant and the file, instead of rotting until someone runs
+      # the round (TEST-STRATEGY §10). `--check` runs no test and writes
+      # nothing, and it needs a clean tree: straight after Install, only the
+      # ignored node_modules has been written.
+      - name: Mutation specs still match their code (GYM-012)
+        if: steps.scaffold.outputs.present == 'true'
+        run: |
+          shopt -s nullglob
+          specs=(test/mutation/*.json)
+          if [ ${#specs[@]} -eq 0 ]; then echo "no spec under test/mutation/: GYM-012 checks nothing"; exit 1; fi
+          for spec in "${specs[@]}"; do node scripts/mutate.cjs "$spec" --check || exit 1; done
       - name: Typecheck
         if: steps.scaffold.outputs.present == 'true'
         run: npm run typecheck
