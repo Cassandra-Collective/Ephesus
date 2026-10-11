@@ -70,7 +70,12 @@ const strip = (): string => host.textContent ?? ''
 
 function missingNames(): string[] {
   const title = host.querySelector('span[title^="missing:"]')?.getAttribute('title')
-  return title?.replace(/^missing: /, '').split(', ').sort() ?? []
+  return (
+    title
+      ?.replace(/^missing: /, '')
+      .split(', ')
+      .sort() ?? []
+  )
 }
 
 afterEach(() => {
