@@ -17,7 +17,14 @@ let root: Root | null = null
 let host: HTMLDivElement
 const originalFonts = Object.getOwnPropertyDescriptor(document, 'fonts')
 
-function stubFontLoading(options: { unavailable?: string; invalidSignature?: boolean } = {}) {
+interface FontFailureOptions {
+  unavailable?: string
+  invalidSignature?: boolean
+  rejectFetch?: string
+  rejectLoad?: string
+}
+
+function stubFontLoading(options: FontFailureOptions = {}) {
   const added: string[] = []
   class FakeFontFace {
     constructor(
@@ -25,6 +32,7 @@ function stubFontLoading(options: { unavailable?: string; invalidSignature?: boo
       readonly source: ArrayBuffer
     ) {}
     async load(): Promise<FakeFontFace> {
+      if (this.family === options.rejectLoad) throw new Error('FontFace.load failed')
       return this
     }
   }
@@ -38,10 +46,13 @@ function stubFontLoading(options: { unavailable?: string; invalidSignature?: boo
   const fontBytes = options.invalidSignature
     ? new Uint8Array([60, 104, 116, 109]).buffer
     : new Uint8Array([0x77, 0x4f, 0x46, 0x32]).buffer
-  const fetchMock = vi.fn(async (file: string) => ({
-    ok: !options.unavailable || !file.includes(options.unavailable),
-    arrayBuffer: async () => fontBytes
-  }))
+  const fetchMock = vi.fn(async (file: string) => {
+    if (file === options.rejectFetch) throw new Error('Network failure')
+    return {
+      ok: !options.unavailable || !file.includes(options.unavailable),
+      arrayBuffer: async () => fontBytes
+    }
+  })
   vi.stubGlobal('fetch', fetchMock)
   return { added, fetchMock }
 }
@@ -56,6 +67,11 @@ async function mount(): Promise<void> {
 }
 
 const strip = (): string => host.textContent ?? ''
+
+function missingNames(): string[] {
+  const title = host.querySelector('span[title^="missing:"]')?.getAttribute('title')
+  return title?.replace(/^missing: /, '').split(', ').sort() ?? []
+}
 
 afterEach(() => {
   act(() => root?.unmount())
@@ -73,7 +89,7 @@ describe('renderer pixel-font degradation (#11)', () => {
     await mount()
 
     expect(fetchMock).toHaveBeenCalledTimes(PIXEL_FACES.length)
-    expect(added).toEqual(PIXEL_FACES.map((face) => face.family))
+    expect([...added].sort()).toEqual(PIXEL_FACES.map((face) => face.family).sort())
     expect(strip()).toContain('fonts: bundled')
     expect(strip()).not.toContain('pixel faces missing')
   })
@@ -87,9 +103,7 @@ describe('renderer pixel-font degradation (#11)', () => {
     expect(added).toHaveLength(PIXEL_FACES.length - 1)
     expect(added).not.toContain(missing.family)
     expect(strip()).toContain(`fonts: 1 of ${PIXEL_FACES.length} pixel faces missing`)
-    expect(host.querySelector('span[title^="missing:"]')?.getAttribute('title')).toBe(
-      `missing: ${missing.family}`
-    )
+    expect(missingNames()).toEqual([missing.family])
   })
 
   it('shows all missing faces when the server returns non-WOFF2 content', async () => {
@@ -100,9 +114,35 @@ describe('renderer pixel-font degradation (#11)', () => {
     expect(strip()).toContain(
       `fonts: ${PIXEL_FACES.length} of ${PIXEL_FACES.length} pixel faces missing`
     )
-    expect(host.querySelector('span[title^="missing:"]')?.getAttribute('title')).toBe(
-      `missing: ${PIXEL_FACES.map((face) => face.family).join(', ')}`
-    )
+    expect(missingNames()).toEqual(PIXEL_FACES.map((face) => face.family).sort())
+    expect(strip()).not.toContain('fonts: bundled')
+  })
+
+  it('displays a missing face when fetch rejects without rejecting the app render', async () => {
+    const missing = PIXEL_FACES[0]
+    if (!missing) throw new Error('Expected three bundled font definitions')
+    const { added, fetchMock } = stubFontLoading({ rejectFetch: missing.file })
+    await mount()
+
+    expect(fetchMock).toHaveBeenCalledTimes(PIXEL_FACES.length)
+    expect(added).toHaveLength(PIXEL_FACES.length - 1)
+    expect(added).not.toContain(missing.family)
+    expect(strip()).toContain(`fonts: 1 of ${PIXEL_FACES.length} pixel faces missing`)
+    expect(missingNames()).toEqual([missing.family])
+    expect(strip()).not.toContain('fonts: bundled')
+  })
+
+  it('reports a failed FontFace.load with valid WOFF2 bytes', async () => {
+    const missing = PIXEL_FACES[2]
+    if (!missing) throw new Error('Expected three bundled font definitions')
+    const { added, fetchMock } = stubFontLoading({ rejectLoad: missing.family })
+    await mount()
+
+    expect(fetchMock).toHaveBeenCalledTimes(PIXEL_FACES.length)
+    expect(added).toHaveLength(PIXEL_FACES.length - 1)
+    expect(added).not.toContain(missing.family)
+    expect(strip()).toContain(`fonts: 1 of ${PIXEL_FACES.length} pixel faces missing`)
+    expect(missingNames()).toEqual([missing.family])
     expect(strip()).not.toContain('fonts: bundled')
   })
 })
