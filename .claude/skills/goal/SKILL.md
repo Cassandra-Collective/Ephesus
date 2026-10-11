@@ -1,6 +1,6 @@
 ---
 name: goal
-description: Drive the current milestone's goal run end-to-end — resolve the milestone from docs/PROGRESS.md (M3 as of this writing), enforce the Architect's sole git authorship and a properly named feature branch before any commit, then loop the /build-package cycle through the milestone's packages and close with /milestone-review. Use when asked to run the milestone, start "the M<x> run", or invoked as /goal.
+description: Drive the current milestone's goal run end-to-end — resolve the milestone from the Resume here block of docs/PROGRESS.md (M9, not yet authorised to start, as of 2026-10-11), enforce the Architect's sole git authorship and a properly named feature branch before any commit, then loop the /build-package cycle through the milestone's packages and close with /milestone-review. Use when asked to run the milestone, start "the M<x> run", or invoked as /goal.
 ---
 
 # Run the current milestone goal
@@ -35,9 +35,14 @@ BUILD-PROMPT wins.
 
 ## 1. Resolve the milestone
 
-Open `docs/PROGRESS.md`; the current milestone is the first one with unchecked
-packages (BUILD-PROMPT's build-state block names it — **M3, resuming at
-M3.1**, as of 2026-08-27). Read the milestone's package plan there in full,
+Open `docs/PROGRESS.md` and read its **Resume here** block: it names the current
+milestone, its next package, and what waits on the Architect. **If the block says the
+milestone's build is not yet authorised — M9 and every Phase 9 milestone, as of
+2026-10-11 — ask the Architect through AskUserQuestion whether it may start, and stop
+there on anything but a yes.** The milestone's goal doc is the handover once it may
+(`docs/M9-GOAL.md` for M9). Do not resolve the milestone from "the first unchecked
+box": deferred items and exits that wait on the Architect sit above the real next
+step. Read the milestone's package plan in full,
 including the Architect-verdict and carried-items paragraphs at its head:
 those decisions are already made — do not re-litigate them.
 

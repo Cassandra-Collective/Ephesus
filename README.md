@@ -36,9 +36,11 @@ and [contributions are welcome](./CONTRIBUTING.md).
 
 What works right now: the Electron shell, real agent CLIs under management with
 memory and mailboxes, the 2D floor, the Agora, the Odeon, the Stoa and the Gymnasium
-self-improvement loop. The current milestone is **M8 — the company you can leave
-running**. Package-by-package state with evidence is in
-[`docs/PROGRESS.md`](./docs/PROGRESS.md); the narrative is under
+self-improvement loop. Every package through M8c is built. The current milestone is
+**M9 — the harness is the product**, planned and not yet started: the Architect has
+approved its plan and not yet its build ([`docs/M9-PLAN.md`](./docs/M9-PLAN.md)).
+Package-by-package state with evidence is in [`docs/PROGRESS.md`](./docs/PROGRESS.md),
+which opens on where the build resumes; the narrative is under
 [Where the build stands](#where-the-build-stands).
 
 ## Quick start
@@ -418,12 +420,14 @@ This repository is a complete, self-contained documentation suite. Read in this 
 | [`docs/design/VOICE-DESIGN.md`](./docs/design/VOICE-DESIGN.md) | **Voice & conversation design** — the Herald's persona, wake word, barge-in, briefing scripts, error behavior. |
 | [`docs/ENGINEERING-STANDARDS.md`](./docs/ENGINEERING-STANDARDS.md) | Coding standards, repo conventions, review rules, security rules, definition of done. |
 | [`docs/TEST-STRATEGY.md`](./docs/TEST-STRATEGY.md) | Test pyramid, what gets unit/integration/E2E coverage, agent-behavior evals, CI gates. |
-| [`docs/IMPLEMENTATION.md`](./docs/IMPLEMENTATION.md) | Phased implementation plan (M0–M7) with exit criteria, risk register, and build order. |
+| [`docs/IMPLEMENTATION.md`](./docs/IMPLEMENTATION.md) | Phased implementation plan (M0 through M9h, with M7b the v1 boundary) with exit criteria, risk register, and build order. |
+| [`docs/PROGRESS.md`](./docs/PROGRESS.md) | **The build register** — where the build resumes, what waits on the Architect, and every open milestone, package by package with evidence. Closed milestones are archived, one file each, in [`docs/progress/`](./docs/progress/). |
 | [`BUILD-PROMPT.md`](./BUILD-PROMPT.md) | Ready-to-paste prompt that directs a coding agent to implement this design milestone by milestone, doc-grounded and verification-gated. |
 | [`docs/AUTOMATION.md`](./docs/AUTOMATION.md) | The Claude Code automation installed in this repo (hooks, skills, subagents, CI) — what exists, why, and what's deferred. |
 | [`docs/gymnasium/LEDGER.md`](./docs/gymnasium/LEDGER.md) | The self-improvement ledger — every Gymnasium proposal from evidence to measured outcome. |
 | [`docs/stoa/WATCHLIST.md`](./docs/stoa/WATCHLIST.md) | The research watchlist — the external sources the Architect has registered for study, and the briefs they produce. |
 | [`docs/M9-PLAN.md`](./docs/M9-PLAN.md) | **The next milestone, planned and not yet started** — the harness as the product: Ephesus's own agent engine running local models behind the existing adapter seam, and a bench that measures the harness's own uplift. Approved for planning on 2026-10-02. |
+| [`docs/PHASE-9-PLAN.md`](./docs/PHASE-9-PLAN.md) | **What follows M9, planned and not yet started** — seven milestones (M9b–M9h) that give Ephesus the capabilities of an agentic harness in its own way: a workspace with the floor as a view mode, a local model service, contained execution and armed gates, web research, a messaging gateway with remote authorisation, schedules, mail and calendar, and a companion of its own on the phone. Planned on 2026-10-03. |
 
 ## Where the build stands
 
@@ -436,6 +440,20 @@ This repository is a complete, self-contained documentation suite. Read in this 
 > a headless-first core with the window as one client. The plan, its evidence and
 > the seven decisions it rests on are in [`docs/M9-PLAN.md`](./docs/M9-PLAN.md).
 > Nothing below this note has changed; M9 has no landed package.
+>
+> **What follows M9 is planned as well, and equally unstarted.** On 2026-10-03 the
+> Architect set the target: what a real agentic harness offers — conversations with
+> local and API models, a model service that fits a model to the machine, deep
+> research, blind comparison, documents, skills, a messaging gateway, schedules,
+> mail and calendar, sandboxed execution, the phone — built Ephesus's way, with
+> every capability granted by name, gated by the Watch and measured by the bench.
+> The city and its names stay; **the floor becomes a view mode and the window opens
+> on a workspace** ([ADR-0040](./docs/adr/ADR-0040-the-floor-is-a-view-mode.md)).
+> Seven milestones, M9b to M9h, in [`docs/PHASE-9-PLAN.md`](./docs/PHASE-9-PLAN.md):
+> five before the v1 boundary (M7b) and two — mail and calendar, and the companion —
+> after it.
+> Until M9b lands, everything this README shows and says about the floor is still
+> what the app does.
 
 **M8's thirteen packages have all landed — and M8 has not closed.** M6 and M7
 landed the spoken company and the two outward missions; M8 is the hardening
@@ -450,7 +468,8 @@ been since 2026-09-01, for the same reason. The script for it is
 [`docs/EXIT-M8.md`](./docs/EXIT-M8.md).
 
 <!-- landed: M8.0 M8.1 M8.2 M8.3 M8.4 M8.5 M8.6 M8.7a M8.7b M8.8 M8.9 M8.10 M8.11 M8.12 M8.13 M8.14 M8b M8c
-     Checked by scripts/check-readme-current.cjs against docs/PROGRESS.md: every
+     Checked by scripts/check-readme-current.cjs against the register (docs/PROGRESS.md
+     and the milestones archived in docs/progress/): every
      package ticked there must be listed here, and listing one is a claim that
      the prose below actually says what it did. The check catches the oversight
      — a package landing while nobody touched this file — which is the failure
@@ -654,7 +673,7 @@ audit caught the original demo citing a commit that existed in no repository,
 the record was amended, and the chain re-proven end to end. Four in-milestone
 defects were found by running the demo; the audit added five more fixes, every
 one with a named regression test. Evidence trail in
-[`docs/PROGRESS.md`](./docs/PROGRESS.md); full record in
+[`docs/progress/M5b.md`](./docs/progress/M5b.md); full record in
 [the M5b record](./docs/implementations/2026-08-28-m5b-stoa-and-modes.md).
 
 Next: **M6 — the floor's face + the Herald** (citizens at the MD-grade §5.1
@@ -698,7 +717,7 @@ became two Architect-approved, landed improvements (hook-boundary steer,
 closing time) — the ledger's first proof-gate evidence. M5 was closed by the
 two-agent audit (execution + design conformance); it re-proved every exit
 criterion and caught one real ledger-column defect, fixed with regression
-tests. Evidence trail in [`docs/PROGRESS.md`](./docs/PROGRESS.md); full
+tests. Evidence trail in [`docs/progress/M5.md`](./docs/progress/M5.md); full
 record in [the M5 record](./docs/implementations/2026-08-28-m5-accountable-company.md).
 
 ## License & lineage
