@@ -122,9 +122,13 @@ the report first, then the exit status, then the tests the baseline proved can p
    at the baseline fails, or a listed file cannot load; any other failure is INVALID; one
    that passes is a survivor. Survivors print the triage question and the round exits 1.
 
-The round's files are watched by their hashes and everything else by `git status`, and
-the two never overlap. That is deliberate: two checks over the same ground are two checks
-that cannot disagree, and a mutant deleting either would survive every test.
+While a mutant runs, the round's files are watched by their hashes and everything else
+by `git status`, and the two never overlap. That is deliberate: two checks over the same
+ground are two checks that cannot disagree, and a mutant deleting either would survive
+every test. The restore (step 7) is the one place they do overlap — it checks the round's
+files with both, and its `git status` half is the one *Not proven* lists as not in the
+round.
+*(Corrected 2026-10-11 at review before merge: this said the two never overlap at all.)*
 
 ### 3.4 What was written and taken out again
 
@@ -217,10 +221,14 @@ inherits the author's environment.
   A mutant is applicable iff the count is exactly 1. Counting non-overlapping matches
   would call `"aa"` in `"aaa"` unique while two different edits are possible.
 - **Identity of a test.** `file › fullName #k`, where `k` is the test's place among the
-  tests of that name in that file, so two same-named tests cannot stand in for each
-  other. With `B` the set of tests that passed at the baseline and `P` the set that
-  passed in a mutant run with no failure, the run is a pass iff `B ⊆ P`; otherwise it is
-  INVALID. A failing test or file is a kill whatever `P` is.
+  tests of that name in that file. That tells same-named tests apart only by their
+  order, so one can still stand in for another (TEST-STRATEGY §10, limit 2). With `B`
+  the set of tests that passed at the baseline and `P` the set that passed in a mutant
+  run with no failure, the run is a pass iff `B ⊆ P`; otherwise it is INVALID. A run
+  with a failure is a kill iff some test in `B` failed, or a listed file that holds no
+  test failed to load; any other failure is INVALID (`b20f83b`, §3.7).
+  *(Corrected 2026-10-11 at review before merge: this said same-named tests cannot
+  stand in for each other, and that any failing test or file is a kill.)*
 - **Identity of a file.** SHA-256 of its bytes. With `C` the cached hash of each round
   file at the start and `M` the hash of the mutated bytes, a run's verdict stands iff,
   after the run, `hash(target) = M`, `hash(f) = C(f)` for every other round file `f`,

@@ -201,7 +201,9 @@ change at a time in this repository's source and reads whether the repository's 
 To do that it runs those tests and their configuration as code, so it trusts them. **A test or a
 vitest configuration written to deceive it can forge any verdict**: a configuration can rewrite the
 report the round reads, and a test can start a process that writes after the round has looked
-(both demonstrated by the second refutation pass, 2026-10-03). A round's verdict therefore means
+(both raised by the second refutation pass, 2026-10-03, and not reproduced: each needs a
+repository written to deceive the round — TEST-STRATEGY §10, limits 10 and 11; corrected
+2026-10-11, which said "demonstrated"). A round's verdict therefore means
 that this repository's tests, written honestly, catch the change. It is evidence about the tests,
 not a defence against them. Its other known limits are listed in TEST-STRATEGY §10.
 
