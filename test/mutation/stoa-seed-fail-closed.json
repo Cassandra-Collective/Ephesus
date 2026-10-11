@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "package": "stoa-seed-fail-closed",
+  "about": "the watchlist seed writes and returns only what the schema accepts and reports every row it refuses; pattern intake needs a license on the MIT-compatible list; register and retire refuse to write over a watchlist they cannot read (DECISIONS-LOG 2026-10-11)",
+  "tests": ["test/shared/stoa.test.ts", "test/main/stoa.test.ts"],
+  "mutants": [
+    {
+      "id": "control-comment",
+      "control": true,
+      "file": "src/shared/stoa.ts",
+      "find": "/** A table row with a source id that did not become an entry, and every reason why. */",
+      "replace": "/** A table row with a source id that did not become an entry, and each reason why. */",
+      "why": "a no-op: a doc comment reworded, nothing a test can see"
+    },
+    {
+      "id": "intake-fails-open",
+      "file": "src/shared/stoa.ts",
+      "find": "  return INTAKE_LICENSES.some((id) => id.toLowerCase() === value) ? 'permitted' : 'incompatible'",
+      "replace": "  return 'permitted'",
+      "why": "the rule before 2026-10-11: anything but exactly `unverified` permits intake, so `unverified (read as AGPL-3.0 …)` and `AGPL-3.0` do"
+    },
+    {
+      "id": "intake-case-sensitive",
+      "file": "src/shared/stoa.ts",
+      "find": "  return INTAKE_LICENSES.some((id) => id.toLowerCase() === value) ? 'permitted' : 'incompatible'",
+      "replace": "  return INTAKE_LICENSES.some((id) => id === license.trim()) ? 'permitted' : 'incompatible'",
+      "why": "a listed license is matched ignoring case, as SPDX identifiers are"
+    },
+    {
+      "id": "intake-untrimmed",
+      "file": "src/shared/stoa.ts",
+      "find": "  const value = license.trim().toLowerCase()",
+      "replace": "  const value = license.toLowerCase()",
+      "why": "surrounding space does not change a license's standing"
+    },
+    {
+      "id": "unverified-not-its-own-standing",
+      "file": "src/shared/stoa.ts",
+      "find": "  if (value === 'unverified') return 'unverified'",
+      "replace": "  if (false) return 'unverified'",
+      "why": "`unverified` keeps its own refusal and its own researcher note (nobody has checked)"
+    },
+    {
+      "id": "list-loses-an-id",
+      "file": "src/shared/stoa.ts",
+      "find": "  'CC0-1.0',\n  'Zlib'\n] as const",
+      "replace": "  'CC0-1.0'\n] as const",
+      "why": "the list is the ten identifiers the Architect decided, pinned, not merely iterated"
+    },
+    {
+      "id": "list-gains-copyleft",
+      "file": "src/shared/stoa.ts",
+      "find": "  'CC0-1.0',\n  'Zlib'\n] as const",
+      "replace": "  'CC0-1.0',\n  'Zlib',\n  'AGPL-3.0'\n] as const",
+      "why": "DD-M9-6: AGPL code intake is refused whatever verification finds"
+    },
+    {
+      "id": "reader-returns-unvalidated",
+      "file": "src/shared/stoa.ts",
+      "find": "    if (checked.success) entries.push(checked.data)\n    else rejected.push({ id, reasons: issueReasons(checked.error.issues, 'entry') })",
+      "replace": "    entries.push(candidate)",
+      "why": "the reader before 2026-10-11: every source row returned as it stood, a 166-character License cell included"
+    },
+    {
+      "id": "reader-skips-no-url-silently",
+      "file": "src/shared/stoa.ts",
+      "find": "      rejected.push({ id, reasons: ['url: the Source cell holds no http(s) url'] })\n      continue",
+      "replace": "      continue",
+      "why": "a source row with no url is reported, not skipped without a word (invariant §7)"
+    },
+    {
+      "id": "seed-skips-file-check",
+      "file": "src/main/stoa.ts",
+      "find": "    const seeded: Watchlist = whole.success ? whole.data : EMPTY_WATCHLIST",
+      "replace": "    const seeded: Watchlist = { schemaVersion: STOA_SCHEMA_VERSION, sources: [...read.entries], retired: [] }",
+      "why": "the seed writes only a watchlist the file schema accepts, so a later read agrees with the first"
+    },
+    {
+      "id": "seed-reports-nothing",
+      "file": "src/main/stoa.ts",
+      "find": "    if (faults.length > 0) {",
+      "replace": "    if (false) {",
+      "why": "a refused row is reported as a degradation, never silently dropped"
+    },
+    {
+      "id": "seed-logs-no-rejections",
+      "file": "src/main/stoa.ts",
+      "find": "      rejected: read.rejected.map((row) => ({ id: row.id, reasons: [...row.reasons] })),",
+      "replace": "      rejected: [],",
+      "why": "the seeded event carries the refused rows into the durable log"
+    },
+    {
+      "id": "register-writes-over-unreadable",
+      "file": "src/main/stoa.ts",
+      "find": "    if (!read.ok) return this.unreadable('register', by, read)\n    const current = read.watchlist",
+      "replace": "    const current = read.ok ? read.watchlist : EMPTY_WATCHLIST",
+      "why": "the defect before 2026-10-11: register took the empty answer as the truth and wrote a one-entry file over the unreadable one"
+    },
+    {
+      "id": "retire-answers-falsely-over-unreadable",
+      "file": "src/main/stoa.ts",
+      "find": "    if (!read.ok) return this.unreadable('retire', by, read)\n    const current = read.watchlist",
+      "replace": "    const current = read.ok ? read.watchlist : EMPTY_WATCHLIST",
+      "why": "the behaviour before 2026-10-11: retire answered \"no source on the watchlist\" instead of naming the unreadable file"
+    },
+    {
+      "id": "incompatible-told-nobody-checked",
+      "file": "src/main/stoa.ts",
+      "find": "  incompatible: 'intake-incompatible.md'",
+      "replace": "  incompatible: 'intake-refused.md'",
+      "why": "a license somebody read is never described to the researcher as one nobody has checked"
+    },
+    {
+      "id": "unverified-given-other-note",
+      "file": "src/main/stoa.ts",
+      "find": "  unverified: 'intake-refused.md',",
+      "replace": "  unverified: 'intake-incompatible.md',",
+      "why": "an unverified license gets the note that says nobody has checked"
+    }
+  ]
+}

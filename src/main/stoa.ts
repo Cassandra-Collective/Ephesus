@@ -3,16 +3,21 @@ import path from 'node:path'
 import { writeFileAtomic } from './fsx'
 import {
   EMPTY_WATCHLIST,
+  INTAKE_LICENSES,
   STOA_SCHEMA_VERSION,
   buildStudyPlan,
   checkRegistrar,
   isSafeScratchPath,
+  issueReasons,
+  licenseStanding,
   nextBriefId,
   parseWatchlist,
   parseWatchlistMarkdown,
   registerDraftSchema,
   sourceIdFor,
   uniqueSourceId,
+  watchlistSchema,
+  type LicenseStanding,
   type RegisterDraft,
   type StudyPlan,
   type Watchlist,
@@ -111,6 +116,32 @@ export interface ArchivedBrief {
   readonly file: string
 }
 
+/** The watchlist file as it reads, or the file and every reason it does not. */
+type WatchlistRead =
+  | { readonly ok: true; readonly watchlist: Watchlist }
+  | { readonly ok: false; readonly file: string; readonly reasons: readonly string[] }
+
+/**
+ * The researcher's licence note for each standing (invariant §8: the words are
+ * in `prompts/stoa/`). `unverified` and `incompatible` are separate files
+ * because "nobody has checked" is false of a license somebody has read.
+ */
+const INTAKE_NOTES: Readonly<Record<LicenseStanding, string>> = {
+  permitted: 'intake-permitted.md',
+  unverified: 'intake-refused.md',
+  incompatible: 'intake-incompatible.md'
+}
+
+/**
+ * Contract: the sentence that says how to get an unreadable or half-seeded
+ * watchlist back. The seed runs only when the file is absent, so moving the
+ * file aside IS the way to run it again — and a reader who is not told that
+ * has no way to learn it from the symptom.
+ */
+function recovery(file: string, seedFrom: string): string {
+  return `To recover: repair ${file} by hand, or move it aside and restart, which seeds the watchlist again from ${seedFrom} (sources registered since the seed are in the moved file)`
+}
+
 export class Stoa {
   private readonly now: () => Date
 
@@ -138,18 +169,46 @@ export class Stoa {
    * so out loud (invariant §7). A malformed watchlist on disk is reported the
    * same way and read as empty rather than crashing the boot — but it is never
    * overwritten, because the file may be the only copy of what was registered.
+   * That promise is kept by the WRITERS refusing (`readWatchlist`): until
+   * 2026-10-11 they took this method's empty answer as the truth, so
+   * `register` wrote a one-entry file over everything it could not read, and
+   * `retire` answered that the source was not on the watchlist at all.
    */
   watchlist(): Watchlist {
+    const read = this.readWatchlist()
+    if (read.ok) return read.watchlist
+    this.options.onDegraded?.(
+      `stoa: ${read.file} is not a valid watchlist (${read.reasons.join('; ')}); reading it as empty and refusing to register or retire until it reads, so the file is never rewritten. ${recovery(read.file, this.options.seedFrom)}`
+    )
+    return EMPTY_WATCHLIST
+  }
+
+  /**
+   * The watchlist file as it reads, seeding it on first use (FR-13.7).
+   *
+   * Contract: `ok: false` names the file and every reason, and nothing is
+   * written. The writers ask this rather than `watchlist()`, because the empty
+   * list `watchlist()` answers an unreadable file with is the right answer for
+   * a reader and the wrong one to write back.
+   */
+  private readWatchlist(): WatchlistRead {
     const file = this.watchlistPath()
-    if (existsSync(file)) {
-      const parsed = parseWatchlist(readFileSync(file, 'utf8'))
-      if (parsed.ok) return parsed.watchlist
-      this.options.onDegraded?.(
-        `stoa: ${file} is not a valid watchlist (${parsed.reasons.join('; ')}); reading it as empty and leaving the file untouched`
-      )
-      return EMPTY_WATCHLIST
-    }
-    return this.seed()
+    if (!existsSync(file)) return { ok: true, watchlist: this.seed() }
+    const parsed = parseWatchlist(readFileSync(file, 'utf8'))
+    return parsed.ok ? parsed : { ok: false, file, reasons: parsed.reasons }
+  }
+
+  /** Contract: the refusal a writer returns over an unreadable watchlist. */
+  private unreadable(
+    event: string,
+    by: string,
+    read: { file: string; reasons: readonly string[] }
+  ): CurateOutcome {
+    return this.refuse(
+      event,
+      by,
+      `stoa: ${read.file} is not a valid watchlist (${read.reasons.join('; ')}); writing it now would replace the only record of what was registered, so the Stoa refuses to ${event} until it reads. ${recovery(read.file, this.options.seedFrom)}`
+    )
   }
 
   /** Every source the Stoa may study, in registration order. */
@@ -170,18 +229,12 @@ export class Stoa {
 
     const parsed = registerDraftSchema.safeParse(draft)
     if (!parsed.success) {
-      return this.refuse(
-        'register',
-        by,
-        parsed.error.issues
-          .map(
-            (issue) => `${issue.path.length > 0 ? issue.path.join('.') : 'entry'}: ${issue.message}`
-          )
-          .join('; ')
-      )
+      return this.refuse('register', by, issueReasons(parsed.error.issues, 'entry').join('; '))
     }
 
-    const current = this.watchlist()
+    const read = this.readWatchlist()
+    if (!read.ok) return this.unreadable('register', by, read)
+    const current = read.watchlist
     const taken = [...current.sources, ...current.retired].map((entry) => entry.id)
     const existing = current.sources.find((entry) => entry.url === parsed.data.url)
     if (existing !== undefined) {
@@ -226,7 +279,9 @@ export class Stoa {
     const allowed = checkRegistrar(by)
     if (!allowed.allowed) return this.refuse('retire', by, allowed.because)
 
-    const current = this.watchlist()
+    const read = this.readWatchlist()
+    if (!read.ok) return this.unreadable('retire', by, read)
+    const current = read.watchlist
     const entry = current.sources.find((candidate) => candidate.id === id)
     if (entry === undefined) {
       const already = current.retired.some((candidate) => candidate.id === id)
@@ -318,10 +373,10 @@ export class Stoa {
       return null
     }
     const intakeNote = words
-      .render(
-        path.join('stoa', plan.intakePermitted ? 'intake-permitted.md' : 'intake-refused.md'),
-        { license: plan.license }
-      )
+      .render(path.join('stoa', INTAKE_NOTES[licenseStanding(plan.license)]), {
+        license: plan.license,
+        licenses: INTAKE_LICENSES.join(', ')
+      })
       .trim()
     return words
       .render(path.join('stoa', 'study.md'), {
@@ -458,6 +513,16 @@ export class Stoa {
    * a table without the documents its rows linked to is the exact defect the
    * M5 close-out audit found, and repeating it here would break every brief
    * reference a seeded source already has.
+   *
+   * Contract: what this writes is what it returns, and both are a watchlist
+   * `watchlistSchema` accepted — so the first read of a fresh home and every
+   * read after it agree. Until 2026-10-11 the seed wrote and returned the
+   * table's rows unchecked: the first read listed a 166-character License cell
+   * (and `checkIntake` allowed intake from it), and every later read found the
+   * file invalid and the Stoa empty. A row the schema refuses is now left out
+   * and REPORTED — one degradation naming every such row, because a cause holds
+   * one message and a second report would overwrite the first — and the
+   * `seeded` event carries the same list into the durable log.
    */
   private seed(): Watchlist {
     const table = path.join(this.options.seedFrom, 'WATCHLIST.md')
@@ -469,8 +534,31 @@ export class Stoa {
       return EMPTY_WATCHLIST
     }
 
-    const sources = parseWatchlistMarkdown(readFileSync(table, 'utf8'), this.now().toISOString())
-    const seeded: Watchlist = { schemaVersion: STOA_SCHEMA_VERSION, sources, retired: [] }
+    const read = parseWatchlistMarkdown(readFileSync(table, 'utf8'), this.now().toISOString())
+    const whole = watchlistSchema.safeParse({
+      schemaVersion: STOA_SCHEMA_VERSION,
+      sources: read.entries,
+      retired: []
+    })
+    const wholeReasons = whole.success ? [] : issueReasons(whole.error.issues, 'watchlist')
+    const seeded: Watchlist = whole.success ? whole.data : EMPTY_WATCHLIST
+    const faults = [
+      ...(read.rejected.length > 0
+        ? [
+            `${String(read.rejected.length)} row(s) were not seeded: ${read.rejected
+              .map((row) => `${row.id} (${row.reasons.join('; ')})`)
+              .join('; ')}`
+          ]
+        : []),
+      ...(whole.success
+        ? []
+        : [`the rows do not make one watchlist (${wholeReasons.join('; ')}), so none was seeded`])
+    ]
+    if (faults.length > 0) {
+      this.options.onDegraded?.(
+        `stoa: seeding from ${table}, ${faults.join('; and ')}. The seed runs once, so a fixed row does not come back by itself: fix the table, then move ${this.watchlistPath()} aside and restart, or register the source from the Stoa panel`
+      )
+    }
     this.write(seeded)
 
     const seedBriefs = path.join(this.options.seedFrom, 'briefs')
@@ -489,8 +577,12 @@ export class Stoa {
       kind: 'stoa',
       event: 'seeded',
       from: table,
-      sources: sources.length,
-      briefs: copied
+      sources: seeded.sources.length,
+      briefs: copied,
+      // What did NOT cross over, and why: the degradation is the live signal,
+      // this is the record a later reader finds in `log.jsonl` (NFR-13).
+      rejected: read.rejected.map((row) => ({ id: row.id, reasons: [...row.reasons] })),
+      ...(whole.success ? {} : { refused: wholeReasons })
     })
     this.options.commitSoon?.('stoa: seed the watchlist from the build-phase archive')
     return seeded

@@ -70,7 +70,12 @@ export const watchlistEntrySchema = z
     kind: sourceKindSchema,
     /** What the Architect wants learned. Tags SCOPE every study — FR-13.2. */
     tags: z.array(z.string().min(1).max(64)).min(1).max(16),
-    /** As verified at registration; "unverified" ⇒ study yes, intake no. */
+    /**
+     * As verified at registration; "unverified" ⇒ study yes, intake no. Free
+     * text on purpose (narrowing it would refuse files already on disk); what
+     * it PERMITS is `licenseStanding`'s question, and only a value on
+     * `INTAKE_LICENSES` permits intake.
+     */
     license: z.string().min(1).max(120),
     /**
      * The commit every study runs against, or null for "registered, not yet
@@ -151,13 +156,7 @@ export function parseWatchlist(body: string): WatchlistParse {
   }
   const parsed = watchlistSchema.safeParse(raw)
   if (parsed.success) return { ok: true, watchlist: parsed.data }
-  return {
-    ok: false,
-    reasons: parsed.error.issues.map((issue) => {
-      const where = issue.path.length > 0 ? issue.path.join('.') : 'watchlist'
-      return `${where}: ${issue.message}`
-    })
-  }
+  return { ok: false, reasons: issueReasons(parsed.error.issues, 'watchlist') }
 }
 
 /**
@@ -252,20 +251,78 @@ export function checkStudiable(entry: WatchlistEntry): StudyCheck {
 }
 
 /**
+ * The licenses pattern intake may come from (FR-13.5, DECISIONS-LOG 2026-10-11).
+ *
+ * An ALLOWLIST, because intake must fail closed. The rule this replaced refused
+ * only the exact string `unverified`, so every other value read as a verified
+ * license: a cell reading `unverified (read as AGPL-3.0 …)` permitted intake
+ * from the very row it was written to refuse. Anything not on this list (a
+ * reading, a guess, `TBD`, a copyleft license somebody did verify) now refuses.
+ *
+ * The list is MIT-COMPATIBLE identifiers, not every license that exists, for
+ * the reason DD-M9-6 gave for the AGPL row: this repository is MIT, so code
+ * under a license it cannot carry is refused "whatever verification finds".
+ * Intake from a listed license still needs attribution and a decision memo
+ * (ENGINEERING-STANDARDS §5); being listed is necessary, never sufficient.
+ */
+export const INTAKE_LICENSES = [
+  'MIT',
+  'MIT-0',
+  'Apache-2.0',
+  'BSD-2-Clause',
+  'BSD-3-Clause',
+  'ISC',
+  '0BSD',
+  'Unlicense',
+  'CC0-1.0',
+  'Zlib'
+] as const
+
+/**
+ * What a watchlist license says about intake.
+ *
+ * Three answers rather than a boolean because the researcher is told different
+ * things: `unverified` means nobody has checked, and `incompatible` means the
+ * value is not one intake may come from — which must never be rendered as
+ * "nobody has checked" when somebody has.
+ */
+export type LicenseStanding = 'permitted' | 'unverified' | 'incompatible'
+
+/**
+ * Contract: the standing of one license value. Pure; total over strings.
+ *
+ * Trimmed and compared ignoring case, as SPDX identifiers are; nothing else is
+ * normalised, so `MIT (read 2026-10-03)` is not `MIT`.
+ */
+export function licenseStanding(license: string): LicenseStanding {
+  const value = license.trim().toLowerCase()
+  if (value === 'unverified') return 'unverified'
+  return INTAKE_LICENSES.some((id) => id.toLowerCase() === value) ? 'permitted' : 'incompatible'
+}
+
+/**
  * Contract: may patterns from this source be taken into the codebase? (FR-13.5)
  *
  * Study is always allowed; INTAKE is not. An unverified license means the
  * company does not know what it is allowed to do with the code, and "we did not
- * check" is not a licence to copy.
+ * check" is not a licence to copy. Each refusal names the list, because the
+ * panel shows it (`intakeBlocked`) to the person who has to fix the entry.
  */
 export function checkIntake(entry: WatchlistEntry): StudyCheck {
-  if (entry.license.trim().toLowerCase() === 'unverified') {
+  const standing = licenseStanding(entry.license)
+  if (standing === 'unverified') {
     return {
       allowed: false,
       because: `${entry.id}'s license is unverified; study is permitted, pattern intake is not (FR-13.5)`
     }
   }
-  return { allowed: true, because: `${entry.id} is ${entry.license}` }
+  if (standing === 'incompatible') {
+    return {
+      allowed: false,
+      because: `${entry.id}'s license "${entry.license.trim()}" is not one pattern intake may come from; study is permitted, intake needs exactly one of ${INTAKE_LICENSES.join(', ')} (FR-13.5). A reading of a license belongs in the notes, not the license field`
+    }
+  }
+  return { allowed: true, because: `${entry.id} is ${entry.license.trim()}` }
 }
 
 /** Contract: the next brief id, given the ones already archived. Never reuses one. */
@@ -277,36 +334,62 @@ export function nextBriefId(ids: readonly string[]): string {
   return `RB-${String(highest + 1).padStart(3, '0')}`
 }
 
+/** A table row with a source id that did not become an entry, and every reason why. */
+export interface RejectedRow {
+  readonly id: string
+  readonly reasons: readonly string[]
+}
+
+/** The build-phase table, read: entries the schema accepts, and the rows it did not. */
+export interface WatchlistTable {
+  readonly entries: readonly WatchlistEntry[]
+  readonly rejected: readonly RejectedRow[]
+}
+
 /**
- * Contract: reads the build-phase watchlist table into entries (FR-13.7).
+ * Contract: reads the build-phase watchlist table (FR-13.7). Every row whose id
+ * cell is a source id comes back EITHER as an entry `watchlistEntrySchema`
+ * accepted OR as a rejected row naming its reasons — never neither.
  *
  * `docs/stoa/WATCHLIST.md` is a markdown table a human maintains; the running
  * system's watchlist is JSON. This is the bridge, and it exists for the same
  * reason `parseLedger` does: the build-phase archive is the real archive, and
  * the product inherits it rather than starting empty on the day it ships.
  *
- * Rows whose id cell does not look like a source id are skipped — that covers
- * the header, the separator, and any prose the table grows around it.
+ * Lines whose id cell does not look like a source id are skipped — that covers
+ * the header, the separator, and any prose the table grows around it. A row
+ * that IS a source row and fails is reported instead (invariant §7): this
+ * reader once returned whatever a cell held, and a 166-character License cell
+ * reached the seed, which wrote a file every later read refused
+ * (DECISIONS-LOG 2026-10-11).
  */
-export function parseWatchlistMarkdown(markdown: string, registeredAt: string): WatchlistEntry[] {
+export function parseWatchlistMarkdown(markdown: string, registeredAt: string): WatchlistTable {
   const entries: WatchlistEntry[] = []
+  const rejected: RejectedRow[] = []
   for (const line of markdown.split('\n')) {
     if (!line.startsWith('|')) continue
     const cells = line.split('|').map((cell) => cell.trim())
     // ['', id, source, tags, license, pin, notes, '']
     const id = cells[1] ?? ''
     if (!/^src-[a-z0-9][a-z0-9-]*$/.test(id)) continue
+    // Only an http(s) url is taken out of the Source cell. Handing the schema
+    // the raw cell instead would let `.url()` admit an `ftp:` link, or any
+    // scheme a cell happened to hold.
     const url = /(https?:\/\/\S+)/.exec(cells[2] ?? '')?.[1]
-    if (url === undefined) continue
+    if (url === undefined) {
+      rejected.push({ id, reasons: ['url: the Source cell holds no http(s) url'] })
+      continue
+    }
+    // An empty Tags cell is the schema's to refuse (`tags` needs one): tags
+    // scope every study (FR-13.2), so a row without them is not a source.
     const tags = (cells[3] ?? '')
       .split(',')
       .map((tag) => tag.replace(/`/g, '').trim())
       .filter((tag) => tag.length > 0)
-    if (tags.length === 0) continue
     // The pin cell is either a backticked sha or the "(set at first study)"
     // placeholder; anything that is not a sha means "not yet pinned".
     const pin = /`([0-9a-f]{7,40})`/i.exec(cells[5] ?? '')?.[1] ?? null
-    entries.push({
+    const candidate: WatchlistEntry = {
       id,
       url,
       kind: 'git',
@@ -319,9 +402,25 @@ export function parseWatchlistMarkdown(markdown: string, registeredAt: string): 
       // system now — and the `seeded` log event says where it came from.
       registeredAt,
       notes: cells[6] ?? ''
-    })
+    }
+    // The TYPE above is what this reader used to return, and the type cannot
+    // say "at most 120 characters". The schema can, so it decides.
+    const checked = watchlistEntrySchema.safeParse(candidate)
+    if (checked.success) entries.push(checked.data)
+    else rejected.push({ id, reasons: issueReasons(checked.error.issues, 'entry') })
   }
-  return entries
+  return { entries, rejected }
+}
+
+/** `path: message` for each issue — the shape every Stoa refusal reads in. */
+export function issueReasons(
+  issues: readonly { readonly path: readonly PropertyKey[]; readonly message: string }[],
+  whole: string
+): string[] {
+  return issues.map((issue) => {
+    const where = issue.path.length > 0 ? issue.path.map(String).join('.') : whole
+    return `${where}: ${issue.message}`
+  })
 }
 
 function reason(err: unknown): string {
@@ -361,7 +460,7 @@ export interface StudyPlan {
   readonly question: string
   /** What the license permits, carried into the brief's license note. */
   readonly license: string
-  /** False when the license is unverified: study yes, pattern intake no. */
+  /** False unless the license is on `INTAKE_LICENSES`: study yes, pattern intake no. */
   readonly intakePermitted: boolean
 }
 
@@ -375,7 +474,8 @@ export type StudyPlanOutcome =
  * studiable, and the refusal is visible instead of the study being silently
  * skipped. An unverified LICENSE is not a refusal — SDD §4.7 and TEST-STRATEGY
  * S-STOA both make study permitted and pattern intake refused, so the plan
- * carries `intakePermitted: false` and the study proceeds.
+ * carries `intakePermitted: false` and the study proceeds. So does any other
+ * license intake may not come from (`checkIntake`).
  */
 export function buildStudyPlan(entry: WatchlistEntry, root: string): StudyPlanOutcome {
   const studiable = checkStudiable(entry)
