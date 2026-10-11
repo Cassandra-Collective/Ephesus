@@ -17,10 +17,7 @@ let root: Root | null = null
 let host: HTMLDivElement
 const originalFonts = Object.getOwnPropertyDescriptor(document, 'fonts')
 
-function stubFontLoading(options: { unavailable?: string; invalidSignature?: boolean } = {}): {
-  added: string[]
-  fetchMock: ReturnType<typeof vi.fn>
-} {
+function stubFontLoading(options: { unavailable?: string; invalidSignature?: boolean } = {}) {
   const added: string[] = []
   class FakeFontFace {
     constructor(readonly family: string, readonly source: ArrayBuffer) {}
