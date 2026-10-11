@@ -6879,6 +6879,16 @@ Architect, and choosing it did not lift the hold: **whether the M9 build may sta
 still the Architect's question**, and no box below is ticked.
 [Record](implementations/2026-10-03-gym-008-mutation-harness.md).
 
+**Follow-up 2026-10-11, after #71 merged** (`fix/gym-008-follow-up`): the three test gaps
+the review carried are closed, each with a test and a mutant: the last mutant's restore
+guard, the retry wait, and a mutant write that fails part-way, which is now restored. The
+Architect's rulings on the review's further items are built: a controls-only spec is
+refused, kill lines name their killers, and a run whose only killers timed out is INVALID
+and retried. Git reads round files literally, and `.gitignore` ignores a linked
+`node_modules`. A new CI step checks every spec's anchors: GYM-012, filed and approved
+before the step. M9's hold is unchanged and no box is ticked.
+[Record](implementations/2026-10-11-gym-008-follow-up.md).
+
 - [ ] **M9.0 The contract** — ADR-0037, ADR-0038; SRS FR-15/FR-16/§6.11 and SDD
       §13 were drafted at plan time and are refined here; TEST-STRATEGY S-NATIVE and
       S-BENCH; `/research` run against `src-odysseus` and `src-hermes-agent` at

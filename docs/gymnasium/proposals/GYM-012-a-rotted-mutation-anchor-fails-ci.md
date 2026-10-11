@@ -1,6 +1,7 @@
 # GYM-012 — A rotted mutation anchor fails CI, as GYM-008 said it would
 
-**Status:** approved · **Proposed:** 2026-10-11 · **Decided:** 2026-10-11 (Architect,
+**Status:** landed (2026-10-11, `fix/gym-008-follow-up`; metric 1 measured at landing,
+see the ledger) · **Proposed:** 2026-10-11 · **Decided:** 2026-10-11 (Architect,
 asked with the drafted metric below before any code was written, during the GYM-008
 follow-up) · **Gate:** Architect approval. It adds a step to the required
 `Typecheck · lint · test` check, so it is an altered CI gate (ENGINEERING-STANDARDS §3;
