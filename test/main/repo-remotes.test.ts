@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { ExecGitRunner, readRemotes, type GitRunner } from '../../src/main/git'
 import { deriveRepo } from '../../src/shared/repo-remote'
 import { removeTempDir } from '../tmpdir'
@@ -42,7 +42,50 @@ function repoWith(remotes: readonly (readonly [string, string])[]): string {
 
 const runner = new ExecGitRunner()
 
+/**
+ * The machine's git configuration is not part of the contract.
+ *
+ * Before git reads the repository's own config it reads the system file, the
+ * user's global file and the environment, and any of them can change what
+ * `git remote -v` prints: `url.<base>.insteadOf` rewrites a remote's URLs as
+ * git reports them. On 2026-10-11 a container that injected
+ * `url.https://github.com/.insteadOf=git@github.com:` through
+ * `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0` turned the
+ * separate push URL below into a copy of the fetch URL, and the parser read
+ * one remote, correctly, where the test expected two
+ * (docs/implementations/2026-10-11-hermetic-git-remotes-test.md).
+ *
+ * So while this block runs, git sees only the temp repository's config and the
+ * `-c` flags each caller passes. The variables are stubbed on `process.env`
+ * because `ExecGitRunner` passes no `env` to `execFile`: the runner and the
+ * `git` helper both inherit it. Production keeps reading the user's config, as
+ * it should, since a rewrite they configured applies to their real target.
+ *
+ *  - `GIT_CONFIG_NOSYSTEM` skips the system file, whatever `GIT_CONFIG_SYSTEM`
+ *    names.
+ *  - `GIT_CONFIG_GLOBAL` replaces both `~/.gitconfig` and
+ *    `$XDG_CONFIG_HOME/git/config` (git 2.32 and later). It is spelled
+ *    `/dev/null`, which Git for Windows maps for itself; `os.devNull` gives
+ *    `\\.\nul` there, and git exits 128 on it.
+ *  - The variables that carry config values themselves are deleted, including
+ *    `GIT_CONFIG_PARAMETERS`, which is how a parent `git -c …` hands its flags
+ *    to the processes it starts.
+ */
+const CONFIG_VALUES_FROM_ENV = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$/
+
 describe('readRemotes, against git itself', () => {
+  beforeAll(() => {
+    for (const name of Object.keys(process.env)) {
+      if (CONFIG_VALUES_FROM_ENV.test(name)) vi.stubEnv(name, undefined)
+    }
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1')
+    vi.stubEnv('GIT_CONFIG_GLOBAL', '/dev/null')
+  })
+
+  afterAll(() => {
+    vi.unstubAllEnvs()
+  })
+
   it('reads one remote once, not once per direction', async () => {
     // `git remote -v` prints `origin <url> (fetch)` AND `origin <url> (push)`.
     const repo = repoWith([['origin', 'https://github.com/owner/app.git']])
