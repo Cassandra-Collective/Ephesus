@@ -3089,6 +3089,23 @@ Artemis-ranking leg lands; the plan's `question` line is serialization-plus-
 connective (invariant-§8-adjacent); the reading-desk pin fix has no renderer
 regression test (no DOM harness exists — owed with M6.1's renderer work).
 
+**Post-close repair (2026-10-11): the watchlist seed validates what it parsed, and
+pattern intake fails closed.** Found while #72 was reviewed, and reproduced by running
+the shipped code over `docs/stoa/WATCHLIST.md` as it stood on `main` at `75ec37c`:
+`seed()` wrote and returned the table's rows unchecked, so a 166-character License cell
+reading `unverified (read as AGPL-3.0 …)` was listed on a fresh home's first read with
+intake ALLOWED (`checkIntake` refused only the exact string `unverified`), and every
+later read found the file over the schema's cap and the Stoa empty. Behind it,
+`register()` wrote a one-entry file over the watchlist it could not read. #72 fixed the
+table's cells; this repair makes the code safe against the next one. Each source row
+the schema refuses is now left out and named in one degradation, with how to seed it
+again, and in the `seeded` log event; intake needs a license on an MIT-compatible
+allowlist (SDD §4.7); `register` and `retire` refuse over an unreadable file and leave
+its bytes alone. No milestone box changes. Evidence: a mutation round with a certified
+control, 15 of 15 real mutants killed (`test/mutation/stoa-seed-fail-closed.json`).
+[Record](implementations/2026-10-11-stoa-seed-fail-closed.md); decisions in
+DECISIONS-LOG 2026-10-11 (Stoa seed hardening).
+
 ## M6 — The floor's face + the Herald (plan drafted 2026-08-29 at M5b close)
 
 Derived per BUILD-PROMPT §5 from IMPLEMENTATION M6 + ADR-0007 + SDD §8 +

@@ -474,7 +474,14 @@ The recall keyword index is deliberately *not* here — it lives in `index/fts.s
     "tags": ["agent-loop", "tool-use"],     // what to learn — scopes every study
     "license": "MIT",                       // as verified at registration; "unverified"
                                             //  ⇒ study allowed, pattern intake refused
-                                            //  (FR-13.5)
+                                            //  (FR-13.5). Intake FAILS CLOSED: only an
+                                            //  id on stoa.ts's INTAKE_LICENSES (ten
+                                            //  MIT-compatible SPDX ids, case ignored)
+                                            //  permits it; any other value — a reading,
+                                            //  "TBD", a verified copyleft license —
+                                            //  refuses (DECISIONS-LOG 2026-10-11). Free
+                                            //  text ≤ 120 chars; a reading belongs in
+                                            //  notes
     "pin": "8c1f2ab",                       // commit each study runs against; briefs
                                             //  cite this pin. Architect advances it.
                                             //  NULL until the first study sets it:
