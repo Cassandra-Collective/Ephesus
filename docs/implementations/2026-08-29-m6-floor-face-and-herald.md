@@ -1,7 +1,7 @@
 # M6 — the floor's face, then the Herald
 
 **Status:** in progress. One section per work package, appended as each lands.
-Milestone plan and per-package evidence live in [PROGRESS.md](../PROGRESS.md#m6);
+Milestone plan and per-package evidence live in [progress/M6.md](../progress/M6.md);
 this file carries the *why* and *how* that a diff cannot.
 
 ---

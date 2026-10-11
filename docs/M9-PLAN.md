@@ -7,7 +7,7 @@ and planning for the future milestone."* So the edits of §12 have been applied 
 documentation (IMPLEMENTATION M9, PROGRESS M9 with every box unticked, ADR-0036
 accepted, FR-15/FR-16/§6.11, SDD §13, S-NATIVE/S-BENCH, the watchlist rows,
 eight DECISIONS-LOG entries), and **no package may begin until the Architect says
-so.** A session resuming at PROGRESS's first unchecked box asks first.
+so.** A session resuming from PROGRESS's *Resume here* block asks first.
 
 **What follows this milestone** is planned in [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md)
 (2026-10-03): seven milestones, M9b to M9h — five between M9 and M7b, two after

@@ -69,7 +69,7 @@ so it checked the fixture and never the seed.
 | `docs/DECISIONS-LOG.md` | The Architect's three answers, the approved plan and the mechanical choices, recorded before the code. |
 | `docs/sdd/SDD.md` | §4.7's `license` comment states the fail-closed rule and where the list lives. |
 | `docs/IMPLEMENTATION.md` | R13's mitigation says intake fails closed, citing §4.7. |
-| `docs/PROGRESS.md` | A post-close repair note at the end of M5b. No box changes. |
+| `docs/progress/M5b.md` | A post-close repair note at the end of M5b's archived record. No box changes, and the resume block in `docs/PROGRESS.md` is unchanged because the next step is unchanged. (Written first at the end of M5b's section in `docs/PROGRESS.md`; #73 moved that section into this file while the branch was open, and the merge put the note here.) |
 | `docs/implementations/2026-10-11-stoa-seed-fail-closed.md` | This document. |
 
 `docs/stoa/WATCHLIST.md` is not touched: the Architect chose "code only", and #72 already
@@ -294,5 +294,6 @@ they are in the moved file.
   [ADR-0017](../adr/ADR-0017-stoa-research-department.md) R3
 - [TEST-STRATEGY §10](../TEST-STRATEGY.md): the mutation round
 - [The M5b build record](2026-08-28-m5b-stoa-and-modes.md): where the seed and the
-  intake split were built
+  intake split were built, and [M5b's progress record](../progress/M5b.md), which
+  carries this repair's note
 - [`docs/stoa/WATCHLIST.md`](../stoa/WATCHLIST.md): the table the seed reads

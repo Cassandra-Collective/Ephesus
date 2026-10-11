@@ -9,7 +9,9 @@ documentation and gates.
 ## What kind of session is this?
 
 - **Implementing the system** → follow `BUILD-PROMPT.md` exactly. It defines your role,
-  reading protocol, work packages, and report format. Resume from `docs/PROGRESS.md`.
+  reading protocol, work packages, and report format. Resume from the *Resume here*
+  block at the top of `docs/PROGRESS.md` — it names the next step and what waits on the
+  Architect (M9, planned and not authorised to start, as of 2026-10-11).
 - **Improving the system/process** → follow the Gymnasium loop:
   `docs/adr/ADR-0015-gymnasium-self-improvement.md`. Improvement work is proposed,
   gated, and measured — never freelanced.
@@ -31,7 +33,7 @@ never edit an accepted ADR; supersede it.
 | Coding/security rules, Definition of Done | `docs/ENGINEERING-STANDARDS.md` |
 | Trust boundaries, what each control stops, residual risks | `docs/THREAT-MODEL.md` |
 | What tests are owed | `docs/TEST-STRATEGY.md` |
-| Build order and current state | `docs/IMPLEMENTATION.md` + `docs/PROGRESS.md` |
+| Build order and current state | `docs/IMPLEMENTATION.md` + `docs/PROGRESS.md` (its *Resume here* block; closed milestones in `docs/progress/`) |
 | Claude Code automation in this repo | `docs/AUTOMATION.md` |
 
 ## Commands (once code exists — no-ops before M0.1)

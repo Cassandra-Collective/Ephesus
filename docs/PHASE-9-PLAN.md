@@ -6,8 +6,8 @@ workflow and then approved the plan as documentation; all of it is recorded in
 `docs/DECISIONS-LOG.md`. **This is planning only.**
 The standing instruction of 2026-10-02 — *"i just want to plan this out not build
 it yet"* — covers this file as it covers M9: no package of M9 or of any milestone
-below may begin until the Architect says so, and a session resuming at PROGRESS's
-first unchecked box asks first.
+below may begin until the Architect says so, and a session resuming from PROGRESS's
+*Resume here* block asks first.
 
 **How this file relates to [`M9-PLAN.md`](./M9-PLAN.md).** M9 — *the harness is the
 product* — is this phase's first milestone. It was approved for planning on
