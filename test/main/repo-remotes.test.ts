@@ -69,15 +69,18 @@ const runner = new ExecGitRunner()
  *    `\\.\nul` there, and git exits 128 on it.
  *  - The variables that carry config values themselves are deleted, including
  *    `GIT_CONFIG_PARAMETERS`, which is how a parent `git -c …` hands its flags
- *    to the processes it starts. The match ignores case because Git for
- *    Windows reads `git_config_count` as `GIT_CONFIG_COUNT`; git on POSIX
- *    ignores the lowercase names, so deleting them there changes nothing.
+ *    to the processes it starts. The match is case-sensitive on purpose. Git
+ *    for Windows would read `git_config_count` as `GIT_CONFIG_COUNT`, but
+ *    vitest (4.1.11) copies every variable to its uppercase name when it
+ *    builds a worker's environment on Windows, so no case here sees a
+ *    lowercase one, and git on POSIX ignores them. Ignoring case would be a
+ *    change no test could see.
  *
  * The stubs are made per case and undone per case: vitest's `unstubEnvs`
  * option, if it is ever turned on, clears stubs before every case, which would
  * silently undo stubs made once in a `beforeAll`.
  */
-const CONFIG_VALUES_FROM_ENV = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$/i
+const CONFIG_VALUES_FROM_ENV = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$/
 
 function isolateGitFromTheHost(): void {
   for (const name of Object.keys(process.env)) {
