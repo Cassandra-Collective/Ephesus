@@ -31,8 +31,10 @@ The cycle:
    wander outside them.
 2. **Pin.** Fetch the repo read-only into scratch; record the exact commit sha. If
    the watchlist row has no pin yet, this sha becomes it (update the row). If the
-   row's license is `unverified`, check the repo's LICENSE file now and update the
-   row — study may proceed either way, but pattern *intake* may not.
+   row's license is `unverified`, read the repo's LICENSE file at that sha and record
+   what it says in the brief's license note and the row's Notes — never in its
+   License cell, which stays `unverified` until the Architect verifies it (FR-13.5,
+   DD-M9-17). Study may proceed either way; pattern *intake* may not.
 3. **Study, scoped.** Read the parts of the source the tags point at. For each
    mechanism worth reporting, note the file path(s) and what it actually does —
    not what its README claims.

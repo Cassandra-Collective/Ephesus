@@ -89,7 +89,7 @@ with the bench in hand, and still one that would need its own record.
 ## Consequences
 
 - **UI-DESIGN §4's app-shell sentence** ("left = the Terraces floor (dominant)") is
-  amended in M9b.1's change, together with the workspace's anatomy. The tokens are
+  amended in M9b.0's contract, together with the workspace's anatomy. The tokens are
   untouched.
 - **SRS UC-03** (watch the floor and inspect an agent) stays true in `floor` mode
   and gains its `workspace` equivalent in M9b's contract. NFR-14 — any agent's raw

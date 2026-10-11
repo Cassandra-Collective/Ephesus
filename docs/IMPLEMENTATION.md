@@ -584,7 +584,8 @@ capability**: each one is a switch in the ablation protocol and lands with a tas
 whose verifier no agent can reach, so a milestone exits on ledger rows. **Granted
 by name, gated by the Watch**: web reach, a backend, a skill, a connector and a
 schedule are declared in the hire template and shown before anything starts, and
-content from outside the company arms the gate. **A zero-dependency core and a memo
+fetched content arms the gate (DD-M9-12; what else does is asked at M9d.0). **A
+zero-dependency core and a memo
 for every addition** (DD-M9-9): M9 stays as approved; after it, `fetch`, `node:`
 builtins or an owned subprocess first, and a decision memo for anything else.
 
@@ -648,8 +649,9 @@ serves; one blind comparison recorded; the council measured, whatever the number
   tools may (DD-M9-14); a declared isolation grade checked in both directions.
 - **M9d.2 `apptainer`, `ssh`, `modal`** — the same conformance table; pinned host
   keys; a cloud sandbox named at consent.
-- **M9d.3 Provenance arms the gate** — once outside content is in context, a hire
-  may read more and may not write to the world without a human (DD-M9-12).
+- **M9d.3 Provenance arms the gate** — once fetched content is in context, a hire
+  may read more and may not write to the world without a human (DD-M9-12); what else
+  arms it is asked at M9d.0.
 - **M9d.4 MCP** — one company-wide registry (DD-M9-13); the harness is the only
   client, so a server holds its credentials and no agent does; manifest drift
   refuses.
@@ -686,7 +688,7 @@ address-refusal table green; with no hire holding `web`, egress is unchanged.
 
 Absorbs M7b.4.
 
-- **M9f.1 The gateway, the terminal and Telegram** — one conversation behind every
+- **M9f.1 The gateway, the terminal and the first platform** — one conversation behind every
   surface; identity paired by a code issued at the machine — single-use, expiring,
   attempt-limited, with a lockout; an unpaired sender receives nothing.
 - **M9f.2 More platforms** — Discord, Slack, Signal, WhatsApp; one adapter per PR

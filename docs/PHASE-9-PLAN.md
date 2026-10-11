@@ -308,8 +308,10 @@ them.
    (DD-M9-13).
 5. **Untrusted by default, and provenance arms the gate.** NFR-18 already says
    everything an agent reads is data. M9.3 records it (`trusted: false`, with
-   provenance). M9d.3 makes it a mechanism: once content from outside the company is
-   in a hire's context, an action that writes to the world needs a human (DD-M9-12).
+   provenance). M9d.3 makes it a mechanism: once fetched content is in a hire's
+   context, an action that writes to the world needs a human (DD-M9-12). Whether other
+   content from outside the company arms it too — mail, MCP results, attachments,
+   other people's messages — is asked at M9d.0.
 6. **A human authorises; a surface only carries the authorisation.** A paired phone
    or chat account carries the Architect's verdict over an authenticated channel
    (FR-10.2, NFR-9), with repeat-back for what cannot be undone (FR-8.4). A script
@@ -706,10 +708,13 @@ the walls come first.
       backend conformance table specified; S-TAINT, S-MCP, S-DELEGATE; the T-INJECT
       and T-FANOUT tasks and the `backend`, `armedGate` and `delegate` switches.
       **Asked here:** whether NFR-17's researcher rule is amended for the MCP
-      registry (see M9d.4); and **what arms the gate** — DD-M9-12 named fetched
+      registry (see M9d.4); whether SRS C-2 (*"all state is local"*) is amended now
+      that a hire's tool execution may run on a remote host or in a cloud sandbox
+      (M9d.2); and **what arms the gate** — DD-M9-12 named fetched
       content, and M9d.3 as planned also arms on mail, MCP results, attachments and
-      other people's messages, and does not arm on a target repository's content.
-      Both halves are this plan's proposal, not yet the Architect's decision.
+      other people's messages, and does not arm on a target repository's content;
+      and M9d.3 as planned lifts it in a backend with no egress and no secret grant.
+      All three are this plan's proposal, not yet the Architect's decision.
 
 - [ ] **M9d.1 The backend seam, `local` and `docker`** (≈ 1.5 weeks)
       **[gate-shaped]** — `ExecBackend`: prepare, execute, the file operations,
@@ -1030,7 +1035,9 @@ morning brief on the phone moves here with it.
       **Asked here:** whether memo verdicts may ever be given remotely (FR-10.2
       names gates only); whether a remote approval also asks for a PIN; and which
       platform comes first — this plan proposes Telegram only because it needs no
-      library and no inbound address, which is a reason and not a decision.
+      library and no inbound address, which is a reason and not a decision — and with
+      it, whether FR-10.2's *"Slack-compatible"*, written for M7b.4, still names the
+      first.
 
 - [ ] **M9f.1 The gateway, the terminal and the first platform** (≈ 1.5 weeks)
       **[gate-shaped]** — `harbor/bridge.ts`, in the SDD's module map since v1.0
@@ -1050,8 +1057,9 @@ morning brief on the phone moves here with it.
       In a shared chat only the paired identity's messages are read; anything it
       quotes from someone else is external data. Two adapters land here: **the
       terminal** (`ephctl chat`, a conversation over the control socket) and
-      **Telegram** (long-polling over `fetch`, the bot token in the broker:
-      outbound-only and zero-dependency).
+      **the first platform** M9f.0 chooses — Telegram as this plan proposes it
+      (long-polling over `fetch`, the bot token in the broker: outbound-only and
+      zero-dependency).
       *Docs: the gateway ADR, FR-10.2/10.3, UC-11. Tests: S-GATEWAY — a fake
       platform under `test/fakes/`; an unpaired sender produces zero outbound
       messages and one log row; a paired one converses; the `remote` tag and

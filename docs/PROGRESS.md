@@ -6932,7 +6932,7 @@ assumed now.
 Decisions recorded 2026-10-03 (DECISIONS-LOG): follow-on milestones, M9 untouched
 (DD-M9-8); a zero-dependency core and a memo per package after it (DD-M9-9);
 features before M7b, M7b.4 absorbed (DD-M9-10); workspace by default, the floor a
-view mode — ADR-0040 (DD-M9-11); web reach as a per-hire grant, and outside content
+view mode — ADR-0040 (DD-M9-11); web reach as a per-hire grant, and fetched content
 arms the gate (DD-M9-12); one company-wide MCP registry (DD-M9-13); the loop stays
 local and tools may run in a declared backend — SRS §1.2 amended (DD-M9-14); the
 phone served first the way Hermes Agent does it — the gateway to that standard
@@ -6975,7 +6975,7 @@ after it (DD-M9-18, amending DD-M9-10).
 
 - [ ] **M9c.0 The contract** — the dependency-class ADR for weights and servers;
       the judged-rows ADR; S-MODELS, S-ARENA. Asks: a city name for the service, or
-      none.
+      none; whether a script may start a pull, or only the window may.
 - [ ] **M9c.1 What the machine is** — hardware facts with provenance; `unknown`
       rather than a guess.
       *Evidence owed: every parser over a recorded capture with its provenance.*
@@ -7002,7 +7002,10 @@ after it (DD-M9-18, amending DD-M9-10).
 - [ ] **M9d.0 The contract** — the backends, armed-gate, MCP and delegation ADRs;
       THREAT-MODEL §3/§5/§6.7 rewritten; the backend conformance table; S-TAINT,
       S-MCP, S-DELEGATE; T-INJECT, T-FANOUT. Asks: NFR-17 against the MCP registry;
-      the company-wide backend floor.
+      the company-wide backend floor; what arms the gate beyond fetched content
+      (mail, MCP results, attachments, other people's messages), that a target
+      repository's content does not, and whether a backend with no egress and no
+      secret grant lifts it; SRS C-2 against remote tool execution.
 - [ ] **M9d.1 The backend seam, `local` and `docker`** — the loop never moves; a
       declared isolation grade checked both ways.
       *Evidence owed: the conformance table output per backend; the adversarial
@@ -7047,8 +7050,9 @@ after it (DD-M9-18, amending DD-M9-10).
 - [ ] **M9f.0 The contract** — the gateway, remote-authorisation and schedules
       ADRs; FR-10.2 rewritten additively; the THREAT-MODEL section before the first
       adapter; the platform conformance table; S-GATEWAY, S-REMOTE-APPROVE,
-      S-SCHEDULE. Asks: remote memo verdicts; a PIN; the platform order.
-- [ ] **M9f.1 The gateway, the terminal and Telegram** — `harbor/bridge.ts`;
+      S-SCHEDULE. Asks: remote memo verdicts; a PIN; the platform order, and whether
+      FR-10.2's "Slack-compatible" still names the first.
+- [ ] **M9f.1 The gateway, the terminal and the first platform** — `harbor/bridge.ts`;
       pairing by a code issued at the machine — single-use, expiring,
       attempt-limited, with a lockout; silence to the unpaired.
 - [ ] **M9f.2 More platforms** — Discord, Slack, Signal, WhatsApp; one adapter per
@@ -7154,7 +7158,8 @@ everything it composes must already work.
       and Linux; a one-click update check. The licensed-art drop rule holds:
       what ships must not depend on sheets that are not redistributable.
       *Docs: IMPLEMENTATION M7, ATTRIBUTION. Tests: a build produced on each OS
-      boots to the floor; the update check is a visible, refusable prompt,
+      boots to its default view (*amended 2026-10-03 with ADR-0040, which makes the
+      workspace that view; it read "boots to the floor"*); the update check is a visible, refusable prompt,
       never a silent self-update; no licensed asset ships that ATTRIBUTION does
       not permit. Risk: signing identities are secrets — the broker's rules
       apply to the build pipeline too.*

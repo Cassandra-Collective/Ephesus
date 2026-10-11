@@ -48,15 +48,19 @@ Ephesus SHALL:
   gateway with remote authorisation, schedules, mail and calendar connectors, and a
   phone surface — each granted by name, gated by the Watch and measured by the
   bench (FR-16). *(Added 2026-10-03 by Architect direction; **planned and not yet
-  built**. The plan is [`docs/PHASE-9-PLAN.md`](../PHASE-9-PLAN.md); each
+  built**. Mail and calendar (M9g) and the phone's own companion (M9h) come after v1
+  (DD-M9-18); before v1 the phone is reached only through the gateway (M9f,
+  DD-M9-15). The plan is [`docs/PHASE-9-PLAN.md`](../PHASE-9-PLAN.md); each
   milestone's contract package writes its own requirement group here, and until it
   does this bullet is a statement of scope, not a requirement to test against.)*
 
 Ephesus SHALL NOT (v1):
 - Replace the underlying agent CLIs for **wrapped** hires (they remain the runtime
-  there). *(Amended 2026-10-03. The line read "Replace the underlying agent CLIs
-  (they remain the runtime)" and had been stale since ADR-0036 of 2026-10-02, which
-  adds a native engine the harness itself owns — FR-15.)*
+  there). *(Amended 2026-10-03 with the Phase 9 plan — [§5](../PHASE-9-PLAN.md),
+  approved for planning that day (DECISIONS-LOG, 2026-10-03 verdict). The line read
+  "Replace the underlying agent CLIs (they remain the runtime)" and had been stale
+  since ADR-0036 of 2026-10-02, which adds a native engine the harness itself owns —
+  FR-15.)*
 - Run an agent's **loop** anywhere but the Architect's machine. *(Amended
   2026-10-03 by Architect decision DD-M9-14. The line read "Run agents on remote
   machines over SSH". An agent's loop, terminal, hooks and mail never leave the
