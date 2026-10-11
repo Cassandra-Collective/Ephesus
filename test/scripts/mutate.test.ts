@@ -23,7 +23,12 @@ import { removeTempDir } from '../tmpdir'
  * read off vitest's own report: a fake runner would test the fake. The report
  * shapes the unit cases feed `classify` were measured on vitest 4.1.11 on
  * 2026-10-03 (win32, node v20.16.0), each by running vitest on a fixture that
- * produced it.
+ * produced it; the timeout shape on 2026-10-11.
+ *
+ * Two things no fixture repository can make happen on cue — a write that dies
+ * half-way, and the time between two runs — are reached through `PROBE`, a
+ * module the tool's own process loads with `--require`. The tool carries no
+ * seam for either (DECISIONS-LOG 2026-10-11).
  */
 
 const require_ = createRequire(import.meta.url)
@@ -36,6 +41,7 @@ type Verdict =
       how: 'test' | 'file'
       failedFiles: readonly unknown[]
       failedTests: readonly string[]
+      timedOut?: number
     }
   | { kind: 'invalid'; retry: boolean; reason: string }
 
@@ -43,7 +49,11 @@ interface RunFile {
   readonly file: string
   readonly status: string
   readonly message: string
-  readonly tests: readonly { readonly name: string; readonly status: string }[]
+  readonly tests: readonly {
+    readonly name: string
+    readonly status: string
+    readonly timedOut: boolean
+  }[]
 }
 
 interface Run {
@@ -62,6 +72,7 @@ const tool = require_(SCRIPT) as {
   mutate: (bytes: Buffer, find: string, replace: string) => Buffer
   filesOf: (report: unknown, root: string) => RunFile[] | null
   classify: (run: Run, listed: readonly string[], expected: ReadonlySet<string> | null) => Verdict
+  killedBy: (verdict: Verdict) => string
   parseArgs: (argv: readonly string[]) => {
     spec: string | null
     check: boolean
@@ -144,6 +155,11 @@ describe('a spec is refused before anything runs', () => {
     ['no tests', { ...validSpec(), tests: [] }, /"tests" must list at least one/],
     ['a test listed twice', { ...validSpec(), tests: ['a.test.mjs', 'a.test.mjs'] }, /twice/],
     ['no mutants', { ...validSpec(), mutants: [] }, /"mutants" must list at least one/],
+    [
+      'a spec whose mutants are all controls, which would certify "0 of 0 killed"',
+      withMutants([control[0]!]),
+      /every mutant is a control: add at least one real mutant/
+    ],
     ['a mutant that is not an object', withMutants([control[0]!, 'M1']), /mutants\[1\] is not/],
     ['an id used twice', withMutants([control[0]!, mutant({ id: 'control' })]), /used twice/],
     ['an id with a space', withMutants([control[0]!, mutant({ id: 'M 1' })]), /\.id must be/],
@@ -267,10 +283,43 @@ describe('a run is scored from its report and its tests, never from its exit cod
         file: 'z/b.test.mjs',
         status: 'passed',
         message: '',
-        tests: [{ name: 'b', status: 'passed' }]
+        tests: [{ name: 'b', status: 'passed', timedOut: false }]
       }
     ])
     expect(tool.filesOf(null, ROOT)).toBeNull()
+  })
+
+  it.each([
+    // vitest 4.1.11's own shape: the report keeps the stack, and the stack
+    // keeps the placeholder `makeTimeoutError` failed to replace.
+    [
+      'a test timeout as vitest 4.1.11 reports it',
+      ['Error: STACK_TRACE_ERROR\n    at task (x)'],
+      true
+    ],
+    [
+      'a test timeout as a fixed vitest would',
+      ['Error: Test timed out in 300ms.\nIf this is a long-running test, pass a timeout value'],
+      true
+    ],
+    [
+      'a hook timeout as a fixed vitest would',
+      ['Error: Hook timed out in 10000ms.\nIf this'],
+      true
+    ],
+    ['an assertion', ['AssertionError: expected 1 to be 2 // Object.is equality'], false],
+    [
+      'a timeout beside another failure',
+      ['Error: STACK_TRACE_ERROR\n    at task (x)', 'AssertionError: expected 1 to be 2'],
+      false
+    ],
+    ['a message that only mentions a timeout', ['Error: Test timed out in 300ms. later'], false],
+    ['no message at all', [], false]
+  ])('reads %s as timed out: %s', (_label, failureMessages, timedOut) => {
+    const raw = report([
+      file('add.test.mjs', 'failed', [{ fullName: 'adds', status: 'failed', failureMessages }])
+    ])
+    expect(tool.filesOf(raw, ROOT)?.[0]?.tests[0]?.timedOut).toBe(timedOut)
   })
 
   it('reads a run that wrote no report as a refusal to retry (a global setup that exits)', () => {
@@ -349,6 +398,73 @@ describe('a run is scored from its report and its tests, never from its exit cod
       how: 'test',
       failedTests: ['add.test.mjs › adds #1']
     })
+  })
+
+  /** A test that failed the way vitest 4.1.11 reports a timeout. */
+  const timeout = (name: string): Record<string, unknown> => ({
+    fullName: name,
+    status: 'failed',
+    failureMessages: ['Error: STACK_TRACE_ERROR\n    at task (x)']
+  })
+  const both = new Set(['add.test.mjs › adds #1', 'add.test.mjs › later #1'])
+
+  it('reads a mutant run whose only killing tests timed out as INVALID, to retry — under load a test times out whatever the line says', () => {
+    const raw = report(
+      [file('add.test.mjs', 'failed', [timeout('adds'), test('later', 'passed')])],
+      {
+        failed: 1
+      }
+    )
+    expect(tool.classify(run(raw, 1), listed, both)).toEqual({
+      kind: 'invalid',
+      retry: true,
+      reason:
+        '1 test(s) that passed at the baseline failed only by timing out, first add.test.mjs › adds #1: under load that is no kill, and a mutant that only makes a test hang needs a test that fails rather than hangs'
+    })
+  })
+
+  it('kills on a test that failed by more than timing out, and counts the ones that only timed out', () => {
+    const raw = report(
+      [file('add.test.mjs', 'failed', [timeout('adds'), test('later', 'failed')])],
+      {
+        failed: 2
+      }
+    )
+    expect(tool.classify(run(raw, 1), listed, both)).toMatchObject({
+      kind: 'fail',
+      how: 'test',
+      failedTests: ['add.test.mjs › later #1'],
+      timedOut: 1
+    })
+  })
+
+  it('still reads a timeout at the baseline as a red suite', () => {
+    const raw = report([file('add.test.mjs', 'failed', [timeout('adds')])], { failed: 1 })
+    expect(tool.classify(run(raw, 1), listed, null)).toMatchObject({ kind: 'fail', how: 'test' })
+  })
+
+  it('names the first three killing tests, how many more, and how many only timed out', () => {
+    const killers = ['a #1', 'b #1', 'c #1', 'd #1', 'e #1']
+    const fail = (failedTests: readonly string[], timedOut: number): Verdict => ({
+      kind: 'fail',
+      how: 'test',
+      failedFiles: [],
+      failedTests,
+      timedOut
+    })
+    expect(tool.killedBy(fail(killers.slice(0, 1), 0))).toBe('1 tests failed: a #1')
+    expect(tool.killedBy(fail(killers.slice(0, 3), 0))).toBe('3 tests failed: a #1; b #1; c #1')
+    expect(tool.killedBy(fail(killers, 2))).toBe(
+      '5 tests failed: a #1; b #1; c #1 +2 more; 2 more only timed out'
+    )
+    expect(
+      tool.killedBy({
+        kind: 'fail',
+        how: 'file',
+        failedFiles: [{ file: 'add.test.mjs', message: 'Parse failure: x\nat 1:1' }],
+        failedTests: []
+      })
+    ).toBe('a test file failed without a failing test: Parse failure: x')
   })
 
   it('refuses a mutant run whose only failure is a test that never passed at the baseline', () => {
@@ -441,7 +557,9 @@ describe('a run is scored from its report and its tests, never from its exit cod
     expect(verdict.kind === 'pass' && [...verdict.passed]).toEqual(['add.test.mjs › adds #1'])
   })
 
-  it('tells same-named tests apart by their place, so one cannot stand in for another', () => {
+  // Keyed by place among namesakes, not by location: a same-named test CAN
+  // stand in for another that moves (TEST-STRATEGY §10, known limit 2).
+  it('keys same-named tests by their place among their namesakes, so a skipped second one is not covered by the first', () => {
     const raw = report([
       file('add.test.mjs', 'passed', [test('adds', 'passed'), test('adds', 'skipped')])
     ])
@@ -518,9 +636,15 @@ const MODULE = [
 ].join('\r\n')
 
 const TEST = [
+  "import { execFileSync } from 'node:child_process'",
   "import fs from 'node:fs'",
+  "import { fileURLToPath } from 'node:url'",
   "import * as mod from './mod.mjs'",
   "test('adds', () => {",
+  "  if (mod.marker === 'STAGE') {",
+  "    execFileSync('git', ['add', 'mod.mjs'], { cwd: fileURLToPath(new URL('.', import.meta.url)) })",
+  "    throw new Error('the mutant is staged')",
+  '  }',
   "  if (mod.marker === 'TOUCH') fs.appendFileSync(new URL('./mutation/round.json', import.meta.url), ' ')",
   "  if (mod.marker === 'REWRITE') fs.appendFileSync(new URL('./mod.mjs', import.meta.url), '// rewritten\\n')",
   "  if (mod.marker === 'LITTER') {",
@@ -575,6 +699,54 @@ const REFUSE = [
   '}',
   ''
 ].join('\n')
+
+/**
+ * A module the tool's own process loads with `--require`. The nested vitest
+ * never does: `round()` strips `NODE_OPTIONS`, and a child does not inherit
+ * its parent's `execArgv`. `EPH_PROBE_STAMPS` names a file that gets one line
+ * per vitest run the tool starts, with when its `spawnSync` began and ended in
+ * the tool's own clock; `EPH_PROBE_FAIL_WRITE` makes the write of any buffer
+ * holding that text stop half-way and throw ENOSPC, as a full disk does. The
+ * tool binds `spawnSync` when it loads, after this has replaced it, and looks
+ * up `fs.writeFileSync` on every call.
+ */
+const PROBE = [
+  "'use strict'",
+  "const childProcess = require('node:child_process')",
+  "const fs = require('node:fs')",
+  "const { performance } = require('node:perf_hooks')",
+  "const stamps = process.env['EPH_PROBE_STAMPS']",
+  "const failOn = process.env['EPH_PROBE_FAIL_WRITE']",
+  'if (stamps) {',
+  '  const spawnSync = childProcess.spawnSync',
+  '  childProcess.spawnSync = function (command, args, options) {',
+  "    const vitest = command === process.execPath && Array.isArray(args) && args.includes('--reporter=json')",
+  '    const start = performance.now()',
+  '    const result = spawnSync.call(this, command, args, options)',
+  "    if (vitest) fs.appendFileSync(stamps, JSON.stringify({ start, end: performance.now() }) + '\\n')",
+  '    return result',
+  '  }',
+  '}',
+  'if (failOn) {',
+  '  const writeFileSync = fs.writeFileSync',
+  '  fs.writeFileSync = function (file, data, options) {',
+  '    if (Buffer.isBuffer(data) && data.includes(failOn)) {',
+  '      writeFileSync.call(this, file, data.subarray(0, data.length >> 1), options)',
+  "      throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC', errno: -28, syscall: 'write' })",
+  '    }',
+  '    return writeFileSync.call(this, file, data, options)',
+  '  }',
+  '}',
+  ''
+].join('\n')
+
+/** The probe written into a temp directory of its own (never the fixture, whose tree must stay clean), and that directory. */
+function probe(): { readonly dir: string; readonly require: readonly string[] } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'eph-mutate-probe-'))
+  temps.push(dir)
+  fs.writeFileSync(path.join(dir, 'probe.cjs'), PROBE)
+  return { dir, require: ['--require', path.join(dir, 'probe.cjs')] }
+}
 
 /** Settings every fixture git call carries, so no machine-wide config reaches the fixture. */
 const GIT_SETTINGS = [
@@ -636,8 +808,14 @@ interface Round {
 /**
  * The command as an author runs it, from outside this vitest: the worker's
  * own `VITEST*` variables and `NODE_OPTIONS` are not handed to the nested run.
+ * `node` is put before the script, for node itself (the probe's `--require`).
  */
-function round(dir: string, args: readonly string[] = [], env: Record<string, string> = {}): Round {
+function round(
+  dir: string,
+  args: readonly string[] = [],
+  env: Record<string, string> = {},
+  node: readonly string[] = []
+): Round {
   const inherited = Object.fromEntries(
     Object.entries(process.env).filter(
       ([key]) => !key.startsWith('VITEST') && key !== 'NODE_OPTIONS'
@@ -645,7 +823,7 @@ function round(dir: string, args: readonly string[] = [], env: Record<string, st
   )
   const child = spawnSync(
     process.execPath,
-    [SCRIPT, 'mutation/round.json', '--retries', '0', '--retry-wait', '0', ...args],
+    [...node, SCRIPT, 'mutation/round.json', '--retries', '0', '--retry-wait', '0', ...args],
     { cwd: dir, encoding: 'utf8', env: { ...inherited, ...env }, timeout: 150_000 }
   )
   return { status: child.status, out: `${child.stdout}${child.stderr}` }
@@ -672,7 +850,9 @@ describe('a round over a real repository', () => {
 
       expect(result.out).toMatch(/baseline: PASS — 1 file, 1 passed: add\.test\.mjs/)
       expect(result.out).toMatch(/control {2}control {2}SURVIVED — certifies the round/)
-      expect(result.out).toMatch(/M1 {2}killed — 1 tests failed/)
+      expect(result.out).toMatch(
+        /M1 {2}killed — 1 tests failed: add\.test\.mjs › adds #1 {2}\[1 file/
+      )
       expect(result.out).toMatch(/M3 {2}killed — a test file failed without a failing test: \S/)
       expect(result.out).toMatch(
         /ROUND OK — 2 of 2 real mutants killed; the control survived\. Tests run: add\.test\.mjs/
@@ -757,19 +937,159 @@ describe('a round over a real repository', () => {
   )
 
   it(
-    'waits out a refusal and scores the run that answers',
+    'waits out a refusal for --retry-wait seconds, then scores the run that answers',
     () => {
       const repo = fixture(validSpec(), { setup: true })
       const flags = fs.mkdtempSync(path.join(os.tmpdir(), 'eph-mutate-flag-'))
       temps.push(flags)
+      const watch = probe()
+      const stamps = path.join(watch.dir, 'stamps.jsonl')
 
-      const result = round(repo.dir, ['--retries', '1'], { EPH_FIXTURE_REFUSE_ONCE: flags })
+      const result = round(
+        repo.dir,
+        ['--retries', '1', '--retry-wait', '1'],
+        { EPH_FIXTURE_REFUSE_ONCE: flags, EPH_PROBE_STAMPS: stamps },
+        watch.require
+      )
 
       expect(result.out).toMatch(
-        /baseline: no test file ran: vitest wrote no report, or one holding no file — the suite refused to start[^\n]*retrying \(1 of 1\)/
+        /baseline: no test file ran: vitest wrote no report, or one holding no file — the suite refused to start[^\n]*waiting 1s, then retrying \(1 of 1\)/
       )
       expect(result.out).toMatch(/ROUND OK — 1 of 1 real mutants killed/)
       expect(result.status).toBe(tool.EXIT.ok)
+      // The refused baseline, the baseline that answered, the control and M1.
+      // The gap is timed inside the tool, from one vitest's exit to the next
+      // one's start, so vitest's own start-up is not in it: without the wait
+      // it is the tool's milliseconds. 950, not 1000, absorbs timer rounding.
+      const runs = fs
+        .readFileSync(stamps, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { start: number; end: number })
+      expect(runs).toHaveLength(4)
+      expect(runs[1]!.start - runs[0]!.end).toBeGreaterThanOrEqual(950)
+    },
+    ROUND_TIMEOUT
+  )
+
+  it(
+    'calls a mutant run whose only killing test timed out INVALID and retries it, never a kill',
+    () => {
+      const slow = [
+        "import * as mod from './mod.mjs'",
+        "test('adds', async () => {",
+        "  if (mod.marker === 'SLOW') await new Promise((resolve) => setTimeout(resolve, 5_000))",
+        '  expect(mod.add(2, 3)).toBe(5)',
+        '}, 1_000)',
+        ''
+      ].join('\n')
+      const repo = fixture(specWith(marking('SLOW', 'the test outlives its timeout')), {
+        test: slow
+      })
+
+      const result = round(repo.dir, ['--retries', '1'])
+
+      // The real vitest's report, read: this is what pins its timeout shape.
+      expect(result.out).toMatch(
+        /M1: 1 test\(s\) that passed at the baseline failed only by timing out, first add\.test\.mjs › adds #1[^\n]*retrying \(1 of 1\)/
+      )
+      expect(result.out).toMatch(
+        /ROUND INVALID — M1: 1 test\(s\) that passed at the baseline failed only by timing out/
+      )
+      expect(result.out).not.toMatch(/M1 {2}killed/)
+      expect(result.status).toBe(tool.EXIT.invalid)
+      expect(repo.git(['status', '--porcelain'])).toBe('')
+    },
+    ROUND_TIMEOUT
+  )
+
+  it(
+    'restores a mutant whose write stopped half-way, as on a full disk, and calls the round INVALID',
+    () => {
+      const repo = fixture(specWith(marking('WRITEFAIL', 'the probe stops this write half-way')))
+      const watch = probe()
+
+      const result = round(repo.dir, [], { EPH_PROBE_FAIL_WRITE: 'WRITEFAIL' }, watch.require)
+
+      expect(result.out).toMatch(/control {2}control {2}SURVIVED/)
+      expect(result.out).toMatch(
+        /ROUND INVALID — the harness failed: Error: ENOSPC: no space left on device, write/
+      )
+      expect(result.status).toBe(tool.EXIT.invalid)
+      // The probe left half the mutant in the file; the restore put it back.
+      expect(fs.readFileSync(path.join(repo.dir, 'mod.mjs'), 'utf8')).toBe(MODULE)
+      expect(repo.git(['status', '--porcelain'])).toBe('')
+    },
+    ROUND_TIMEOUT
+  )
+
+  it(
+    'calls a restore that puts back a staged mutant INVALID, though the run before it was clean',
+    () => {
+      // The last mutant has no next one whose checks could notice: only the
+      // proof after its own restore can. `git checkout --` restores from the
+      // index, and the test staged the mutant there.
+      const repo = fixture(
+        specWith(marking('STAGE', 'the test stages the mutated file, then fails'))
+      )
+
+      const result = round(repo.dir)
+
+      expect(result.out).toMatch(
+        /ROUND INVALID — M1: the restore did not hold \(mod\.mjs; M {2}mod\.mjs\); inspect the tree before anything else/
+      )
+      expect(result.out).not.toMatch(/and then/)
+      expect(result.out).not.toMatch(/M1 {2}killed|ROUND (OK|HAS SURVIVORS)/)
+      expect(result.status).toBe(tool.EXIT.invalid)
+      // The round reports the tree it leaves; it does not repair it.
+      expect(repo.git(['status', '--porcelain'])).toBe('M  mod.mjs\n')
+      expect(fs.readFileSync(path.join(repo.dir, 'mod.mjs'), 'utf8')).toContain(
+        "export const marker = 'STAGE'"
+      )
+    },
+    ROUND_TIMEOUT
+  )
+
+  it(
+    'restores only the file it wrote, though that file is named like a git pattern',
+    () => {
+      const spec = validSpec()
+      ;(spec['mutants'] as Record<string, unknown>[])[1] = {
+        id: 'M1',
+        file: 'data[1].txt',
+        find: 'quiet',
+        replace: 'SPILL',
+        why: 'the test writes data1.txt when it reads this'
+      }
+      const spilling = [
+        "import fs from 'node:fs'",
+        "import { add } from './mod.mjs'",
+        "test('adds', () => {",
+        "  if (fs.readFileSync(new URL('./data[1].txt', import.meta.url), 'utf8').includes('SPILL')) {",
+        "    fs.appendFileSync(new URL('./data1.txt', import.meta.url), 'spilt\\n')",
+        '  }',
+        '  expect(add(2, 3)).toBe(5)',
+        '})',
+        ''
+      ].join('\n')
+      const repo = fixture(spec, { test: spilling })
+      repo.write('data[1].txt', 'quiet\n')
+      repo.write(
+        'data1.txt',
+        'tracked, outside the round, and matched by the pattern data[1].txt\n'
+      )
+      repo.commit()
+
+      const result = round(repo.dir)
+
+      expect(result.out).toMatch(
+        /ROUND INVALID — M1: {1,2}M data1\.txt changed while the suite ran/
+      )
+      expect(result.status).toBe(tool.EXIT.invalid)
+      // data[1].txt is back; data1.txt keeps what the run wrote, for the
+      // reader the message sends to the tree.
+      expect(fs.readFileSync(path.join(repo.dir, 'data[1].txt'), 'utf8')).toBe('quiet\n')
+      expect(repo.git(['status', '--porcelain'])).toBe(' M data1.txt\n')
     },
     ROUND_TIMEOUT
   )

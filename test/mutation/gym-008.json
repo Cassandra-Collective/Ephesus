@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "package": "GYM-008",
-  "about": "the round refuses what it cannot score, restores what it changed, and stops on a survivor — the proposal's nine requirements, the nine findings of its first refutation pass, and the kill rule decided after its second",
+  "about": "the round refuses what it cannot score, restores what it changed, and stops on a survivor — the proposal's nine requirements, the nine findings of its first refutation pass, the kill rule decided after its second, and the 2026-10-11 follow-up to #71's review",
   "tests": ["test/scripts/mutate.test.ts"],
   "mutants": [
     {
@@ -312,6 +312,111 @@
       "find": "  } catch (err) {\n    console.log(`ROUND INVALID — ${described(err)}`)",
       "replace": "  } catch (err) {\n    if (!(err instanceof Invalid)) throw err\n    console.log(`ROUND INVALID — ${described(err)}`)",
       "why": "a harness crash must read as INVALID, never exit 1, which means survivors"
+    },
+    {
+      "id": "G1-last-restore-unchecked",
+      "file": "scripts/mutate.cjs",
+      "find": "    if (unrestored !== null) throw unrestored\n",
+      "replace": "",
+      "why": "gap 1: a restore that did not hold voids the round even when the run before it was clean — the last mutant has no next one to notice"
+    },
+    {
+      "id": "G2-retry-unwaited",
+      "file": "scripts/mutate.cjs",
+      "find": "    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, options.retryWaitSeconds * 1000)\n",
+      "replace": "",
+      "why": "gap 2, requirement 3: a refused run is retried after a wait of --retry-wait seconds"
+    },
+    {
+      "id": "G3-write-unguarded",
+      "file": "scripts/mutate.cjs",
+      "find": "    let run = null\n    let fault = null\n    try {\n      // Inside the guarded region: a write that fails part-way (a full disk,\n      // EIO) leaves the file truncated, and the restore below must still run.\n      fs.writeFileSync(target, mutated)\n",
+      "replace": "    fs.writeFileSync(target, mutated)\n    let run = null\n    let fault = null\n    try {\n",
+      "why": "gap 3: a mutant whose write fails part-way is still restored (the write back before the try, where it was)"
+    },
+    {
+      "id": "R1-controls-only-allowed",
+      "file": "scripts/mutate.cjs",
+      "find": "  if (doc.mutants.every((mutant) => mutant && mutant.control === true)) {",
+      "replace": "  if (false) {",
+      "why": "requirement 1 as decided 2026-10-11: a spec whose mutants are all controls is refused"
+    },
+    {
+      "id": "P-glob-pathspecs",
+      "file": "scripts/mutate.cjs",
+      "find": "spawnSync('git', ['--literal-pathspecs', ...args],",
+      "replace": "spawnSync('git', args,",
+      "why": "requirement 6 as decided 2026-10-11: git reads every name literally, so the restore touches only the file the round wrote"
+    },
+    {
+      "id": "K-timeout-kills",
+      "file": "scripts/mutate.cjs",
+      "find": "    const earned = killers.filter((test) => !slow.has(test))",
+      "replace": "    const earned = killers",
+      "why": "the kill rule as decided 2026-10-11: a test that only timed out earns no kill"
+    },
+    {
+      "id": "K-timeout-not-retried",
+      "file": "scripts/mutate.cjs",
+      "find": "        retry: true,\n        reason: `${killers.length} test(s) that passed at the baseline failed only by timing out",
+      "replace": "        retry: false,\n        reason: `${killers.length} test(s) that passed at the baseline failed only by timing out",
+      "why": "decided 2026-10-11: a run whose only killers timed out is retried, as a refusal to start is"
+    },
+    {
+      "id": "K-placeholder-unread",
+      "file": "scripts/mutate.cjs",
+      "find": "(?:STACK_TRACE_ERROR|(?:Test|Hook) timed out in \\d+ms\\.)",
+      "replace": "(?:(?:Test|Hook) timed out in \\d+ms\\.)",
+      "why": "measured 2026-10-11: vitest 4.1.11 reports a timeout as its STACK_TRACE_ERROR placeholder, and the real vitest's report is read as one"
+    },
+    {
+      "id": "K-text-unread",
+      "file": "scripts/mutate.cjs",
+      "find": "(?:STACK_TRACE_ERROR|(?:Test|Hook) timed out in \\d+ms\\.)",
+      "replace": "(?:STACK_TRACE_ERROR)",
+      "why": "a vitest that fixes the placeholder writes \"Test|Hook timed out in Nms.\", and that is read as a timeout too"
+    },
+    {
+      "id": "K-timeout-unanchored",
+      "file": "scripts/mutate.cjs",
+      "find": "timed out in \\d+ms\\.)$/",
+      "replace": "timed out in \\d+ms\\.)/",
+      "why": "a timeout is a first line that IS a timeout's, not one that begins like one"
+    },
+    {
+      "id": "K-timeout-any-message",
+      "file": "scripts/mutate.cjs",
+      "find": "  messages.every((message) => TIMEOUT_LINE",
+      "replace": "  messages.some((message) => TIMEOUT_LINE",
+      "why": "a test that timed out AND failed otherwise failed by more than timing out"
+    },
+    {
+      "id": "K-timeout-no-message",
+      "file": "scripts/mutate.cjs",
+      "find": "  messages.length > 0 &&\n",
+      "replace": "",
+      "why": "a test with no failure message did not time out"
+    },
+    {
+      "id": "K-killers-unnamed",
+      "file": "scripts/mutate.cjs",
+      "find": "  return `${failedTests.length} tests failed: ${failedTests.slice(0, 3).join('; ')}${more}${timeouts}`",
+      "replace": "  return `${failedTests.length} tests failed`",
+      "why": "decided 2026-10-11: a kill line names the tests that killed"
+    },
+    {
+      "id": "K-more-uncounted",
+      "file": "scripts/mutate.cjs",
+      "find": "  const more = failedTests.length > 3 ?",
+      "replace": "  const more = false ?",
+      "why": "a kill line names three killers and counts the rest"
+    },
+    {
+      "id": "K-timeouts-uncounted",
+      "file": "scripts/mutate.cjs",
+      "find": "  const timeouts = slow > 0 ?",
+      "replace": "  const timeouts = false ?",
+      "why": "a kill line counts the killing tests that only timed out"
     }
   ]
 }

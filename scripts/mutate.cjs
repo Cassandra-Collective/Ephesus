@@ -17,7 +17,8 @@
  *
  * 1. A planted no-op CONTROL must survive, and a spec that declares none is
  *    refused: a round that cannot tell an unearned kill from a real one has
- *    no certificate.
+ *    no certificate. So is a spec that declares nothing else, whose ROUND OK
+ *    would certify "0 of 0 killed".
  * 2. The suite runs once before the first mutant, and the round stops unless
  *    it is green — a red baseline makes every mutant, the control included,
  *    look killed (M8b.3).
@@ -38,7 +39,9 @@
  *    `git checkout --` is the restore and `git status` a second check. That is
  *    why this file is in `GIT_ALLOWLIST` (`scripts/check-invariants.cjs`) and
  *    `GIT_DOORS` (`test/temp-hygiene.test.ts`): it runs git on the development
- *    repository and never on a harness home (DECISIONS-LOG 2026-10-03).
+ *    repository and never on a harness home (DECISIONS-LOG 2026-10-03). Git
+ *    reads every name the round hands it literally, so restoring `a[1].txt`
+ *    cannot also revert `a1.txt` (2026-10-11).
  * 7. Every run prints the test files it actually ran. A score is scoped to
  *    them, and M8b.3's 6 of 6 kills were followed by two scenario failures the
  *    round never loaded.
@@ -60,7 +63,10 @@
  * an option, or an anchor in malformed Unicode. A second pass found eleven more
  * ways in, recorded as the round's known limits in TEST-STRATEGY §10 rather
  * than closed; of them only the kill rule changed: a kill needs a test that
- * passed at the baseline to fail, or a listed file that cannot load.
+ * passed at the baseline to fail, or a listed file that cannot load. Since
+ * 2026-10-11 that test must also have failed by more than timing out — under
+ * load a test times out whatever the line says, so a run whose only killers
+ * timed out is retried as a refusal is — and a kill line names its killers.
  *
  * The round trusts the repository's own tests and configuration. Test code or
  * config written to deceive it — a reporter-rewriting config, a detached
@@ -170,6 +176,11 @@ function specProblems(doc) {
       'no mutant is a control: plant a no-op ("control": true) whose survival certifies the round, or a kill cannot be told from a harness that scores everything as killed'
     )
   }
+  if (doc.mutants.every((mutant) => mutant && mutant.control === true)) {
+    problems.push(
+      'every mutant is a control: add at least one real mutant aimed at a sentence the package defends, or the round certifies "0 of 0 killed"'
+    )
+  }
   return problems
 }
 
@@ -227,8 +238,15 @@ function drift(root, expected) {
   return [...expected].filter(([file, hash]) => now.get(file) !== hash).map(([file]) => file)
 }
 
+/**
+ * Runs git in `root` and returns its stdout; throws `Invalid` when it cannot
+ * start or exits non-zero. Every name the round hands git is one file, never a
+ * pattern: without `--literal-pathspecs`, `git checkout -- 'a[1].txt'` also
+ * reverts `a1.txt`, and `ls-files` and `status` match it too (DECISIONS-LOG
+ * 2026-10-11).
+ */
 function git(root, args) {
-  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' })
+  const result = spawnSync('git', ['--literal-pathspecs', ...args], { cwd: root, encoding: 'utf8' })
   if (result.error) throw new Invalid(`git ${args[0]} could not start: ${result.error.message}`)
   if (result.status !== 0) {
     throw new Invalid(`git ${args.join(' ')} failed: ${(result.stderr || result.stdout).trim()}`)
@@ -318,9 +336,26 @@ function fileProblems(root, files) {
 }
 
 /**
+ * The first line of a failure message vitest writes for a test or hook that
+ * outlived its timeout. Measured on vitest 4.1.11 (DECISIONS-LOG 2026-10-11):
+ * its JSON report never says "timed out" — `makeTimeoutError` in
+ * `@vitest/runner` replaces the wrong way round, so the stack the report keeps
+ * still begins with its placeholder, `STACK_TRACE_ERROR`. The other form is the
+ * text a vitest that fixes it would write. An integration case pins the shape,
+ * so a vitest that changes it fails that case rather than switching this off.
+ */
+const TIMEOUT_LINE = /^Error: (?:STACK_TRACE_ERROR|(?:Test|Hook) timed out in \d+ms\.)$/
+
+/** Contract: pure. Whether a test failed only by timing out: it has messages, and each one's first line is a timeout's. */
+const timedOut = (messages) =>
+  Array.isArray(messages) &&
+  messages.length > 0 &&
+  messages.every((message) => TIMEOUT_LINE.test(String(message).split('\n')[0]))
+
+/**
  * Contract: pure. vitest's report as the round reads it: per file, its path in
- * the repository, its status, its message and its tests, sorted by path.
- * `null` when no report was written.
+ * the repository, its status, its message and its tests, each with whether it
+ * failed only by timing out, sorted by path. `null` when no report was written.
  */
 function filesOf(report, root) {
   if (report === null) return null
@@ -331,25 +366,29 @@ function filesOf(report, root) {
       message: file.message ?? '',
       tests: (file.assertionResults ?? []).map((test) => ({
         name: test.fullName,
-        status: test.status
+        status: test.status,
+        timedOut: timedOut(test.failureMessages)
       }))
     }))
     .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))
 }
 
-/** Contract: pure. The tests with `status`, each named by its file, its full name and its place among same-named tests. */
-function testsWith(files, status) {
+/** Contract: pure. The tests `keep` accepts, each named by its file, its full name and its place among same-named tests. */
+function testsWhere(files, keep) {
   const keys = []
   for (const file of files) {
     const seen = new Map()
     for (const test of file.tests) {
       const n = (seen.get(test.name) ?? 0) + 1
       seen.set(test.name, n)
-      if (test.status === status) keys.push(`${file.file} › ${test.name} #${n}`)
+      if (keep(test)) keys.push(`${file.file} › ${test.name} #${n}`)
     }
   }
   return keys
 }
+
+/** Contract: pure. The tests with `status`, named as `testsWhere` names them. */
+const testsWith = (files, status) => testsWhere(files, (test) => test.status === status)
 
 /**
  * Contract: pure. What one vitest run means for the round. `run` is the report
@@ -358,9 +397,11 @@ function testsWith(files, status) {
  * files; `expected` is the set of tests that passed at the baseline, or `null`
  * when this run IS the baseline. `kind` is `pass`, `fail` or `invalid`. Under a
  * mutant a failure is a kill only when a test that passed at the baseline failed
- * (`test`) or a listed file could not load at all (`file`, named so it is
- * triaged); any other failure is INVALID. A pass carries the tests that passed
- * and the count skipped.
+ * by more than timing out (`test`, carrying those tests and how many more timed
+ * out) or a listed file could not load at all (`file`, named so it is triaged).
+ * A run whose only such failures timed out is INVALID and retried; any other
+ * failure is INVALID. A pass carries the tests that passed and the count
+ * skipped.
  */
 function classify(run, listed, expected) {
   const { report, files, exit, timedOut } = run
@@ -406,10 +447,29 @@ function classify(run, listed, expected) {
     // cannot even load. A test the mutant switched on, or a hook that threw
     // around passing tests, says nothing about the tests that defend the line.
     const killers = failedTests.filter((test) => expected.has(test))
-    if (killers.length > 0) return { kind: 'fail', how: 'test', failedFiles, failedTests: killers }
+    // Under load a test times out whatever the line says (DECISIONS-LOG
+    // 2026-10-11), so a timeout earns no kill; any other failure beside it does.
+    const slow = new Set(testsWhere(files, (test) => test.status === 'failed' && test.timedOut))
+    const earned = killers.filter((test) => !slow.has(test))
+    if (earned.length > 0) {
+      return {
+        kind: 'fail',
+        how: 'test',
+        failedFiles,
+        failedTests: earned,
+        timedOut: killers.length - earned.length
+      }
+    }
     const unloaded = failedFiles.filter((file) => file.tests.length === 0)
     if (unloaded.length > 0) {
       return { kind: 'fail', how: 'file', failedFiles: unloaded, failedTests: [] }
+    }
+    if (killers.length > 0) {
+      return {
+        kind: 'invalid',
+        retry: true,
+        reason: `${killers.length} test(s) that passed at the baseline failed only by timing out, first ${killers[0]}: under load that is no kill, and a mutant that only makes a test hang needs a test that fails rather than hangs`
+      }
     }
     const unexplained = [...failedTests, ...failedFiles.map((file) => file.file)]
     if (unexplained.length > 0) {
@@ -542,6 +602,22 @@ const counted = (run) => {
 const firstLine = (failedFiles) =>
   failedFiles.map((file) => file.message.split('\n')[0]).find(Boolean) ?? 'no message'
 
+/**
+ * Contract: pure. What a kill line says killed the mutant, from a `fail`
+ * verdict: the tests that earned it, the first three by name, and how many more
+ * only timed out — so a kill nobody earned can be seen (DECISIONS-LOG
+ * 2026-10-11); or, for a file kill, the file's first message line.
+ */
+function killedBy(verdict) {
+  if (verdict.how !== 'test') {
+    return `a test file failed without a failing test: ${firstLine(verdict.failedFiles)}`
+  }
+  const { failedTests, timedOut: slow } = verdict
+  const more = failedTests.length > 3 ? ` +${failedTests.length - 3} more` : ''
+  const timeouts = slow > 0 ? `; ${slow} more only timed out` : ''
+  return `${failedTests.length} tests failed: ${failedTests.slice(0, 3).join('; ')}${more}${timeouts}`
+}
+
 /** A fault as the sentence the reader gets: a refusal's own words, or a crash's stack. */
 const described = (err) =>
   err instanceof Invalid ? err.message : `the harness failed: ${err.stack ?? String(err)}`
@@ -643,10 +719,12 @@ function runRound(specArg, options) {
   for (const mutant of spec.mutants) {
     const target = path.join(root, mutant.file)
     const mutated = mutate(cleanBytes.get(mutant.file), mutant.find, mutant.replace)
-    fs.writeFileSync(target, mutated)
     let run = null
     let fault = null
     try {
+      // Inside the guarded region: a write that fails part-way (a full disk,
+      // EIO) leaves the file truncated, and the restore below must still run.
+      fs.writeFileSync(target, mutated)
       run = runAnswered(root, spec.tests, options, mutant.id, expected)
       const during = drift(root, clean).filter((file) => file !== mutant.file)
       if (sha256(fs.readFileSync(target)) !== sha256(mutated)) during.unshift(mutant.file)
@@ -682,11 +760,7 @@ function runRound(specArg, options) {
       }
       console.log(`  ${mutant.id}  control  SURVIVED — certifies the round  ${where}`)
     } else if (verdict.kind === 'fail') {
-      const how =
-        verdict.how === 'test'
-          ? `${verdict.failedTests.length} tests failed`
-          : `a test file failed without a failing test: ${firstLine(verdict.failedFiles)}`
-      console.log(`  ${mutant.id}  killed — ${how}  ${where}`)
+      console.log(`  ${mutant.id}  killed — ${killedBy(verdict)}  ${where}`)
     } else {
       survivors.push(mutant)
       console.log(`  ${mutant.id}  SURVIVED  ${where}`)
@@ -760,6 +834,7 @@ module.exports = {
   Invalid,
   classify,
   filesOf,
+  killedBy,
   main,
   mutate,
   occurrences,
