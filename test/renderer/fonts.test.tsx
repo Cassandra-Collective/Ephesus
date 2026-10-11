@@ -20,7 +20,10 @@ const originalFonts = Object.getOwnPropertyDescriptor(document, 'fonts')
 function stubFontLoading(options: { unavailable?: string; invalidSignature?: boolean } = {}) {
   const added: string[] = []
   class FakeFontFace {
-    constructor(readonly family: string, readonly source: ArrayBuffer) {}
+    constructor(
+      readonly family: string,
+      readonly source: ArrayBuffer
+    ) {}
     async load(): Promise<FakeFontFace> {
       return this
     }
