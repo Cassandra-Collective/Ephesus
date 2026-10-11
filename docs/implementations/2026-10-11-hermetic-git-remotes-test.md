@@ -289,8 +289,8 @@ npx vitest run test/temp-hygiene.test.ts test/scripts/check-invariants.test.ts \
       Tests  294 passed (294)
 ```
 
-**Full suite (`npx vitest run`).** All runs were in this OneDrive worktree, at
-default parallelism, with 0.7–2.8 GB free. Earlier gates ran outside OneDrive.
+**Full suite.** The runs were at default parallelism with 0.7–2.8 GB free. All but the
+last were `npx vitest run` in this OneDrive worktree.
 
 | Tree | Result |
 |---|---|
@@ -299,20 +299,30 @@ default parallelism, with 0.7–2.8 GB free. Earlier gates ran outside OneDrive.
 | `main`'s `repo-remotes.test.ts` restored (`src`, `shims`, `scripts`, `test` identical to `75ec37c`) | exit 1: the same |
 | this change merged with `origin/main` `c0e1534` (tree `d0e750d`) | **exit 0: 240 files, 5006 passed, 8 skipped** |
 | the final code, `2e6e17d` (also on `c0e1534`) | exit 1: 1 failed (the same timeout, 20 058 ms), 5009 passed, 8 skipped, 240 files |
+| the head, `daf8b94` (merged with `origin/main` `8a3a3a7`), as `npm run test:coverage` in a detached worktree **outside** OneDrive | exit 1: 1 failed (the same timeout, 20 208 ms), 5021 passed, 8 skipped, 241 files |
 
-In the four red runs, the one failure is `check-invariants.test.ts` › "the CLI, run
+In the five red runs, the one failure is `check-invariants.test.ts` › "the CLI, run
 as CI runs it" › "exits 0 over this repository". Its `spawnSync` of
 `scripts/check-invariants.cjs` hits `CHILD_TIMEOUT_MS` (20 s) with `ETIMEDOUT`, at
-20 108–20 175 ms. Run alone, the checker exits 0 in 3 226 ms, and that test file
+20 058–20 208 ms. Run alone, the checker exits 0 in 3 226 ms, and that test file
 passes 20/20. The control run failed the same way without this change, so this change
-did not cause it. On the merged tree it passed. `origin/main`'s only change to the
+did not cause it. On the first merged tree (`d0e750d`) it passed. `origin/main`'s only change to the
 checker since `75ec37c` is one allowlist entry, so the timeout depends on load rather
-than happening every time. It is recorded here and not investigated further.
+than happening every time. The last run rules out OneDrive as the cause: outside it,
+under coverage, the test timed out the same way. Because a test failed, vitest wrote no
+coverage report, so `check-coverage` could not measure the floors here (it reported
+1.04 GB free). The floors and a green full suite are left to CI's linux run. The
+timeout is recorded here and not investigated further.
 
-On the merged tree, `npm run typecheck`, `npm run lint`, `check-invariants`,
-`check-readme-current`, `check-attribution` (603 commits) and CI's relative-link check
-all exit 0. `repo-remotes.test.ts` gives 8 passed both with and without the injected
-`GIT_CONFIG_COUNT` rewrite.
+On the head `daf8b94` (tree `8322a2e`), in the same worktree outside OneDrive:
+`npm run typecheck`, `npm run lint`, `check-invariants` (189/199),
+`check-readme-current`, `check-attribution` (612 commits), CI's relative-link check
+and `mutate.cjs … --check` (7 of 7 anchors) all exit 0.
+
+On the first merged tree (`d0e750d`, before the hostile host), `npm run typecheck`,
+`npm run lint`, `check-invariants`, `check-readme-current`, `check-attribution` (603
+commits) and CI's relative-link check all exit 0. `repo-remotes.test.ts` gives 8
+passed both with and without the injected `GIT_CONFIG_COUNT` rewrite.
 
 **To reproduce:**
 
