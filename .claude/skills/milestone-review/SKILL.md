@@ -17,7 +17,10 @@ description: Verify an Ephesus milestone's exit criteria before declaring it don
    milestone code (`grep -rn "TODO\|FIXME" src/`), must-ask questions still open in
    past session reports, docs that now lie about the code (run `/doc-sync`).
 6. Write the verdict into `docs/PROGRESS.md` under the milestone: DONE (with evidence
-   links) or NOT DONE (with the precise gap list as new unchecked items).
+   links) or NOT DONE (with the precise gap list as new unchecked items). Update the
+   *Resume here* block and the milestone index in the same commit. When the milestone
+   closes, move its section verbatim to `docs/progress/M<x>.md` (relative links rebased
+   one folder, nothing else changed) and carry anything it leaves open into the block.
 7. Report to the Architect: verdict first, then the evidence table, then gaps.
 
 Never soften a criterion to close a milestone. If a criterion seems wrong, that is a

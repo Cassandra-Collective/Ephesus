@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "package": "PROGRESS-ARCHIVE",
+  "about": "the README check reads the register as PROGRESS.md plus the milestones archived in docs/progress/, in build order, refuses a stray file in the archive, and fails CI by its exit status",
+  "tests": ["test/scripts/check-readme-current.test.ts"],
+  "mutants": [
+    {
+      "id": "control-comment",
+      "control": true,
+      "file": "scripts/check-readme-current.cjs",
+      "find": "/** An archived milestone's file name: `M8.md`, `M5b.md`. */",
+      "replace": "/** The file name of an archived milestone: `M8.md`, `M5b.md`. */",
+      "why": "a no-op: a doc comment reworded, nothing a test can see"
+    },
+    {
+      "id": "A1-archive-ignored",
+      "file": "scripts/check-readme-current.cjs",
+      "find": "  const parts = files.map((file) => fs.readFileSync(file, 'utf8'))",
+      "replace": "  const parts = []",
+      "why": "the archive is part of the register: with it unread, the README's sixteen M8 names are claimed-but-not-ticked"
+    },
+    {
+      "id": "A2-progress-read-first",
+      "file": "scripts/check-readme-current.cjs",
+      "find": "  parts.push(fs.readFileSync(path.join(root, 'docs', 'PROGRESS.md'), 'utf8'))",
+      "replace": "  parts.unshift(fs.readFileSync(path.join(root, 'docs', 'PROGRESS.md'), 'utf8'))",
+      "why": "PROGRESS.md is read after the archive, so its ticks are the most recent"
+    },
+    {
+      "id": "A3-string-sort",
+      "file": "scripts/check-readme-current.cjs",
+      "find": "  files.sort((a, b) => a.number - b.number || a.suffix.localeCompare(b.suffix))",
+      "replace": "  files.sort((a, b) => a.name.localeCompare(b.name))",
+      "why": "milestones are read by number: a string sort puts M10 before M9"
+    },
+    {
+      "id": "A4-stray-skipped",
+      "file": "scripts/check-readme-current.cjs",
+      "find": "  if (strays.length > 0) {",
+      "replace": "  if (false) {",
+      "why": "a file in the archive not named for a milestone is refused, not skipped with its ticks"
+    },
+    {
+      "id": "A5-no-archive-throws",
+      "file": "scripts/check-readme-current.cjs",
+      "find": "  if (!fs.existsSync(dir)) return { files: [], strays: [] }",
+      "replace": "",
+      "why": "a repository with no archive is still checked, not crashed"
+    },
+    {
+      "id": "V1-surplus-ignored",
+      "file": "scripts/check-readme-current.cjs",
+      "find": "  if (missing.length === 0 && surplus.length === 0) {",
+      "replace": "  if (missing.length === 0) {",
+      "why": "a package the README claims and the register has not ticked fails the check"
+    },
+    {
+      "id": "C1-exit-status-dropped",
+      "file": "scripts/check-readme-current.cjs",
+      "find": "if (require.main === module) process.exit(main())",
+      "replace": "if (require.main === module) main()",
+      "why": "CI fails on the exit status alone: a check that prints its failure and exits 0 passes the job"
+    },
+    {
+      "id": "C2-reasons-unprinted",
+      "file": "scripts/check-readme-current.cjs",
+      "find": "  for (const line of result.err) console.error(line)",
+      "replace": "",
+      "why": "a failing check names what disagrees; a bare exit 1 teaches nothing"
+    }
+  ]
+}

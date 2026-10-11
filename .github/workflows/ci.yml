@@ -58,7 +58,8 @@ jobs:
         # M8.4 fixed a README that was "two milestones stale" and by M8.9 the
         # same section was three packages behind, because nothing was watching.
         # This compares the README's own `<!-- landed: -->` marker against the
-        # packages ticked in docs/PROGRESS.md; it does not read the prose.
+        # packages ticked in the register (docs/PROGRESS.md and the milestones
+        # archived in docs/progress/); it does not read the prose.
         run: node scripts/check-readme-current.cjs
 
   code:

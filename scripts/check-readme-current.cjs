@@ -16,7 +16,8 @@
  * ## What it checks, and what it deliberately does not
  *
  * The README carries an HTML comment naming the packages its narrative covers.
- * This compares that set against the packages ticked in `docs/PROGRESS.md`.
+ * This compares that set against the packages ticked in the register:
+ * `docs/PROGRESS.md` and the closed milestones archived in `docs/progress/`.
  *
  * It does NOT read the prose. Deciding whether a paragraph "describes" a package
  * is not something a script can do, and a check that guessed would either block
@@ -34,9 +35,46 @@
 const fs = require('node:fs')
 const path = require('node:path')
 
-const root = path.resolve(__dirname, '..')
-const README = path.join(root, 'README.md')
-const PROGRESS = path.join(root, 'docs', 'PROGRESS.md')
+const REPO_ROOT = path.resolve(__dirname, '..')
+
+/** An archived milestone's file name: `M8.md`, `M5b.md`. */
+const ARCHIVED = /^M(\d+)([a-z]?)\.md$/
+
+/**
+ * The register is `docs/PROGRESS.md` plus the closed milestones moved verbatim
+ * into `docs/progress/` (2026-10-11). Moving M8 out of the one file this check
+ * read would have left it finding no ticked M8 package, and so calling the
+ * README's sixteen M8 names claimed-but-not-ticked — or, once nothing was ticked
+ * at all, passing with nothing checked.
+ *
+ * Read in build order: every archived milestone by number, then suffix (M5
+ * before M5b before M6), then PROGRESS.md. That is the order the single file
+ * had, so "the most recently ticked package" still means what it meant. A file
+ * in the archive that is not named for a milestone is REFUSED rather than
+ * skipped: its ticks would otherwise vanish from the register unseen.
+ */
+function archiveFiles(root) {
+  const dir = path.join(root, 'docs', 'progress')
+  if (!fs.existsSync(dir)) return { files: [], strays: [] }
+  const files = []
+  const strays = []
+  for (const name of fs.readdirSync(dir)) {
+    const match = ARCHIVED.exec(name)
+    if (match && match[1] !== undefined) {
+      files.push({ name, number: Number(match[1]), suffix: match[2] ?? '' })
+    } else {
+      strays.push(name)
+    }
+  }
+  files.sort((a, b) => a.number - b.number || a.suffix.localeCompare(b.suffix))
+  return { files: files.map((file) => path.join(dir, file.name)), strays }
+}
+
+function readRegister(root, files) {
+  const parts = files.map((file) => fs.readFileSync(file, 'utf8'))
+  parts.push(fs.readFileSync(path.join(root, 'docs', 'PROGRESS.md'), 'utf8'))
+  return parts.join('\n')
+}
 
 /**
  * The packages ticked in the register for the milestone the README is about.
@@ -77,23 +115,46 @@ function claimedPackages(readme) {
   return firstLine.trim().split(/\s+/).filter(Boolean)
 }
 
-function main() {
-  const readme = fs.readFileSync(README, 'utf8')
-  const progress = fs.readFileSync(PROGRESS, 'utf8')
+/**
+ * The whole check over a repository root, returned rather than printed so the
+ * tests can run it against a fixture register. `out` is what passes, `err` what
+ * fails, and `code` the exit status.
+ */
+function check(root) {
+  const { files, strays } = archiveFiles(root)
+  if (strays.length > 0) {
+    return {
+      code: 1,
+      out: [],
+      err: [
+        `docs/progress/ holds a file not named for a milestone: ${strays.join(', ')}\n` +
+          '  — an archived milestone is `M<number>[letter].md` (M8.md, M5b.md). Anything else\n' +
+          '    is not read as the register, so its ticks would drop out of this check unseen.'
+      ]
+    }
+  }
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8')
+  const register = readRegister(root, files)
 
   const claimed = claimedPackages(readme)
   if (claimed === null) {
-    console.error(
-      'README.md has no `<!-- landed: ... -->` marker, so nothing relates it to the register.\n' +
-        'Add one naming the packages the "Landed so far" narrative covers.'
-    )
-    process.exit(1)
+    return {
+      code: 1,
+      out: [],
+      err: [
+        'README.md has no `<!-- landed: ... -->` marker, so nothing relates it to the register.\n' +
+          'Add one naming the packages the "Landed so far" narrative covers.'
+      ]
+    }
   }
 
-  const { milestone, ids: landed } = landedPackages(progress)
+  const { milestone, ids: landed } = landedPackages(register)
   if (milestone === null || landed.length === 0) {
-    console.log('no milestone has a ticked package yet — nothing for the README to claim.')
-    return
+    return {
+      code: 0,
+      out: ['no milestone has a ticked package yet — nothing for the README to claim.'],
+      err: []
+    }
   }
 
   const claimedSet = new Set(claimed)
@@ -102,15 +163,20 @@ function main() {
   const surplus = claimed.filter((id) => !landedSet.has(id))
 
   if (missing.length === 0 && surplus.length === 0) {
-    console.log(
-      `README landed list is current for ${milestone} (${String(landed.length)} package(s)).`
-    )
-    return
+    return {
+      code: 0,
+      out: [
+        `README landed list is current for ${milestone} (${String(landed.length)} package(s)).`
+      ],
+      err: []
+    }
   }
 
-  console.error("README.md's landed list disagrees with docs/PROGRESS.md:\n")
+  const err = [
+    "README.md's landed list disagrees with the register (docs/PROGRESS.md and docs/progress/):\n"
+  ]
   if (missing.length > 0) {
-    console.error(
+    err.push(
       `  ticked in the register, absent from the README: ${missing.join(', ')}\n` +
         '    — write what it did into "Landed so far" and add it to the marker. The front\n' +
         '      door describing a company older than the tree is how somebody decides not to\n' +
@@ -118,12 +184,21 @@ function main() {
     )
   }
   if (surplus.length > 0) {
-    console.error(
+    err.push(
       `  claimed by the README, not ticked in the register: ${surplus.join(', ')}\n` +
         '    — either the package is not done, or the marker names it too early.'
     )
   }
-  process.exit(1)
+  return { code: 1, out: [], err }
 }
 
-main()
+function main() {
+  const result = check(REPO_ROOT)
+  for (const line of result.out) console.log(line)
+  for (const line of result.err) console.error(line)
+  return result.code
+}
+
+if (require.main === module) process.exit(main())
+
+module.exports = { archiveFiles, readRegister, landedPackages, claimedPackages, check, main }
