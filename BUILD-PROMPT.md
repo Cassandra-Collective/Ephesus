@@ -125,10 +125,39 @@ stop and report the blocker precisely (§9) instead of hacking around it.
 ## 5. Build order — strict
 
 Execute `docs/IMPLEMENTATION.md` milestones **in order: M0 → M1 → M2 → M3 → M4 → M5 →
-M5b → M6 → M7 → M7b**. Never start milestone N+1 while milestone N's exit criteria fail.
+M5b → M6 → M7 → M8 → M8b → M8c → M9 → M9b → M9d → M9e → M9f → M7b → M9g → M9h**, with
+M9c free to run beside M9b and M9d. M7b is the v1 boundary; M9g and M9h follow v1. The
+order after M8c is the Architect's (DD-M9-1, DD-M9-18), and **M9 onward is approved for
+planning only: no package of it starts until he says the build may.** Never start
+milestone N+1 while milestone N's exit criteria fail — with one recorded exception: the
+exits of M7, M8b and M8c close on bench task T1's first live row, which M9.1 produces,
+so M9 starts with them open and the Architect ticks them on that record (DD-M9-7).
 Within a milestone, execute the work packages below in order. Track progress in
-`docs/PROGRESS.md` (create it; a checklist per milestone; update it every session —
-it is how the next session knows where to resume).
+`docs/PROGRESS.md`: **its *Resume here* block is how the next session knows where to
+resume**, and the session that changes the next step updates the block in the same
+commit. A closed milestone's section moves verbatim to `docs/progress/M<x>.md`.
+
+> **Build state (updated 2026-10-11):** **THE CURRENT MILESTONE IS M9, PLANNED AND
+> NOT AUTHORISED TO START.** The Architect approved M9's planning on 2026-10-02 and
+> Phase 9's (M9b–M9h) on 2026-10-03, and said not to build either yet. A resuming
+> session asks him first; [`docs/M9-GOAL.md`](docs/M9-GOAL.md) is the handover prompt
+> for the day he says go, and [`docs/M9-PLAN.md`](docs/M9-PLAN.md) the plan. Every
+> package of M0–M8c is built. The exits of M7, M8b and M8c stay open until bench task
+> T1's first live row exists — a fifth manual run of `docs/EXIT-M8.md` was rejected
+> (DD-M9-7) — and M8's exit row closes on the same run. M6.9 stays deferred.
+>
+> **GYM-008 landed 2026-10-11, ahead of M9 by the Architect's choice:**
+> `node scripts/mutate.cjs test/mutation/<package>.json` runs a mutation round from a
+> checked-in spec with a certified control (ENGINEERING-STANDARDS §6 item 9,
+> TEST-STRATEGY §10), and every M9 package owes one. The same day `docs/PROGRESS.md`
+> was split: a *Resume here* block replaces "the first unchecked box", and M0–M8 are
+> archived in `docs/progress/`. The Phase 9 plan merged with it (#72).
+>
+> Suite on the code of `main` @ `c0e1534`, run 2026-10-11 on linux with Node 22.22.0:
+> **240 files, 4999 passed, 15 skipped**; typecheck, lint, invariants and the linux
+> coverage floors green. One recorded environment hazard: in a container that rewrites
+> `git@github.com:` URLs through `GIT_CONFIG_*` variables,
+> `test/main/repo-remotes.test.ts` fails one case; unset them and it passes.
 
 > **Build state (updated 2026-09-07, M8.12):** **M8's THIRTEEN PACKAGES ARE ALL
 > BUILT AND M8 HAS NOT CLOSED.** Its exit is not a checklist — it is SRS §6.1's
@@ -584,5 +613,7 @@ rationale in `docs/DECISIONS-LOG.md`):**
 7. Evidence capture pattern for live runs: `ELECTRON_ENABLE_LOGGING=1` + temporary
    `EVIDENCE`-prefixed console logs, removed before commit.
 
-Begin now: read the files in §2, open `docs/PROGRESS.md` (create it if missing, seeded
-with the M0–M7 checklist), find the first unchecked package, and execute §4 on it.
+Begin now: read the files in §2, open `docs/PROGRESS.md`, read its *Resume here*
+block, and execute §4 on the step it names. Where the block says the step waits on the
+Architect — as M9 does until he says the build may start — ask him first, through
+AskUserQuestion, and do not take silence as a yes.
