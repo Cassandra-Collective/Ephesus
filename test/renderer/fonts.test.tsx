@@ -32,11 +32,12 @@ function stubFontLoading(options: { unavailable?: string; invalidSignature?: boo
     value: { add: (font: FakeFontFace) => added.push(font.family) }
   })
 
+  const fontBytes = options.invalidSignature
+    ? new Uint8Array([60, 104, 116, 109]).buffer
+    : new Uint8Array([0x77, 0x4f, 0x46, 0x32]).buffer
   const fetchMock = vi.fn(async (file: string) => ({
     ok: !options.unavailable || !file.includes(options.unavailable),
-    arrayBuffer: async () =>
-      new Uint8Array(options.invalidSignature ? [60, 104, 116, 109] : [0x77, 0x4f, 0x46, 0x32])
-        .buffer
+    arrayBuffer: async () => fontBytes
   }))
   vi.stubGlobal('fetch', fetchMock)
   return { added, fetchMock }
