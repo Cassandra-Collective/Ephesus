@@ -205,10 +205,13 @@ When working under `/goal`:
   printed in the conversation.
 - Stay inside the milestone the Architect selected. Ideas outside it go into the report
   under "Follow-ups", never into the code.
-- Resume from `docs/PROGRESS.md` at the first unchecked box, and **update it in the same
-  session that does the work.** Between 2026-09-06 and 2026-09-15 sixteen packages
-  landed while PROGRESS.md said nothing; a session resuming from it would have restarted
-  two milestones back.
+- Resume from the *Resume here* block at the top of `docs/PROGRESS.md`, and **update the
+  block and the box in the same commit as the work.** Between 2026-09-06 and 2026-09-15
+  sixteen packages landed while PROGRESS.md said nothing; a session resuming from it
+  would have restarted two milestones back. "The first unchecked box", the rule until
+  2026-10-11, landed on M6.9 — deferred indefinitely — for the same reason: open items
+  that wait on the Architect sit above the real next step. Closed milestones are
+  archived in `docs/progress/`.
 - Concurrent sessions cannot see each other. Before any PR, **trial-merge** — main has
   moved seven commits under an in-flight branch.
 
