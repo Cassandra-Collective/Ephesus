@@ -8,7 +8,9 @@
 The "readRemotes, against git itself" block in `test/main/repo-remotes.test.ts` now
 runs git with the system file, the global file and the environment's config switched
 off, so it tests the parser against git's own output rather than against whatever
-the host has configured. Production is unchanged.
+the host has configured. So that a regression cannot pass on a clean machine, each of
+its cases first plays the hostile host that broke it, and a mutation round shows that
+every line of the isolation is needed. Production is unchanged.
 
 ## 1. Problem / motivation
 
@@ -37,9 +39,10 @@ source git reads configuration from caused it too (§6).
 
 | File | Change |
 |---|---|
-| `test/main/repo-remotes.test.ts` | The "against git itself" block stubs `process.env` in `beforeAll` (config-value variables deleted, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`) and restores it in `afterAll`, with a comment giving the cause. |
+| `test/main/repo-remotes.test.ts` | Before each "against git itself" case, plays the hostile host through four routes, then isolates git from it (config-value variables deleted, matched without regard to case; `GIT_CONFIG_NOSYSTEM=1`; `GIT_CONFIG_GLOBAL=/dev/null`), and restores `process.env` after the case. A new block checks that each route alone rewrites the push URL. A comment gives the cause. |
+| `test/mutation/repo-remotes-isolation.json` | The mutation round's spec (TEST-STRATEGY §10): a control and six mutants. |
 | `docs/implementations/2026-10-11-hermetic-git-remotes-test.md` | This note. |
-| `docs/DECISIONS-LOG.md` | One appended entry. |
+| `docs/DECISIONS-LOG.md` | Two appended entries. |
 
 ## 3. Implementation approach
 
@@ -48,25 +51,57 @@ so does the test's `git()` helper (`execFileSync`). Both children therefore inhe
 the vitest worker's `process.env` as it is at spawn time. Stubbing `process.env` once
 covers both spawners, with no change to production code.
 
-While the block runs:
+### The isolation
 
-- **Every variable that carries config values is deleted:** `GIT_CONFIG_COUNT`,
+`isolateGitFromTheHost()` does three things:
+
+- **It deletes every variable that carries config values:** `GIT_CONFIG_COUNT`,
   `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`, and `GIT_CONFIG_PARAMETERS`. The last
   is how a parent `git -c …` passes its flags on to the processes it starts, for
   example a test run launched from a hook or a `rebase --exec`. The names are found
   by enumerating `process.env` against
-  `^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$`, and each is removed with
-  `vi.stubEnv(name, undefined)`.
-- **`GIT_CONFIG_NOSYSTEM=1`** skips the system file. It wins over
-  `GIT_CONFIG_SYSTEM`, which is checked in §6.
-- **`GIT_CONFIG_GLOBAL=/dev/null`** replaces both `~/.gitconfig` and
+  `/^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$/`, and each is removed with
+  `vi.stubEnv(name, undefined)`. The match is case-sensitive on purpose (§5.8).
+- **It sets `GIT_CONFIG_NOSYSTEM=1`,** which skips the system file. That wins over
+  `GIT_CONFIG_SYSTEM`; see §6 and the round's `system-file-read` mutant.
+- **It sets `GIT_CONFIG_GLOBAL=/dev/null`,** which replaces both `~/.gitconfig` and
   `$XDG_CONFIG_HOME/git/config`. git's documentation names `/dev/null` for this
   variable. It needs git 2.32 or later.
 
-`afterAll` calls `vi.unstubAllEnvs()`. Vitest's default pool is `forks` with
-`isolate` on, and `vitest.config.mts` sets neither, so each test file runs in its own
-process and the stubs cannot reach another file. The restore keeps them out of the
-second block in this file too, which uses an injected runner and never spawns git.
+It runs in a `beforeEach`, and an `afterEach` calls `vi.unstubAllEnvs()`. A
+`beforeAll` would also work today, but only because vitest's `unstubEnvs` option is
+off. That option clears stubs before every case (vitest 4.1.11), so turning it on
+would silently undo stubs made once, and every case would stay green on a clean host.
+Vitest's default pool is `forks` with `isolate` on, and `vitest.config.mts` sets
+neither, so each test file runs in its own process and the stubs cannot reach another
+file.
+
+### The hostile host
+
+On a clean host, such as CI's runner or most laptops, the isolation has nothing to
+undo. Deleting it, or any one line of it, would leave every case green there. So
+before the isolation, each case plays the host that broke this file, through every
+route git reads the same rewrite from (`HOSTILE_ROUTES`):
+
+| Route | What it sets |
+|---|---|
+| `GIT_CONFIG_COUNT` | `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf`, `GIT_CONFIG_VALUE_0=git@github.com:` |
+| `GIT_CONFIG_PARAMETERS` | `'url.https://github.com/.insteadOf'='git@github.com:'` |
+| a global file | `GIT_CONFIG_GLOBAL=<file holding the rewrite>` |
+| a system file | `GIT_CONFIG_SYSTEM=<the same file>`, with `GIT_CONFIG_NOSYSTEM` deleted |
+
+The file sits in an `mkdtemp` directory that the file's module-level `afterEach`
+removes with `removeTempDir`, as the temp-hygiene rules require. The system route
+deletes `GIT_CONFIG_NOSYSTEM` because a host that had already set it would otherwise
+make that route inert. `XDG_CONFIG_HOME` is not a separate route here: git does not
+read it while `GIT_CONFIG_GLOBAL` is set, and the global route already covers that
+scope.
+
+Each route is enough on its own. A new block, "the hostile host, one route at a
+time", checks that: it applies one route with no isolation and asserts that git
+printed the push URL as a copy of the fetch URL. Without that block, a route git
+stopped honouring, say on a different version, would make the guard decoration that
+stays green.
 
 What git still reads: the temp repository's own `.git/config`, and the `-c` flags each
 caller passes (`ExecGitRunner`'s `IDENTITY_ARGS`, the helper's `user.name` and
@@ -91,7 +126,7 @@ algorithm.
    from the machine's config. That is a different repository with a different owner,
    and this change does not extend that rule to target repositories.
 4. **This is not the "config only in tests" option that pacing-wakes rejected.**
-   `docs/implementations/2026-10-02-pacing-wakes-teardown.md` §5 option 5 rejected
+   `docs/implementations/2026-10-02-pacing-wakes-teardown.md` §6 option 5 rejected
    *adding* a git setting in tests, because the suite would then stop exercising
    production's git. This change adds no setting. It removes the host's settings,
    and production's own `-c` flags still reach git unchanged.
@@ -115,6 +150,33 @@ algorithm.
      it, and that would only show up on a machine whose config changes the result.
      Adding a guard would change what a CI gate refuses, which needs a Gymnasium row
      first (ENGINEERING-STANDARDS §3).
+   - Only config is isolated. Variables that locate a repository (`GIT_DIR`,
+     `GIT_WORK_TREE`, `GIT_COMMON_DIR`, …) would still reach git, for example in a
+     suite started from a git hook. No hook in `.githooks/` runs the suite.
+7. **A regression test that plays the hostile host (Architect's choice after review,
+   2026-10-11).** Review found that nothing failed if the isolation regressed, since
+   CI and a clean laptop give it nothing to undo. Three options were put to the
+   Architect: all four routes, with a temp config file; the two environment routes
+   only, with no file; or no regression test, recorded as a follow-up. All four were
+   chosen. It checks only this file's own setup: it judges no other test and binds
+   no future author, so no ledger row was filed for it. The per-route premise block
+   is part of the same choice. Without it, a route git ignores would leave a mutant
+   on that route's isolation line able to survive.
+8. **The match is case-sensitive (Architect's choice, 2026-10-11).** Review proposed
+   ignoring case, because Git for Windows reads `git_config_count` as
+   `GIT_CONFIG_COUNT`. That is true of git, but no case can see it. On Windows,
+   vitest 4.1.11 copies every variable to its uppercase name when it builds a
+   worker's environment (`node_modules/vitest/dist/chunks/cli-api.*.js`: "env are
+   case-insensitive on Windows, but spawned processes don't support it"). In a
+   worker, a host's `git_config_count` arrived as `GIT_CONFIG_COUNT`, and npm's
+   `npm_config_*` as `NPM_CONFIG_*`. git on POSIX ignores lowercase names. So
+   ignoring case was an equivalent mutant: with a lowercase rewrite injected the
+   file passed 12/12 with the flag and without it. It was removed. The premise is
+   vitest's: if a later vitest stops uppercasing, a lowercase host variable would
+   reach git on Windows, and nothing here would notice.
+9. **Stubs per case, not per block (review).** `beforeEach`/`afterEach` instead of
+   `beforeAll`/`afterAll`, so that turning on vitest's `unstubEnvs` (§3) cannot
+   silently undo them.
 
 ## 6. Verification
 
@@ -124,7 +186,8 @@ from a session worktree whose `node_modules` was a junction to the main checkout
 
 **Each config source, before and after.** Five ways to inject the same rewrite,
 `url.https://github.com/.insteadOf = git@github.com:`. "Before" is the file as it is
-on `main`; "after" is this change.
+on `main`. "After" is the first fix, `2a9eba5`, which added the isolation without the
+hostile host. The final code is covered under "The final code" below.
 
 | Injected through | Before | After |
 |---|---|---|
@@ -170,7 +233,50 @@ origin	https://github.com/owner/app.git (push)
 `global` entries. With `GIT_CONFIG_GLOBAL=\\.\nul` (Node's `os.devNull`), git exits
 128 with `fatal: unable to access '\\.\nul': Invalid argument`.
 
-**Gates:**
+**The final code** (`2e6e17d`, with the hostile host). `repo-remotes.test.ts` gives
+12 passed in each of three conditions: nothing injected, the observed
+`GIT_CONFIG_COUNT` rewrite, and the same rewrite spelled in lowercase
+(`git_config_count`). With `--reporter=verbose`, the four premise cases read "rewrites
+the push URL through 'GIT_CONFIG_COUNT' alone", "… 'GIT_CONFIG_PARAMETERS' alone",
+"… 'a global file' alone" and "… 'a system file' alone", all passing.
+
+**The mutation round** (`node scripts/mutate.cjs test/mutation/repo-remotes-isolation.json`,
+TEST-STRATEGY §10). It ran in a detached worktree outside OneDrive, at the commit
+under test, with `node_modules` junctioned. Final run, at `2e6e17d`:
+
+```text
+anchors: 7 of 7 match exactly once
+baseline: PASS — 1 file, 12 passed: test/main/repo-remotes.test.ts
+  control-comment  control  SURVIVED — certifies the round  [1 file, 12 passed]
+  no-isolation  killed — 1 tests failed  [1 file]
+  parameters-kept  killed — 1 tests failed  [1 file]
+  count-kept  killed — 1 tests failed  [1 file]
+  system-file-read  killed — 1 tests failed  [1 file]
+  global-file-read  killed — 1 tests failed  [1 file]
+  system-route-inert  killed — 1 tests failed  [1 file]
+ROUND OK — 6 of 6 real mutants killed; the control survived.
+```
+
+The same spec gave the same result at `acabf73`, before the case flag was removed.
+`git status` was clean after both runs. `system-route-inert` is killed only by the
+premise block, which shows that block can fail.
+
+**The case flag, measured** (§5.8). Each run had the rewrite injected in lowercase
+(`git_config_count`, `git_config_key_0`, `git_config_value_0`):
+
+| File | Result |
+|---|---|
+| `main`'s, with no isolation (the control) | 1 failed, 7 passed: the lowercase names reach git through vitest |
+| `acabf73`, with the `i` flag removed by hand | 12 passed |
+| `acabf73`, as committed (with `i`) | 12 passed |
+
+A throwaway test (deleted afterwards) printed the worker's variable names. The host's
+`git_config_count` arrived as `GIT_CONFIG_COUNT`. After the case-sensitive isolation,
+`git config --get-regexp '^url'` found nothing. Neither Node (`spawnSync`, `fork`) nor
+the `npx` shim changes the case. vitest's pool does
+(`for (const name in env) env[name.toUpperCase()] = env[name]`, Windows only).
+
+**Gates on the first fix, before the merge:**
 
 ```text
 npm run typecheck                    exit 0
@@ -183,23 +289,30 @@ npx vitest run test/temp-hygiene.test.ts test/scripts/check-invariants.test.ts \
       Tests  294 passed (294)
 ```
 
-**Full suite (`npx vitest run`), not green in this condition, and not because of
-this change.** It ran in this OneDrive worktree, at default parallelism, with
-0.7–2.8 GB free. Earlier gates ran outside OneDrive. There were three runs:
+**Full suite (`npx vitest run`).** All runs were in this OneDrive worktree, at
+default parallelism, with 0.7–2.8 GB free. Earlier gates ran outside OneDrive.
 
 | Tree | Result |
 |---|---|
-| this change | exit 1: 1 failed, 4918 passed, 8 skipped, 239 files |
-| this change, rerun | exit 1: the same |
+| this change, on `75ec37c` | exit 1: 1 failed, 4918 passed, 8 skipped, 239 files |
+| the same, rerun | exit 1: the same |
 | `main`'s `repo-remotes.test.ts` restored (`src`, `shims`, `scripts`, `test` identical to `75ec37c`) | exit 1: the same |
+| this change merged with `origin/main` `c0e1534` (tree `d0e750d`) | **exit 0: 240 files, 5006 passed, 8 skipped** |
+| the final code, `2e6e17d` (also on `c0e1534`) | exit 1: 1 failed (the same timeout, 20 058 ms), 5009 passed, 8 skipped, 240 files |
 
-In all three, the one failure is `check-invariants.test.ts` › "the CLI, run as CI
-runs it" › "exits 0 over this repository". Its `spawnSync` of
+In the four red runs, the one failure is `check-invariants.test.ts` › "the CLI, run
+as CI runs it" › "exits 0 over this repository". Its `spawnSync` of
 `scripts/check-invariants.cjs` hits `CHILD_TIMEOUT_MS` (20 s) with `ETIMEDOUT`, at
 20 108–20 175 ms. Run alone, the checker exits 0 in 3 226 ms, and that test file
-passes 20/20. The control run fails the same way without this change, so the
-timeout is pre-existing in this condition. It is recorded here and not investigated
-further.
+passes 20/20. The control run failed the same way without this change, so this change
+did not cause it. On the merged tree it passed. `origin/main`'s only change to the
+checker since `75ec37c` is one allowlist entry, so the timeout depends on load rather
+than happening every time. It is recorded here and not investigated further.
+
+On the merged tree, `npm run typecheck`, `npm run lint`, `check-invariants`,
+`check-readme-current`, `check-attribution` (603 commits) and CI's relative-link check
+all exit 0. `repo-remotes.test.ts` gives 8 passed both with and without the injected
+`GIT_CONFIG_COUNT` rewrite.
 
 **To reproduce:**
 
@@ -207,19 +320,24 @@ further.
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='url.https://github.com/.insteadOf' GIT_CONFIG_VALUE_0='git@github.com:' npx vitest run test/main/repo-remotes.test.ts
 ```
 
-**Not proven:** a green full suite on this machine (see above), and the vitest run
-on Linux, which is where the failure was first seen.
-Only plain Linux git was run, above. CI's ubuntu runner will run the file, but
-without any injected rewrite. A git older than 2.32 ignores `GIT_CONFIG_GLOBAL`, so
-there a `~/.gitconfig` rewrite would still reach the test. Git 2.53 was the only
-version run.
+**Not proven:**
+- **No vitest run on Linux was observed here.** Only plain Linux git was run, above.
+  CI's ubuntu run now plays the hostile host on every push, so it exercises the
+  isolation without anyone injecting anything; this note records no such run.
+- **Only git 2.53 was run.** Git older than 2.32 ignores `GIT_CONFIG_GLOBAL` and
+  `GIT_CONFIG_SYSTEM`. There, the premise cases for the file routes would fail
+  loudly, and a `~/.gitconfig` rewrite would reach the other cases.
+- **The case-sensitive match rests on vitest 4.1.11 uppercasing worker environments
+  on Windows** (§5.8).
 
 ## 7. Related docs
 
 - `test/main/repo-remotes.test.ts`: the comment above the block.
 - `src/main/git.ts`: `ExecGitRunner`, `readRemotes`, `IDENTITY_ARGS`.
+- `test/mutation/repo-remotes-isolation.json`: the round's spec.
 - `docs/DECISIONS-LOG.md`: 2026-08-26 (the Agora's isolation from the machine's
-  config) and this change's entry.
-- `docs/implementations/2026-10-02-pacing-wakes-teardown.md` §5: the rejected
+  config), and this change's two entries.
+- `docs/implementations/2026-10-02-pacing-wakes-teardown.md` §6: the rejected
   "config only in tests" option, distinguished in §5.4 above.
-- `docs/TEST-STRATEGY.md` §2: real git in temp directories.
+- `docs/TEST-STRATEGY.md` §2 (real git in temp directories) and §10 (the mutation
+  round).
