@@ -1,17 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
+  INTAKE_LICENSES,
   STOA_SCHEMA_VERSION,
   checkIntake,
   checkRegistrar,
   checkStudiable,
+  licenseStanding,
   nextBriefId,
   parseWatchlist,
   parseWatchlistMarkdown,
   registerDraftSchema,
   sourceIdFor,
   uniqueSourceId,
-  watchlistEntrySchema,
-  type WatchlistEntry
+  watchlistEntrySchema
 } from '../../src/shared/stoa'
 
 /**
@@ -161,6 +162,74 @@ describe('what a source is allowed to do (FR-13.2, FR-13.5)', () => {
   })
 })
 
+describe('intake fails closed (FR-13.5, DECISIONS-LOG 2026-10-11)', () => {
+  // The rule this replaced refused only the exact string `unverified`, so a
+  // License cell holding a READING — `unverified (read as AGPL-3.0 …)` — was
+  // taken for a verified license and permitted intake from the AGPL row it was
+  // written to refuse. Only a listed, MIT-compatible license permits it now.
+  const withLicense = (license: string): ReturnType<typeof watchlistEntrySchema.parse> =>
+    watchlistEntrySchema.parse(entry({ license, pin: 'b91a49f' }))
+
+  it('is the list the Architect decided, and no other', () => {
+    // Pinned literally: a test that only iterated the list would pass with an
+    // id removed from it, or AGPL-3.0 added to it.
+    expect([...INTAKE_LICENSES]).toEqual([
+      'MIT',
+      'MIT-0',
+      'Apache-2.0',
+      'BSD-2-Clause',
+      'BSD-3-Clause',
+      'ISC',
+      '0BSD',
+      'Unlicense',
+      'CC0-1.0',
+      'Zlib'
+    ])
+  })
+
+  it.each([...INTAKE_LICENSES])('permits intake from %s', (license) => {
+    expect(checkIntake(withLicense(license)).allowed).toBe(true)
+  })
+
+  it.each(['mit', 'APACHE-2.0', '  BSD-3-Clause  ', 'unlicense'])(
+    'matches %s ignoring case and surrounding space, as SPDX identifiers are',
+    (license) => {
+      expect(checkIntake(withLicense(license)).allowed).toBe(true)
+    }
+  )
+
+  it.each([
+    ['a reading kept in the license cell', 'unverified (read as MIT)'],
+    ['a capitalised note', 'Unverified — pending'],
+    ['a copyleft license somebody did verify', 'AGPL-3.0'],
+    ['another copyleft license', 'GPL-3.0-only'],
+    ['a listed license with a note', 'MIT (read 2026-10-03)'],
+    ['a placeholder', 'TBD'],
+    ['a guess', 'MIT?']
+  ])('refuses intake for %s ("%s")', (_why, license) => {
+    const check = checkIntake(withLicense(license))
+    expect(check.allowed).toBe(false)
+    // A refusal must teach the rule: it reaches the reading desk as
+    // `intakeBlocked`, in front of the person who has to fix the entry.
+    expect(check.because).toContain('FR-13.5')
+    expect(check.because).toContain(INTAKE_LICENSES.join(', '))
+    expect(check.because).toContain(license.trim())
+  })
+
+  it('still says "unverified" for the honest unverified value', () => {
+    const check = checkIntake(withLicense('unverified'))
+    expect(check.allowed).toBe(false)
+    expect(check.because).toContain('license is unverified')
+  })
+
+  it('names three standings, so the researcher is never told "nobody checked" of a read license', () => {
+    expect(licenseStanding('MIT')).toBe('permitted')
+    expect(licenseStanding(' Unverified ')).toBe('unverified')
+    expect(licenseStanding('unverified (read as AGPL-3.0)')).toBe('incompatible')
+    expect(licenseStanding('AGPL-3.0')).toBe('incompatible')
+  })
+})
+
 describe('id derivation', () => {
   it.each([
     ['https://github.com/NousResearch/hermes-agent', 'src-hermes-agent'],
@@ -206,10 +275,17 @@ describe('the build-phase seed reader (FR-13.7)', () => {
   ].join('\n')
 
   const at = '2026-08-28T09:00:00.000Z'
-  const parsed = parseWatchlistMarkdown(table, at)
+  const { entries: parsed, rejected } = parseWatchlistMarkdown(table, at)
+
+  /** The License cell `src-odysseus` carried on `main` at 75ec37c: 166 characters. */
+  const READING_IN_THE_CELL =
+    'unverified (read as AGPL-3.0 on 2026-10-02; **pattern-learning only whatever verification finds** — AGPL code intake is refused under FR-13.5 for this MIT repository)'
 
   it('reads only the source rows — not the header, separator or prose', () => {
     expect(parsed.map((row) => row.id)).toEqual(['src-hermes-agent', 'src-munder-difflin'])
+    // Prose and the header are not source rows, so they are not "rejected"
+    // either: rejection is for a row that WAS a source row and failed.
+    expect(rejected).toEqual([])
   })
 
   it('reads the pin when there is one and null when the cell is a placeholder', () => {
@@ -231,17 +307,62 @@ describe('the build-phase seed reader (FR-13.7)', () => {
     expect(parsed.every((row) => row.registeredAt === at)).toBe(true)
   })
 
-  it('produces entries the schema accepts — the seed cannot write an invalid file', () => {
-    for (const row of parsed) {
-      expect(watchlistEntrySchema.safeParse(row as WatchlistEntry).success).toBe(true)
-    }
+  it('refuses a row the schema refuses, naming it and the field, instead of returning it', () => {
+    // The 2026-10-11 defect, at its source: this reader returned the cell as
+    // it stood, and the seed wrote a file no later read could parse.
+    expect(READING_IN_THE_CELL).toHaveLength(166)
+    const read = parseWatchlistMarkdown(
+      [
+        `| src-odysseus | https://github.com/odysseus-dev/odysseus | \`agent-loop\` | ${READING_IN_THE_CELL} | *(set at first study)* | n |`,
+        '| src-fine | https://github.com/o/fine | `x` | MIT | `abc1234` | n |'
+      ].join('\n'),
+      at
+    )
+    expect(read.entries.map((row) => row.id)).toEqual(['src-fine'])
+    expect(read.rejected).toHaveLength(1)
+    expect(read.rejected[0]?.id).toBe('src-odysseus')
+    expect(read.rejected[0]?.reasons.join('; ')).toMatch(/^license: /)
   })
 
-  it('skips a row whose url cell has no url rather than inventing one', () => {
-    const rows = parseWatchlistMarkdown(
+  it('returns only entries the schema accepts — every source row is one or the other', () => {
+    const read = parseWatchlistMarkdown(
+      `${table}\n| src-long | https://github.com/o/long | \`x\` | ${READING_IN_THE_CELL} | \`abc1234\` | n |\n`,
+      at
+    )
+    for (const row of read.entries) expect(watchlistEntrySchema.safeParse(row).success).toBe(true)
+    expect([...read.entries.map((row) => row.id), ...read.rejected.map((row) => row.id)]).toEqual([
+      'src-hermes-agent',
+      'src-munder-difflin',
+      'src-long'
+    ])
+  })
+
+  it('reports a row whose url cell has no url rather than inventing one or skipping it', () => {
+    const read = parseWatchlistMarkdown(
       '| src-broken | *(pending)* | `x` | MIT | `abc1234` | n |',
       at
     )
-    expect(rows).toEqual([])
+    expect(read.entries).toEqual([])
+    expect(read.rejected).toEqual([
+      { id: 'src-broken', reasons: ['url: the Source cell holds no http(s) url'] }
+    ])
+  })
+
+  it('takes only an http(s) url out of the Source cell — an ftp link is no url', () => {
+    const read = parseWatchlistMarkdown(
+      '| src-ftp | ftp://example.com/repo | `x` | MIT | n | n |',
+      at
+    )
+    expect(read.rejected.map((row) => row.id)).toEqual(['src-ftp'])
+  })
+
+  it('reports a row with no tags, because tags scope every study', () => {
+    const read = parseWatchlistMarkdown(
+      '| src-untagged | https://github.com/o/r |  | MIT | n | n |',
+      at
+    )
+    expect(read.entries).toEqual([])
+    expect(read.rejected[0]?.id).toBe('src-untagged')
+    expect(read.rejected[0]?.reasons.join('; ')).toMatch(/^tags: /)
   })
 })
