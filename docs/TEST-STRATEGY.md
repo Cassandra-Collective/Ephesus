@@ -231,7 +231,8 @@ E-PLAYBOOK and E-STOA take.
 
 Per-PR: typecheck · lint (incl. boundaries, token/hex, secret tripwires) · unit ·
 integration · conformance · E2E smoke · schema-migration check (changed schema ⇒
-bumped version + migration test).
+bumped version + migration test) · every mutation spec's anchors still match their code
+(`--check`, GYM-012; §10).
 Nightly: full E2E · live engine suite · bench.
 Weekly: soak · evals · mutation (rotating).
 Release: everything + S-suite full pass + E-BRIEF-FAITH gate + `npm audit` policy +
@@ -268,7 +269,10 @@ mutations against its recorded guarantees and 18 survived — and it has been th
 leg of the verification bar since M8. It is evidence an author runs, not a CI job, and
 its mutants are aimed by hand at the sentence the package is about: a generator
 produces mostly equivalent mutants, which this project treats as a design smell rather
-than a score.
+than a score. CI runs no round. It checks only that every checked-in spec still matches
+its code (`--check` over `test/mutation/*.json`, GYM-012), and so a change to what
+`--check` refuses changes a CI gate and takes its own Gymnasium row (DECISIONS-LOG
+2026-10-11).
 
 **Running one.** Commit the package first, then:
 
@@ -280,12 +284,14 @@ node scripts/mutate.cjs test/mutation/<package>.json
 `--check` validates the spec and its anchors and runs nothing. The spec is checked in
 beside the tests it mutates, under `test/mutation/`, and it is part of the evidence: it
 says which sentences the package defends, and when a refactor moves the code an anchor
-that no longer matches is refused rather than skipped. Its shape (`schemaVersion: 1`) is
+that no longer matches is refused rather than skipped — by the required CI check, on the
+first push or PR that carries the change, naming the mutant and the file. A refactor of defended code
+therefore updates its spec in the same change. Its shape (`schemaVersion: 1`) is
 `package`; `about`, the sentence the round defends; `tests`, the repository paths every
 run executes; and `mutants`, each with an `id`, a `file`, a `find` that must occur in
 that file exactly once, its `replace`, and a `why` naming the sentence it attacks. At
 least one mutant is a `"control": true` no-op — a comment reworded, nothing a test can
-see.
+see — and at least one is not.
 
 **Exit status.** `0` ROUND OK: every real mutant killed and the control survived. `1`
 ROUND HAS SURVIVORS. `2` ROUND INVALID: the round could not be scored, and that includes
@@ -296,7 +302,8 @@ a harness crash, which must never read as `1`.
 before an adversarial pass broke it (2026-10-03):
 
 1. A spec with no control is refused, and a killed control makes the round INVALID: the
-   control's survival is the round's certificate.
+   control's survival is the round's certificate. A spec whose mutants are all controls
+   is refused too, because its ROUND OK would certify "0 of 0 killed".
 2. The baseline runs first and must be green. A red baseline makes every mutant look
    killed, the control included.
 3. Each run is scored from vitest's JSON report, never from its exit code alone. No
@@ -309,9 +316,19 @@ before an adversarial pass broke it (2026-10-03):
    with no failure from a vitest that exited non-zero — an error outside any test, a
    dead worker; the report says `success` through both — is INVALID too, and so is a
    run that hit `--timeout`, which has its own reason and is not retried. Under a
-   mutant, a kill needs a test that passed at the baseline to fail, or a listed file
-   that cannot load at all; a test the mutant switched on, or a hook that threw around
-   passing tests, is INVALID, not a kill.
+   mutant, a kill needs a test that passed at the baseline to fail by more than vitest's
+   own test or hook timeout, or a listed file that cannot load at all; a test the mutant
+   switched on, or a hook that threw around passing tests, is INVALID, not a kill. A run
+   whose only such failures were vitest timeouts is INVALID and retried as a refusal is,
+   because under load a test times out whatever the line says; a listed file that cannot
+   load still makes it a file kill. So a mutant whose only effect is a hang cannot be
+   killed: it needs a test that fails rather than hangs. vitest 4.1.11's JSON report
+   never says "timed out"; a timeout's message begins `Error: STACK_TRACE_ERROR`, and
+   the round reads that, or the text a fixed vitest would write, as a timeout
+   (DECISIONS-LOG 2026-10-11). Any other deadline still scores as a kill (known limit
+   12). A timeout at the baseline is a red suite, as any failure there is. Each kill
+   line names the tests that earned it — the first three, how many more, and how many
+   only timed out — so a kill nobody earned can be seen.
 4. Every round file — the mutated files, the test files and the spec — is hashed when
    the round starts, after every run and after every restore, and each mutant is built
    from the bytes the round started with. A file that changes while the suite runs
@@ -324,8 +341,11 @@ before an adversarial pass broke it (2026-10-03):
    holds where git holds it: inside the repository by its real path (no link on the
    way), one hard link, the bytes git indexed, and no `assume-unchanged` or
    `skip-worktree` flag hiding it from `git status`. `git checkout --` restores each
-   mutant and `git status` checks the restore. An interrupted round leaves its mutant
-   in the file, and the next round refuses to start until it is restored.
+   mutant — one whose write failed part-way too — and the file hashes and `git status`
+   check the restore, the last mutant's as much as any other's. Git reads every name
+   literally (`--literal-pathspecs`), so restoring `a[1].txt` cannot also revert
+   `a1.txt`. An interrupted round leaves its mutant in the file, and the next round
+   refuses to start until it is restored.
 7. The files that ran must be exactly the files listed. vitest reads a file argument as
    a filter, so a run that also picks up another file is INVALID and names it.
 8. Every anchor matches its file exactly once, checked before anything runs. A path
@@ -350,7 +370,9 @@ author's environment.
 **Known limits** — the second refutation pass (2026-10-03) found eleven more ways to make a
 round report what it had not earned; the Architect chose to record them here rather than
 close them in GYM-008, and they are tracked in issue #70. Nine were reproduced; the
-last two were not, and need a repository written to deceive the round.
+10th and 11th were not, and need a repository written to deceive the round. The 12th was
+found by the review of the follow-up (2026-10-11) and recorded here by the Architect's
+choice; it is not in issue #70.
 
 1. A snapshot written into an *ignored* directory becomes the oracle that "kills" the
    next mutant: `git status` does not show ignored files.
@@ -372,6 +394,13 @@ last two were not, and need a repository written to deceive the round.
 10. State kept outside the repository, or a detached process that writes after the
     round has looked (not reproduced).
 11. A vitest configuration that rewrites the report the round reads (not reproduced).
+12. Only vitest's own test or hook timeout is read as a timeout. Any other deadline that
+    expires under load still scores as a kill, named on the kill line: `vi.waitFor` and
+    `vi.waitUntil` ("Timed out in waitFor!"), an around-hook's timeout ("… hook timed
+    out after Nms."), and this repository's own deadlines: "timed out waiting for …" in
+    `test/scenarios/s-crash.test.ts`, `test/main/agent-worktree.test.ts` and
+    `test/fakes/process-spawner.test.ts`, and the hook stub's "expected N posts, saw M in
+    Nms" (`test/fakes/hook-stub-server.ts`).
 
 **The trust boundary.** A round runs the repository's own tests and configuration as
 code, so it trusts them. A test or configuration written to deceive it can forge any
@@ -383,8 +412,9 @@ restored file back with a mutant in it. The hashes catch that and call the round
 INVALID; they cannot prevent it, and a write that lands after the round has ended is
 outside what any round can see. Run from a detached worktree outside the synced folder
 (`git worktree add --detach <a directory under %TEMP%> <commit>`, with `node_modules`
-linked), and never while a measurement such as a coverage ratchet is running, because a
-round rewrites source files.
+linked: `.gitignore` names `node_modules` without a trailing slash, so a symlink on linux
+or macOS is ignored as a junction on win32 is), and never while a measurement such as a
+coverage ratchet is running, because a round rewrites source files.
 
 **What the record carries.** The spec path, the commit, the command, the ROUND line,
 the test files run, and the platform and Node version — a score without its condition

@@ -393,11 +393,18 @@ memory fell to 0.40 GB (DECISIONS-LOG 2026-10-03).
   2026-10-02 (the zero-test kills and the OneDrive replay), and 2026-10-03 (this change)
 - [`2026-10-02-invariants-see-wrapped-calls.md`](./2026-10-02-invariants-see-wrapped-calls.md),
   appendix — the scratch harness's spec shape this one extends
+- [`2026-10-11-gym-008-follow-up.md`](./2026-10-11-gym-008-follow-up.md) — the gaps
+  #71's review carried, closed, and the review's further items as the Architect ruled
 
 ## Not proven
 
 - **Every claim above is win32 only**, node v20.16.0, art pack absent. Nothing here was
-  run on linux or macOS, and CI has not run this branch. On linux a junction is a
+  run by hand on linux or macOS. CI has since run the branch on ubuntu-latest: push run
+  38135145282 and pull_request run 38135148248, both at `c850b91`, then push run
+  38135378729 at `61428db` on `main`, all three jobs green each time; in the last,
+  `test/scripts/mutate.test.ts` passed its 87 tests.
+  *(Corrected 2026-10-11: this said CI had not run the branch. CI runs the tests, never a
+  round.)* On linux a junction is a
   symlink, which git sees as a link where a directory was, so the clean-tree check
   refuses it before the real-path check is reached; the test asserts the refusal either
   way, and only win32 has been seen to take the real-path branch.
@@ -409,6 +416,9 @@ memory fell to 0.40 GB (DECISIONS-LOG 2026-10-03).
 - **The `git status` half of the restore check** is not in the round. It is requirement
   6's second check over the round's files, which their hashes already cover except for a
   change git sees and bytes do not (a mode bit), and no test makes one on win32.
+  *(2026-10-11: the follow-up's staged-mutant case asserts that half's line in its
+  message, but the hashes catch the same restore, so it is still no case the hashes
+  miss, and no mutant attacks it.)*
 - **The eleven known limits of TEST-STRATEGY §10 are open**, by decision; F6 and F11 were
   not reproduced in this session.
 - **GYM-008's metrics 1 and 3 are measured on 2026-10-17**, over the rounds run until

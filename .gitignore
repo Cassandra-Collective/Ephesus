@@ -1,4 +1,8 @@
-node_modules/
+# No trailing slash: with one the pattern matches only a directory, and git
+# does not follow a symlink, so on linux and macOS a linked node_modules
+# (TEST-STRATEGY §10 runs a mutation round from a worktree with one) would show
+# as untracked and the round would refuse to start (DECISIONS-LOG 2026-10-11).
+node_modules
 dist/
 out/
 .DS_Store
