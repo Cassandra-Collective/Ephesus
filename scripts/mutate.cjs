@@ -64,9 +64,11 @@
  * ways in, recorded as the round's known limits in TEST-STRATEGY §10 rather
  * than closed; of them only the kill rule changed: a kill needs a test that
  * passed at the baseline to fail, or a listed file that cannot load. Since
- * 2026-10-11 that test must also have failed by more than timing out — under
- * load a test times out whatever the line says, so a run whose only killers
- * timed out is retried as a refusal is — and a kill line names its killers.
+ * 2026-10-11 that test must also have failed by more than vitest's own test or
+ * hook timeout — under load a test times out whatever the line says, so a run
+ * whose only killers timed out is retried as a refusal is — and a kill line
+ * names its killers. Any other deadline (`vi.waitFor`, an around-hook, a
+ * helper's own) still scores as a kill: known limit 12.
  *
  * The round trusts the repository's own tests and configuration. Test code or
  * config written to deceive it — a reporter-rewriting config, a detached
@@ -347,7 +349,7 @@ function fileProblems(root, files) {
 const TIMEOUT_LINE = /^Error: (?:STACK_TRACE_ERROR|(?:Test|Hook) timed out in \d+ms\.)$/
 
 /** Contract: pure. Whether a test failed only by timing out: it has messages, and each one's first line is a timeout's. */
-const timedOut = (messages) =>
+const onlyTimedOut = (messages) =>
   Array.isArray(messages) &&
   messages.length > 0 &&
   messages.every((message) => TIMEOUT_LINE.test(String(message).split('\n')[0]))
@@ -367,7 +369,7 @@ function filesOf(report, root) {
       tests: (file.assertionResults ?? []).map((test) => ({
         name: test.fullName,
         status: test.status,
-        timedOut: timedOut(test.failureMessages)
+        timedOut: onlyTimedOut(test.failureMessages)
       }))
     }))
     .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))
@@ -448,7 +450,8 @@ function classify(run, listed, expected) {
     // around passing tests, says nothing about the tests that defend the line.
     const killers = failedTests.filter((test) => expected.has(test))
     // Under load a test times out whatever the line says (DECISIONS-LOG
-    // 2026-10-11), so a timeout earns no kill; any other failure beside it does.
+    // 2026-10-11), so vitest's own test or hook timeout earns no kill; any
+    // other failure beside it does. A file that cannot load still outranks it.
     const slow = new Set(testsWhere(files, (test) => test.status === 'failed' && test.timedOut))
     const earned = killers.filter((test) => !slow.has(test))
     if (earned.length > 0) {
@@ -457,7 +460,7 @@ function classify(run, listed, expected) {
         how: 'test',
         failedFiles,
         failedTests: earned,
-        timedOut: killers.length - earned.length
+        timedOutKillers: killers.length - earned.length
       }
     }
     const unloaded = failedFiles.filter((file) => file.tests.length === 0)
@@ -579,7 +582,10 @@ function runSuite(root, tests, options, expected) {
   }
 }
 
-/** A run, retried while its result is a refusal to start rather than an answer. */
+/**
+ * A run, retried after `--retry-wait` seconds while its verdict is INVALID with
+ * `retry` set: a refusal to start, or a mutant run whose only killers timed out.
+ */
 function runAnswered(root, tests, options, label, expected) {
   for (let attempt = 0; ; attempt++) {
     const run = runSuite(root, tests, options, expected)
@@ -612,9 +618,9 @@ function killedBy(verdict) {
   if (verdict.how !== 'test') {
     return `a test file failed without a failing test: ${firstLine(verdict.failedFiles)}`
   }
-  const { failedTests, timedOut: slow } = verdict
+  const { failedTests, timedOutKillers } = verdict
   const more = failedTests.length > 3 ? ` +${failedTests.length - 3} more` : ''
-  const timeouts = slow > 0 ? `; ${slow} more only timed out` : ''
+  const timeouts = timedOutKillers > 0 ? `; ${timedOutKillers} more only timed out` : ''
   return `${failedTests.length} tests failed: ${failedTests.slice(0, 3).join('; ')}${more}${timeouts}`
 }
 

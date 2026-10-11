@@ -41,7 +41,7 @@ type Verdict =
       how: 'test' | 'file'
       failedFiles: readonly unknown[]
       failedTests: readonly string[]
-      timedOut?: number
+      timedOutKillers?: number
     }
   | { kind: 'invalid'; retry: boolean; reason: string }
 
@@ -434,7 +434,26 @@ describe('a run is scored from its report and its tests, never from its exit cod
       kind: 'fail',
       how: 'test',
       failedTests: ['add.test.mjs › later #1'],
-      timedOut: 1
+      timedOutKillers: 1
+    })
+  })
+
+  it('scores a listed file that cannot load as a file kill, though every killing test beside it only timed out', () => {
+    // A file that cannot load depends on the line whatever the load is; a
+    // timeout does not. The file kill is checked first.
+    const raw = report(
+      [
+        file('add.test.mjs', 'failed', [timeout('adds')]),
+        file('other.test.mjs', 'failed', [], 'Parse failure: Expression expected')
+      ],
+      { failed: 1, success: false }
+    )
+    const twoListed = ['add.test.mjs', 'other.test.mjs']
+    const passedBoth = new Set(['add.test.mjs › adds #1', 'other.test.mjs › other #1'])
+    expect(tool.classify(run(raw, 1), twoListed, passedBoth)).toMatchObject({
+      kind: 'fail',
+      how: 'file',
+      failedFiles: [{ file: 'other.test.mjs' }]
     })
   })
 
@@ -445,12 +464,12 @@ describe('a run is scored from its report and its tests, never from its exit cod
 
   it('names the first three killing tests, how many more, and how many only timed out', () => {
     const killers = ['a #1', 'b #1', 'c #1', 'd #1', 'e #1']
-    const fail = (failedTests: readonly string[], timedOut: number): Verdict => ({
+    const fail = (failedTests: readonly string[], timedOutKillers: number): Verdict => ({
       kind: 'fail',
       how: 'test',
       failedFiles: [],
       failedTests,
-      timedOut
+      timedOutKillers
     })
     expect(tool.killedBy(fail(killers.slice(0, 1), 0))).toBe('1 tests failed: a #1')
     expect(tool.killedBy(fail(killers.slice(0, 3), 0))).toBe('3 tests failed: a #1; b #1; c #1')

@@ -363,6 +363,20 @@
       "why": "decided 2026-10-11: a run whose only killers timed out is retried, as a refusal to start is"
     },
     {
+      "id": "K-timeouts-before-file-kill",
+      "file": "scripts/mutate.cjs",
+      "find": "    const unloaded = failedFiles.filter((file) => file.tests.length === 0)\n",
+      "replace": "    if (killers.length > 0) return { kind: 'invalid', retry: true, reason: 'only timed out' }\n    const unloaded = failedFiles.filter((file) => file.tests.length === 0)\n",
+      "why": "a listed file that cannot load is a file kill, though every killing test beside it only timed out: the file kill is checked first"
+    },
+    {
+      "id": "K-timeout-count-dropped",
+      "file": "scripts/mutate.cjs",
+      "find": "        timedOutKillers: killers.length - earned.length",
+      "replace": "        timedOutKillers: 0",
+      "why": "a kill verdict counts the killing tests that only timed out"
+    },
+    {
       "id": "K-placeholder-unread",
       "file": "scripts/mutate.cjs",
       "find": "(?:STACK_TRACE_ERROR|(?:Test|Hook) timed out in \\d+ms\\.)",
@@ -414,7 +428,7 @@
     {
       "id": "K-timeouts-uncounted",
       "file": "scripts/mutate.cjs",
-      "find": "  const timeouts = slow > 0 ?",
+      "find": "  const timeouts = timedOutKillers > 0 ?",
       "replace": "  const timeouts = false ?",
       "why": "a kill line counts the killing tests that only timed out"
     }
