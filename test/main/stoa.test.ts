@@ -282,13 +282,29 @@ describe('a table row the schema refuses (FR-13.7, invariant §7; DECISIONS-LOG 
       const planned = stoa.plan(id)
       return planned.ok ? (planned.instructions ?? '') : ''
     }
-    expect(words('src-fixture-good')).toContain('Pattern-learning is unrestricted')
-    expect(words('src-fixture-unverified')).toContain('nobody has checked')
-    expect(words('src-fixture-copyleft')).toContain('**AGPL-3.0**, which is not one of')
+    // Each note's own sentence, present in one and absent from the others. The
+    // study prompt also renders the row's notes, so a phrase is asserted only
+    // where no fixture note could supply it — a fixture note that said "nobody
+    // has checked" once kept this green with the two notes swapped.
+    const UNVERIFIED = 'nobody has checked'
+    const INCOMPATIBLE = 'which is not one of'
+    const PERMITTED = 'Pattern-learning is unrestricted'
+    for (const id of SEEDED) {
+      expect(DEFECTIVE_TABLE.split('\n').find((line) => line.includes(`| ${id} |`))).not.toMatch(
+        new RegExp(`${UNVERIFIED}|${INCOMPATIBLE}|${PERMITTED}`)
+      )
+    }
+    expect(words('src-fixture-good')).toContain(PERMITTED)
+    expect(words('src-fixture-good')).not.toContain(UNVERIFIED)
+    expect(words('src-fixture-good')).not.toContain(INCOMPATIBLE)
+    expect(words('src-fixture-unverified')).toContain(UNVERIFIED)
+    expect(words('src-fixture-unverified')).not.toContain(INCOMPATIBLE)
+    expect(words('src-fixture-copyleft')).toContain(`**AGPL-3.0**, ${INCOMPATIBLE}`)
     expect(words('src-fixture-copyleft')).toContain('MIT, MIT-0, Apache-2.0')
-    expect(words('src-fixture-copyleft')).not.toContain('nobody has checked')
+    expect(words('src-fixture-copyleft')).not.toContain(UNVERIFIED)
+    expect(words('src-fixture-annotated')).toContain(INCOMPATIBLE)
     expect(words('src-fixture-annotated')).toContain('intake is not')
-    expect(words('src-fixture-annotated')).not.toContain('nobody has checked')
+    expect(words('src-fixture-annotated')).not.toContain(UNVERIFIED)
   })
 
   it('seeds nothing, and says so, when the rows do not make one watchlist', () => {
