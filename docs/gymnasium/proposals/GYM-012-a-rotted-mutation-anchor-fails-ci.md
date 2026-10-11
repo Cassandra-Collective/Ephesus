@@ -77,6 +77,12 @@ handful of git processes and reads the spec's files: well under a second for eac
   a link on a round file's path is a property of a working copy, and a CI checkout has
   neither. None is known.
 
+**What it binds later.** `--check`'s refusals (`specProblems`, `fileProblems`, the
+anchor count) now run inside the required check, so a future change to what they refuse
+changes a CI gate and takes its own Gymnasium row (Architect, DECISIONS-LOG
+2026-10-11). The refusals this change itself adds, such as a spec of controls only, are
+covered by this row.
+
 ## Success metric
 
 Binary, all three:

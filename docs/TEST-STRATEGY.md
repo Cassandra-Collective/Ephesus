@@ -231,7 +231,8 @@ E-PLAYBOOK and E-STOA take.
 
 Per-PR: typecheck · lint (incl. boundaries, token/hex, secret tripwires) · unit ·
 integration · conformance · E2E smoke · schema-migration check (changed schema ⇒
-bumped version + migration test).
+bumped version + migration test) · every mutation spec's anchors still match their code
+(`--check`, GYM-012; §10).
 Nightly: full E2E · live engine suite · bench.
 Weekly: soak · evals · mutation (rotating).
 Release: everything + S-suite full pass + E-BRIEF-FAITH gate + `npm audit` policy +
@@ -269,7 +270,9 @@ leg of the verification bar since M8. It is evidence an author runs, not a CI jo
 its mutants are aimed by hand at the sentence the package is about: a generator
 produces mostly equivalent mutants, which this project treats as a design smell rather
 than a score. CI runs no round. It checks only that every checked-in spec still matches
-its code (`--check` over `test/mutation/*.json`, GYM-012).
+its code (`--check` over `test/mutation/*.json`, GYM-012), and so a change to what
+`--check` refuses changes a CI gate and takes its own Gymnasium row (DECISIONS-LOG
+2026-10-11).
 
 **Running one.** Commit the package first, then:
 
@@ -282,7 +285,7 @@ node scripts/mutate.cjs test/mutation/<package>.json
 beside the tests it mutates, under `test/mutation/`, and it is part of the evidence: it
 says which sentences the package defends, and when a refactor moves the code an anchor
 that no longer matches is refused rather than skipped — by the required CI check, on the
-commit that moved it, which names the mutant and the file. A refactor of defended code
+first push or PR that carries the change, naming the mutant and the file. A refactor of defended code
 therefore updates its spec in the same change. Its shape (`schemaVersion: 1`) is
 `package`; `about`, the sentence the round defends; `tests`, the repository paths every
 run executes; and `mutants`, each with an `id`, a `file`, a `find` that must occur in
@@ -313,17 +316,19 @@ before an adversarial pass broke it (2026-10-03):
    with no failure from a vitest that exited non-zero — an error outside any test, a
    dead worker; the report says `success` through both — is INVALID too, and so is a
    run that hit `--timeout`, which has its own reason and is not retried. Under a
-   mutant, a kill needs a test that passed at the baseline to fail by more than timing
-   out, or a listed file that cannot load at all; a test the mutant switched on, or a
-   hook that threw around passing tests, is INVALID, not a kill. A run whose only such
-   failures timed out is INVALID and retried as a refusal is, because under load a test
-   times out whatever the line says. So a mutant whose only effect is a hang cannot be
+   mutant, a kill needs a test that passed at the baseline to fail by more than vitest's
+   own test or hook timeout, or a listed file that cannot load at all; a test the mutant
+   switched on, or a hook that threw around passing tests, is INVALID, not a kill. A run
+   whose only such failures were vitest timeouts is INVALID and retried as a refusal is,
+   because under load a test times out whatever the line says; a listed file that cannot
+   load still makes it a file kill. So a mutant whose only effect is a hang cannot be
    killed: it needs a test that fails rather than hangs. vitest 4.1.11's JSON report
    never says "timed out"; a timeout's message begins `Error: STACK_TRACE_ERROR`, and
    the round reads that, or the text a fixed vitest would write, as a timeout
-   (DECISIONS-LOG 2026-10-11). A timeout at the baseline is a red suite, as any failure
-   there is. Each kill line names the tests that earned it — the first three, how many
-   more, and how many only timed out — so a kill nobody earned can be seen.
+   (DECISIONS-LOG 2026-10-11). Any other deadline still scores as a kill (known limit
+   12). A timeout at the baseline is a red suite, as any failure there is. Each kill
+   line names the tests that earned it — the first three, how many more, and how many
+   only timed out — so a kill nobody earned can be seen.
 4. Every round file — the mutated files, the test files and the spec — is hashed when
    the round starts, after every run and after every restore, and each mutant is built
    from the bytes the round started with. A file that changes while the suite runs
@@ -365,7 +370,9 @@ author's environment.
 **Known limits** — the second refutation pass (2026-10-03) found eleven more ways to make a
 round report what it had not earned; the Architect chose to record them here rather than
 close them in GYM-008, and they are tracked in issue #70. Nine were reproduced; the
-last two were not, and need a repository written to deceive the round.
+10th and 11th were not, and need a repository written to deceive the round. The 12th was
+found by the review of the follow-up (2026-10-11) and recorded here by the Architect's
+choice; it is not in issue #70.
 
 1. A snapshot written into an *ignored* directory becomes the oracle that "kills" the
    next mutant: `git status` does not show ignored files.
@@ -387,6 +394,13 @@ last two were not, and need a repository written to deceive the round.
 10. State kept outside the repository, or a detached process that writes after the
     round has looked (not reproduced).
 11. A vitest configuration that rewrites the report the round reads (not reproduced).
+12. Only vitest's own test or hook timeout is read as a timeout. Any other deadline that
+    expires under load still scores as a kill, named on the kill line: `vi.waitFor` and
+    `vi.waitUntil` ("Timed out in waitFor!"), an around-hook's timeout ("… hook timed
+    out after Nms."), and this repository's own deadlines: "timed out waiting for …" in
+    `test/scenarios/s-crash.test.ts`, `test/main/agent-worktree.test.ts` and
+    `test/fakes/process-spawner.test.ts`, and the hook stub's "expected N posts, saw M in
+    Nms" (`test/fakes/hook-stub-server.ts`).
 
 **The trust boundary.** A round runs the repository's own tests and configuration as
 code, so it trusts them. A test or configuration written to deceive it can forge any
