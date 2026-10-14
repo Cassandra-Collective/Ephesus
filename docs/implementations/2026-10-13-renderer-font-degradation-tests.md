@@ -277,4 +277,4 @@ The three required checks must be green on the finished head before the squash.
 - [TEST-STRATEGY](../TEST-STRATEGY.md) — §2 (the per-subsystem ratchet), §10 (mutation rounds)
 - [eph-usage and PR #60](2026-10-01-eph-usage-in-process-coverage.md) — the precedent for finishing a contributor's PR on its own branch
 - [DECISIONS-LOG](../DECISIONS-LOG.md) — the 2026-10-02 entry on #60, and the 2026-10-13 entry on #74
-- Issue [#11](https://github.com/mertefesensoy/Ephesus/issues/11) and PR [#74](https://github.com/mertefesensoy/Ephesus/pull/74)
+- Issue [#11](https://github.com/Cassandra-Collective/Ephesus/issues/11) and PR [#74](https://github.com/Cassandra-Collective/Ephesus/pull/74)

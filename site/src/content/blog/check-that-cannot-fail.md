@@ -56,4 +56,4 @@ That is now part of the process too: when you build a gate, spend the ten minute
 
 ---
 
-*The rules described here are in [`docs/ENGINEERING-STANDARDS.md`](https://github.com/mertefesensoy/Ephesus/blob/main/docs/ENGINEERING-STANDARDS.md) §6 and are enforced by `scripts/check-invariants.cjs` and `scripts/check-coverage.cjs`.*
+*The rules described here are in [`docs/ENGINEERING-STANDARDS.md`](https://github.com/Cassandra-Collective/Ephesus/blob/main/docs/ENGINEERING-STANDARDS.md) §6 and are enforced by `scripts/check-invariants.cjs` and `scripts/check-coverage.cjs`.*

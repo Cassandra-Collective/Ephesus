@@ -222,7 +222,7 @@ not a defence against them. Its other known limits are listed in TEST-STRATEGY Â
 ## 8. Reporting a vulnerability
 
 Privately, never as a public issue â€” through
-[GitHub's private vulnerability reporting](https://github.com/mertefesensoy/Ephesus/security/advisories/new)
+[GitHub's private vulnerability reporting](https://github.com/Cassandra-Collective/Ephesus/security/advisories/new)
 or by email with `SECURITY` in the subject. Both are in [`SECURITY.md`](../SECURITY.md), which also
 states the honest support position: Ephesus is pre-alpha, `main` is the only thing that exists, and
 there are no supported releases.

@@ -50,7 +50,7 @@ These are genuinely useful and currently the easiest place to help:
 **Steps**
 
 ```bash
-git clone https://github.com/mertefesensoy/Ephesus.git
+git clone https://github.com/Cassandra-Collective/Ephesus.git
 cd Ephesus
 npm install
 npm run dev
@@ -143,7 +143,7 @@ no agent, session, or model names in commit messages or trailers.
 
 ## 8. Where to start
 
-Issues labelled [`good first issue`](https://github.com/mertefesensoy/Ephesus/labels/good%20first%20issue)
+Issues labelled [`good first issue`](https://github.com/Cassandra-Collective/Ephesus/labels/good%20first%20issue)
 are scoped to be completable without holding the whole system in your head. Issues
 labelled `help wanted` are larger but well-specified.
 

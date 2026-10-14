@@ -46,4 +46,4 @@ So the rule is not "briefs must cite." It is "**citations must resolve, and the 
 
 ---
 
-*The Stoa's rules are recorded in ADR-0017 and enforced in `src/main/stoa.ts`. The first brief and the amended record are in [`docs/stoa/`](https://github.com/mertefesensoy/Ephesus/tree/main/docs/stoa).*
+*The Stoa's rules are recorded in ADR-0017 and enforced in `src/main/stoa.ts`. The first brief and the amended record are in [`docs/stoa/`](https://github.com/Cassandra-Collective/Ephesus/tree/main/docs/stoa).*

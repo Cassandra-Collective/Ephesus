@@ -16,7 +16,7 @@ and will be taken seriously.
 **Do not open a public issue for a security problem.**
 
 Report privately through
-[GitHub's private vulnerability reporting](https://github.com/mertefesensoy/Ephesus/security/advisories/new),
+[GitHub's private vulnerability reporting](https://github.com/Cassandra-Collective/Ephesus/security/advisories/new),
 or by email to **sensoymertefe@gmail.com** with `SECURITY` in the subject.
 
 Please include what you found, how to reproduce it, and what you think the impact is.
