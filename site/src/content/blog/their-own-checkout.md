@@ -42,4 +42,4 @@ The less concrete gain is that four implicit assumptions are now four explicit m
 
 ---
 
-*Worktree isolation landed in M8.6 and the trust decision is ADR-0025. The record is in [`docs/implementations/`](https://github.com/mertefesensoy/Ephesus/tree/main/docs/implementations).*
+*Worktree isolation landed in M8.6 and the trust decision is ADR-0025. The record is in [`docs/implementations/`](https://github.com/Cassandra-Collective/Ephesus/tree/main/docs/implementations).*

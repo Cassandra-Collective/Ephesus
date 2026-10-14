@@ -282,4 +282,4 @@ OUT OF SCOPE"), so the next red is recognised rather than re-diagnosed.
 - [Usage-aware pacing](2026-09-01-usage-aware-pacing.md) — where the shim and the spawn suite were built
 - [The temp-directory teardown](2026-09-01-flaky-temp-dir-teardown.md) — why `removeTempDir` is the one remover
 - [DECISIONS-LOG](../DECISIONS-LOG.md) — the 2026-10-01 entries on testing the guard and on the `pacing-wakes` teardown flake, and the 2026-10-02 entry on how #60 is finished and merged
-- Issue [#10](https://github.com/mertefesensoy/Ephesus/issues/10), PR [#60](https://github.com/mertefesensoy/Ephesus/pull/60), and the maintainer branch [`fix/eph-usage-coverage-10`](https://github.com/mertefesensoy/Ephesus/tree/fix/eph-usage-coverage-10) where the coverage runs were measured
+- Issue [#10](https://github.com/Cassandra-Collective/Ephesus/issues/10), PR [#60](https://github.com/Cassandra-Collective/Ephesus/pull/60), and the maintainer branch [`fix/eph-usage-coverage-10`](https://github.com/Cassandra-Collective/Ephesus/tree/fix/eph-usage-coverage-10) where the coverage runs were measured

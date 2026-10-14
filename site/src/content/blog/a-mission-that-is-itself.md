@@ -52,4 +52,4 @@ A self-improvement loop that only turns on at version 1.0 has never been tested 
 
 ---
 
-*The Gymnasium's governance is ADR-0015; the ledger is [`docs/gymnasium/LEDGER.md`](https://github.com/mertefesensoy/Ephesus/blob/main/docs/gymnasium/LEDGER.md).*
+*The Gymnasium's governance is ADR-0015; the ledger is [`docs/gymnasium/LEDGER.md`](https://github.com/Cassandra-Collective/Ephesus/blob/main/docs/gymnasium/LEDGER.md).*

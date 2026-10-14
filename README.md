@@ -14,7 +14,7 @@ present their work to you.
 
 <p><em>Electron · React · TypeScript · Pixi.js · xterm.js · node-pty</em></p>
 
-[![CI](https://github.com/mertefesensoy/Ephesus/actions/workflows/ci.yml/badge.svg)](https://github.com/mertefesensoy/Ephesus/actions/workflows/ci.yml)
+[![CI](https://github.com/Cassandra-Collective/Ephesus/actions/workflows/ci.yml/badge.svg)](https://github.com/Cassandra-Collective/Ephesus/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2E6F8E.svg)](./LICENSE)
 [![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-C4552D.svg)](#status)
 [![Node 20](https://img.shields.io/badge/node-20-7A8B3D.svg)](./.nvmrc)
@@ -56,7 +56,7 @@ and a native rebuild that may not work. Nothing refuses the install, so check
 `node -v` yourself.
 
 ```bash
-git clone https://github.com/mertefesensoy/Ephesus.git
+git clone https://github.com/Cassandra-Collective/Ephesus.git
 cd Ephesus
 npm install     # patches node-pty, syncs the pixel fonts, rebuilds natives
 npm run dev     # the app, with hot reload
