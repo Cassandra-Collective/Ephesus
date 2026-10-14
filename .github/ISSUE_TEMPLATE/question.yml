@@ -1,0 +1,38 @@
+name: Question
+description: Ask how something in Ephesus works, or how to use it
+labels: ["question", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        There are no dumb questions about a codebase with this much documentation.
+        If the answer should have been in the docs and was not, that is a finding
+        worth its own documentation issue too.
+
+        Requirements live in the SRS, decisions in the ADRs, design in the SDD, and
+        what is real today in docs/PROGRESS.md. Please search the issues, open and
+        closed, before asking.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What are you trying to do, and what do you want to know?
+    validations:
+      required: true
+
+  - type: textarea
+    id: read
+    attributes:
+      label: What you read or tried
+      description: The documents you already read, and any commands with their output, as text.
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Commit and platform
+      description: "If it matters: the output of `git rev-parse --short HEAD`, and your operating system."
+    validations:
+      required: false

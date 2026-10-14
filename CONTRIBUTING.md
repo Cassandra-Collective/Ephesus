@@ -152,7 +152,8 @@ machine that is not Windows, and open an issue about the first thing that goes w
 
 ## 9. Getting help
 
-Open an issue with the `question` label. There are no dumb questions about a codebase
+Use the **Question** form on the new-issue page; it adds the `question` label.
+There are no dumb questions about a codebase
 with this much documentation — if you could not find the answer, that is a finding
 about the docs and worth filing on its own.
 
