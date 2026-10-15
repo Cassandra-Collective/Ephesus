@@ -4,13 +4,13 @@
 
 # Ephesus
 
-### An agent company you govern as its architect
+### An agentic harness you govern and measure
 
-**A multi-agent harness that turns the terminal coding CLIs you already pay for into a
-self-coordinating company of agents** — a skeleton crew that keeps your apps alive, a
-front office that keeps your projects running smoothly, and a chief-of-staff you talk
-to by voice. You act as the software architect; your agents build, report back, and
-present their work to you.
+**Ephesus runs AI coding agents behind your gates.** Today it turns the terminal coding
+CLIs you already pay for into a self-coordinating company of agents, each with memory, a
+mailbox and a desk on a 2D floor, while you act as the architect. Phase 9, planned and not
+yet built, makes it a full agentic harness: its own engine for local and API models, a
+bench that scores the harness, and the floor as an optional view.
 
 <p><em>Electron · React · TypeScript · Pixi.js · xterm.js · node-pty</em></p>
 
@@ -39,6 +39,9 @@ memory and mailboxes, the 2D floor, the Agora, the Odeon, the Stoa and the Gymna
 self-improvement loop. Every package through M8c is built. The current milestone is
 **M9 — the harness is the product**, planned and not yet started: the Architect has
 approved its plan and not yet its build ([`docs/M9-PLAN.md`](./docs/M9-PLAN.md)).
+The pitch above describes where Phase 9 (M9b to M9h,
+[`docs/PHASE-9-PLAN.md`](./docs/PHASE-9-PLAN.md)) takes Ephesus; like M9, Phase 9 is
+approved for planning only, and none of it is built.
 Package-by-package state with evidence is in [`docs/PROGRESS.md`](./docs/PROGRESS.md),
 which opens on where the build resumes; the narrative is under
 [Where the build stands](#where-the-build-stands).

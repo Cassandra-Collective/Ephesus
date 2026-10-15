@@ -1,7 +1,7 @@
 {
   "name": "ephesus",
   "version": "0.0.1",
-  "description": "A multi-agent harness desktop app — an agent company you govern as its architect.",
+  "description": "An agentic harness you govern and measure: a desktop app that runs coding agents as a governed company.",
   "main": "out/main/index.js",
   "private": true,
   "license": "MIT",

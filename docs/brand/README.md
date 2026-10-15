@@ -13,7 +13,7 @@ Terracotta capital, marble shaft, drawn to [`../design/UI-DESIGN.md`](../design/
 | `ephesus-column-520.png` | Upload-ready: GitHub **App logos**, where GitHub paints the badge behind it |
 | `ephesus-round-64.svg` | The round mark, for anywhere nothing supplies a background |
 | `ephesus-round-512.png` | Upload-ready: **org and profile avatars**, which are shown as-is |
-| `ephesus-social-card.svg` | 1280×640 GitHub social preview |
+| `ephesus-social-card.svg` | 1280×640 GitHub social preview; built, not hand-edited (see below) |
 
 ## Each size is redrawn, not scaled
 
@@ -116,4 +116,11 @@ rasterises this file will not have it, and a silent fallback to Arial would brea
 §3's typography rule. Drawn glyphs cannot fall back.
 
 GitHub's social preview needs PNG or JPG, so the card must be rasterised before
-upload — open it in a browser at 1280×640 and capture, or use a headless renderer.
+upload. Since 2026-10-15 that is done for you: the card is built in VectorCraft by the
+Cassandra Collective's brand script, `python brand/tools/build_brand.py --ephesus-out <this
+checkout>` in `Cassandra-Collective/.github`. It draws this folder's column and wordmark,
+vendored there rect for rect, sets the text in IBM Plex Mono, and writes three files here:
+`ephesus-social-card.svg`, `site/public/img/social-card.svg` and the upload-ready
+`site/public/img/social-card.png`. Before writing, it checks the SVG against the rules
+above: §2 tokens only, integer coordinates, `crispEdges`. To change the card, change the
+build there and rebuild; an edit made here by hand is lost at the next build.
