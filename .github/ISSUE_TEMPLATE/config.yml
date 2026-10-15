@@ -9,3 +9,6 @@ contact_links:
   - name: Where the build currently stands
     url: https://github.com/Cassandra-Collective/Ephesus/blob/main/docs/PROGRESS.md
     about: Package-by-package progress with evidence, so you can see what is real today.
+  - name: Ask a question
+    url: https://github.com/Cassandra-Collective/Ephesus/discussions/categories/q-a
+    about: Open questions and help go to Discussions Q&A — anyone can answer, and the answer that settles it can be marked.

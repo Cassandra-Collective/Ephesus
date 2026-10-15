@@ -152,7 +152,14 @@ machine that is not Windows, and open an issue about the first thing that goes w
 
 ## 9. Getting help
 
-Use the **Question** form on the new-issue page; it adds the `question` label.
+Ask in [Discussions Q&A](https://github.com/Cassandra-Collective/Ephesus/discussions/categories/q-a).
+Open questions and requests for help go there: anyone can answer, and the answer that
+settles a question can be marked as accepted, so the next person finds it.
+
+If the question should be tracked as an issue — the answer looks like a bug, or like
+something the docs ought to say — use the **Question** form on the new-issue page
+instead; it adds the `question` label.
+
 There are no dumb questions about a codebase
 with this much documentation — if you could not find the answer, that is a finding
 about the docs and worth filing on its own.
