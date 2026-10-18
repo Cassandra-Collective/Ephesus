@@ -5,10 +5,12 @@ const issues = [
   { n: 8, title: 'Build and run on macOS, report the first thing that breaks', tag: 'good first issue', note: 'No codebase knowledge needed. Currently the highest-value contribution available.' },
   { n: 9, title: 'Build and run on Linux, report the first thing that breaks', tag: 'good first issue', note: 'CI runs the suite on Ubuntu, but nothing has ever launched the app there.' },
   { n: 7, title: 'Add an engines field to package.json', tag: 'good first issue', note: 'Small and self-contained. .nvmrc says Node 20; nothing enforces it.' },
-  { n: 10, title: 'Add tests for shims/eph-usage.mjs', tag: 'good first issue', note: 'The friendliest module to test — dependency-free Node, no Electron, no React.' },
-  { n: 11, title: 'Add tests for src/renderer/src/fonts.ts', tag: 'good first issue', note: 'A degradation path: it reports a missing pixel face visibly. Nothing proves the report fires.' },
   { n: 12, title: 'Add tests for src/renderer/src/floor/vfx-art.ts', tag: 'good first issue', note: 'The effects are specified normatively, so the right answer is written down.' },
-  { n: 13, title: 'Raise coverage of the panels subsystem', tag: 'help wanted', note: 'The weakest subsystem at roughly 30% lines. The work is deciding how to fake the preload bridge.' }
+  { n: 13, title: 'Raise coverage of the panels subsystem', tag: 'help wanted', note: 'The panels coverage floor is 46.79% lines on both platforms (scripts/coverage-floors.json). The work is deciding how to fake the preload bridge.' },
+  { n: 81, title: 'State one Node version floor across the docs', tag: 'good first issue', note: 'The same Node requirement is stated differently across the documentation.' },
+  { n: 82, title: 'Bring the toolchain facts across the docs up to date', tag: 'good first issue', note: 'Reconcile the documented TypeScript projects, repository layout and postinstall steps.' },
+  { n: 85, title: 'Update the README stopping instructions for ADR-0034', tag: 'good first issue', note: 'Explain the one-harness-per-home protection without changing the stop commands.' },
+  { n: 86, title: 'Update the website roadmap to match PROGRESS', tag: 'good first issue', note: 'Bring the milestone order and the current status into line with the source-of-truth register.' }
 ]
 
 const dod = [
@@ -24,7 +26,7 @@ const dod = [
 
 <Base
   title="Contribute — Ephesus"
-  description="Ephesus is pre-alpha and builds from source. Here is what a fresh clone actually gives you, the rules that are unusual, and seven issues you could pick up today.">
+  description="Ephesus is pre-alpha and builds from source. Here is what a fresh clone actually gives you, the rules that are unusual, and {issues.length} issues you could pick up today.">
 
   <section class="pagehead">
     <div class="wrap">
@@ -107,7 +109,7 @@ npm run dev</code></pre>
   <section class="section">
     <div class="wrap">
       <span class="eyebrow">Where to start</span>
-      <h2>Seven issues you could pick up today</h2>
+      <h2>{issues.length} issues you could pick up today</h2>
       <p class="lede" style="margin-bottom:26px">
         Every one is grounded in something checkable — the untested-module list in the coverage
         record, or a field genuinely absent from <code>package.json</code>. None of them dissolve
@@ -124,6 +126,11 @@ npm run dev</code></pre>
           </a>
         ))}
       </div>
+      <p>
+        This is a curated snapshot of open issues. For the latest options, see the
+        <a href="https://github.com/Cassandra-Collective/Ephesus/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22">live good first issue list</a>
+        on GitHub.
+      </p>
       <div class="btnrow">
         <a class="btn solid" href="https://github.com/Cassandra-Collective/Ephesus/blob/main/CONTRIBUTING.md">Read CONTRIBUTING</a>
         <a class="btn" href="https://github.com/Cassandra-Collective/Ephesus/issues">All issues</a>
