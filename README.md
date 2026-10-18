@@ -274,8 +274,8 @@ looking like a company that has finished its work.
 **Stopping it.** Stop Electron by process, not by the `npm run dev` wrapper.
 Killing the wrapper can leave Electron running and still using the same
 `~/.ephesus/` home. If you start `npm run dev` again, the second harness may
-open its window, but it will not hire agents or arm schedules: the one-harness-
-per-home guard reports `agora/home-occupied`, naming the process that owns the
+open its window, but it will not hire agents or arm schedules: the
+one-harness-per-home guard reports `agora/home-occupied`, naming the process that owns the
 home. Stop the leftover Electron process before restarting; the guard prevents
 a second company from working against the same book of record
 ([ADR-0034](./docs/adr/ADR-0034-one-harness-per-home.md)).
