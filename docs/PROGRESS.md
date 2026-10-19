@@ -24,11 +24,12 @@ recorded.
 *As of 2026-10-19, branch `feature/rust-rewrite` on `main` @ `9269eaf`.*
 
 **Ephesus is being rewritten in Rust (ADR-0041, the Architect's direction of
-2026-10-19), and the rewrite comes before everything below.** The next build step
-is **R0.1, the workspace skeleton**, once the Architect has approved
-[`RUST-PLAN.md`](./RUST-PLAN.md) and the crate set in
-[`RUST-CRATES.md`](./RUST-CRATES.md). Both were proposed on 2026-10-19 and are put to
-him through AskUserQuestion. Silence is not a yes. The TypeScript tree is frozen as
+2026-10-19), and the rewrite comes before everything below.** The Architect
+approved [`RUST-PLAN.md`](./RUST-PLAN.md), crate Set A in
+[`RUST-CRATES.md`](./RUST-CRATES.md), GYM-013's thresholds and the SRS wording on
+2026-10-19. The next build step is **the first unticked R0 box below**. A phase after
+R0 starts only when the Architect has approved its package list, through
+AskUserQuestion. Silence is not a yes. The TypeScript tree is frozen as
 the behavioural reference and is deleted at R14 (parity). The rewrite is measured by
 [GYM-013](./gymnasium/proposals/GYM-013-the-rust-rewrite-is-measured.md). The
 packages are in *The Rust rewrite* section below.
@@ -73,15 +74,15 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan proposed 2026-10-19; awaiting the Architect's approval. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; R0 in progress. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 
-## The Rust rewrite — R0 to R14 (ADR-0041; plan proposed 2026-10-19)
+## The Rust rewrite — R0 to R14 (ADR-0041; plan approved 2026-10-19)
 
 The order and each phase's exit criteria are in [`RUST-PLAN.md`](./RUST-PLAN.md) §5.
 A phase's packages are listed here when the Architect approves them at that phase's
-start. R0's are proposed with the plan. A ticked box carries its evidence, the same
+start. R0's were approved with the plan. A ticked box carries its evidence, the same
 as every M package.
 
 ### R0 — The workspace and its gates

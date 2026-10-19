@@ -1,6 +1,7 @@
 # GYM-013 — The Rust rewrite is measured: "faster" is a number, not a claim
 
-**Status:** proposed · **Proposed:** 2026-10-19 · **Decided:** — ·
+**Status:** approved · **Proposed:** 2026-10-19 · **Decided:** 2026-10-19 (Architect:
+the thresholds as proposed) ·
 **Gate:** Architect approval. It replaces the whole gate chain, touches every
 BUILD-PROMPT §3 invariant's enforcement, supersedes an ADR and adds dependencies, so it
 is the ADR-0015 class that also asks for a decision memo. The memo is
@@ -52,7 +53,7 @@ This row guards the reason the rewrite exists.
 
 Measured on the same machine as the baseline, by the same method (same scratch-home
 boot, same 30 s idle, three runs with the first reported as cold), **within two weeks of
-R14 landing**. The thresholds are proposed for the Architect to approve or amend:
+R14 landing**. The Architect approved these thresholds as proposed on 2026-10-19:
 
 1. **Startup.** Warm mean time from process start to the control surface serving is
    **≤ 0.75 s** (≤ 50 % of 1.53 s), with the window open.

@@ -1,4 +1,4 @@
-# The Rust rewrite — plan (PROPOSED 2026-10-19; awaiting the Architect's approval)
+# The Rust rewrite — plan (APPROVED by the Architect 2026-10-19)
 
 The decision is [ADR-0041](./adr/ADR-0041-ephesus-is-rewritten-in-rust.md). The
 dependency memo is [`RUST-CRATES.md`](./RUST-CRATES.md), and the measurement is
@@ -7,8 +7,9 @@ behind all three are in [`DECISIONS-LOG.md`](./DECISIONS-LOG.md) under 2026-10-1
 This file is the build order. It replaces BUILD-PROMPT §5's M9 → M9h order **until
 parity**, after which M9 resumes on the Rust tree (§7).
 
-**Nothing in this plan is approved by being written.** Each phase's package list is
-put to the Architect at that phase's start, through the questions workflow, as M-plans
+**The Architect approved this plan on 2026-10-19** (DECISIONS-LOG, same date): the order,
+the exit criteria, R0's packages and §10's SRS wording. Each later phase's package list
+is still put to him at that phase's start, through the questions workflow, as M-plans
 were. The phases below fix the order and the exit criteria, not every package.
 
 ---
@@ -323,7 +324,7 @@ re-read for TypeScript-specific mechanisms before its first package.
 - R10 and R12: the HTTP, WebSocket and audio crates, a separate memo each.
 - R12: whether the Herald is wired into the app this time (M6.9).
 
-## 10. Proposed SRS amendments (applied on approval, recorded as amendments)
+## 10. SRS amendments (approved 2026-10-19; applied in R0.3's commit as dated amendments)
 
 - **FR-1.1.** *Was:* "…in a dedicated PTY (node-pty), streaming output to an xterm.js
   view byte-for-byte." *Proposed:* "…in a dedicated PTY (ConPTY on Windows, openpty on

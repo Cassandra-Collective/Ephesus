@@ -1,7 +1,9 @@
-# Decision memo — the Rust rewrite's vetted crate set (PROPOSED 2026-10-19)
+# Decision memo — the Rust rewrite's vetted crate set (Set A APPROVED 2026-10-19)
 
-**Asks:** the Architect's approval of Set A as one set (his decision of 2026-10-19:
-"Vetted set, one memo"). **Under:** invariant 10, ADR-0041 §7. **Checked by:** `xtask
+**Approved:** Set A and the license allowlist, as one set, by the Architect on 2026-10-19
+(DECISIONS-LOG, same date). MPL-2.0 stays out. Set B is not approved. **Asked:** the
+Architect's approval of Set A as one set (his decision of 2026-10-19: "Vetted set, one
+memo"). **Under:** invariant 10, ADR-0041 §7. **Checked by:** `xtask
 deps` (every direct dependency of a workspace crate must be in an approved set below)
 and `cargo deny check` (licenses and advisories over the whole graph).
 
