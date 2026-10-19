@@ -6,7 +6,7 @@ New ADRs append; accepted ADRs are never edited, only superseded.
 
 | ID | Title | Status |
 |---|---|---|
-| [ADR-0001](./ADR-0001-electron-shell.md) | Electron + React + TypeScript application shell | accepted |
+| [ADR-0001](./ADR-0001-electron-shell.md) | Electron + React + TypeScript application shell | superseded by ADR-0041 (2026-10-19) |
 | [ADR-0002](./ADR-0002-two-data-planes.md) | Two data planes: terminal (PTY) and event (hooks) | accepted |
 | [ADR-0003](./ADR-0003-hermes-message-bus.md) | Hermes: file-based mailboxes with speech-act messages | accepted |
 | [ADR-0004](./ADR-0004-agora-single-committer.md) | The Agora: git as coordination layer, single committer | accepted |
@@ -43,6 +43,7 @@ New ADRs append; accepted ADRs are never edited, only superseded.
 | [ADR-0035](./ADR-0035-an-engine-prompt-is-declared-in-advance.md) | An engine's permission prompt is answered in advance, by name | accepted |
 | [ADR-0036](./ADR-0036-two-engine-kinds.md) | Two engine kinds: a wrapped CLI, and a native agent the harness owns (supersedes one sentence of ADR-0009; planned for M9, not yet built) | accepted |
 | [ADR-0040](./ADR-0040-the-floor-is-a-view-mode.md) | The floor is a view mode; the window opens on the workspace (extends ADR-0014; planned for M9b, not yet built) | accepted |
+| [ADR-0041](./ADR-0041-ephesus-is-rewritten-in-rust.md) | Ephesus is rewritten in Rust, window included (supersedes ADR-0001; changes the mechanism, not the decision, of ADR-0002, ADR-0007, ADR-0014 and ADR-0036; the rewrite is in progress, see `../RUST-PLAN.md`) | accepted |
 
 **Numbers 0037–0039 are reserved, not missing.** ADR-0037 (the bench), ADR-0038
 (the provider seam) and ADR-0039 (the gate as a native agent's permission system)
