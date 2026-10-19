@@ -21,15 +21,18 @@ recorded.
 
 ## Resume here
 
-*As of 2026-10-19, on `main` @ `9269eaf`: R0.1 is PR #102 (`feature/r0-1-workspace-skeleton`). R0.2 is `feature/r0-2-gate-chain`, stacked on it. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
+*As of 2026-10-19, on `main` @ `9269eaf`: R0.1 is PR #102 (`feature/r0-1-workspace-skeleton`). R0.2 (`feature/r0-2-gate-chain`) and R0.3 (`feature/r0-3-standards-learn-rust`) are stacked on it, pushed, and get their PRs as the one below each merges. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
 
 **Ephesus is being rewritten in Rust (ADR-0041, the Architect's direction of
 2026-10-19), and the rewrite comes before everything below.** The Architect
 approved [`RUST-PLAN.md`](./RUST-PLAN.md), crate Set A in
 [`RUST-CRATES.md`](./RUST-CRATES.md), GYM-013's thresholds and the SRS wording on
-2026-10-19. The next build step is **the first unticked R0 box below**. A phase after
-R0 starts only when the Architect has approved its package list, through
-AskUserQuestion. Silence is not a yes. The TypeScript tree is frozen as
+2026-10-19. **All three R0 packages are ticked.** R0 closes on its exit review: the gate green on
+win32 and on CI on Linux, Windows and macOS, and each rule refuted by file and line.
+R0.3's CI run is the last evidence it owes. **The next build step is R1, the home and
+the book of record, once the Architect has approved its package list.** A phase after
+R0 starts only then, through AskUserQuestion. Silence is not a yes. By ADR-0041 §3,
+every redesigned format is specified in the new SDD before it is built. The TypeScript tree is frozen as
 the behavioural reference and is deleted at R14 (parity). The rewrite is measured by
 [GYM-013](./gymnasium/proposals/GYM-013-the-rust-rewrite-is-measured.md). The
 packages are in *The Rust rewrite* section below.
@@ -74,7 +77,7 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; R0 in progress. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; R0's packages ticked, closing on R0.3's CI; R1 waits on its package list. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 
