@@ -114,6 +114,43 @@ jobs:
           path: coverage/measured-linux.json
           if-no-files-found: warn
 
+  # The Rust workspace's gate (ADR-0041, RUST-PLAN §4; R0.2). Every platform
+  # NFR-11 names (Architect, 2026-10-19). First-party actions only: cargo tools
+  # are installed with `cargo install --locked` at their approved versions
+  # (docs/RUST-CRATES.md) and cached, never fetched by a third-party action.
+  rust:
+    name: Rust gate (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          cargo --version
+      - name: Cache the cargo registry, the build and the cargo tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/bin/cargo-deny
+            ~/.cargo/bin/cargo-deny.exe
+            target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-cargo-deny-0.20.2
+      - name: cargo-deny 0.20.2 (approved, RUST-CRATES.md)
+        run: cargo deny --version || cargo install cargo-deny --version 0.20.2 --locked
+      # Through the alias, which carries --locked: a stale Cargo.lock fails here
+      # instead of being rewritten (R0.1 §6).
+      - name: cargo xtask gate
+        run: cargo xtask gate
+
   attribution:
     name: Commit attribution
     runs-on: ubuntu-latest

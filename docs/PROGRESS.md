@@ -21,7 +21,7 @@ recorded.
 
 ## Resume here
 
-*As of 2026-10-19, branch `feature/rust-rewrite` on `main` @ `9269eaf`.*
+*As of 2026-10-19, on `main` @ `9269eaf`: R0.1 is PR #102 (`feature/r0-1-workspace-skeleton`). R0.2 is `feature/r0-2-gate-chain`, stacked on it. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
 
 **Ephesus is being rewritten in Rust (ADR-0041, the Architect's direction of
 2026-10-19), and the rewrite comes before everything below.** The Architect
@@ -98,9 +98,17 @@ as every M package.
   unchanged) after a review found the first alias rewrote it and reported green. Linux
   and Windows CI not yet run (R0.2).
   [`2026-10-19-r0-1-workspace-skeleton.md`](./implementations/2026-10-19-r0-1-workspace-skeleton.md)
-- [ ] **R0.2 The gate chain** — `xtask` with `gate`, `invariants` and `deps`, and the
+- [x] **R0.2 The gate chain** — `xtask` with `gate`, `invariants` and `deps`, and the
   `rust` CI job on Linux and Windows. Each rule fails a planted violation by file and
-  line.
+  line. *Evidence (2026-10-19):* gate all six steps green on win32 (76 unit + 8
+  integration tests), and fmt, clippy, tests, invariants and deps green on Linux (WSL2).
+  Every rule refused its plants by file and line in a scratch workspace: 10
+  invariants violations and 3 deps plants, offline, lockfile unchanged. `cargo xtask
+  mutants xtask` round 3: ROUND OK, 225 mutants, 211 caught, 0 missed, 14 unviable;
+  control 55/55 missed; sources unchanged. Rounds 1 (34 survivors, each answered) and
+  2 (baseline failed in the copy) are in the doc. Owed: the CI `rust` job on all three
+  OSes, which runs on push, and macOS.
+  [`2026-10-19-r0-2-the-gate-chain.md`](./implementations/2026-10-19-r0-2-the-gate-chain.md)
 - [ ] **R0.3 The standards learn Rust** — the Rust edition of ENGINEERING-STANDARDS and
   BUILD-PROMPT §3 (ADR-0041's table), `check-readme-current.cjs` learning the `R`
   prefix, and the skills learning the R-order and the Rust gate.

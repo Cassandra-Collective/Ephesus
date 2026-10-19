@@ -111,14 +111,19 @@ One core library. `ephesus` runs it with a window, and `ephesusd` runs it with n
    and `clippy.toml`)
 3. `cargo test --workspace`
 4. `cargo deny check` (licenses, advisories, bans)
-5. `xtask invariants`: the dependency rules of §3.2 from `cargo metadata`; the
-   single-committer rule over the syntax tree (`syn`); the token rule for `eph-ui`; the
-   prompt-literal rule.
+5. `xtask invariants`: every crate opts into the workspace lints (each `Cargo.toml`
+   parsed with `toml`); the dependency rules of §3.2 from `cargo metadata`; the
+   exemption rule (a disallowed-method exemption is an `#[expect]` with a reason, in an
+   allowlisted crate only); the single-committer rule over the syntax tree (`syn`). Two
+   more rules arrive with their subjects (Architect, 2026-10-19): the prompt-literal
+   rule at R2 and the token rule for `eph-ui` at R4.
 6. `xtask deps`: every direct dependency is listed in `RUST-CRATES.md`.
 7. From R1 on: coverage floors per crate (`cargo-llvm-cov`), ratcheted with the
    project's existing rules (three runs per platform, never a lowered floor).
 
-CI runs the chain on `ubuntu-latest` and `windows-latest` in a new `rust` job. The
+CI runs the chain on `ubuntu-latest`, `windows-latest` and `macos-latest` in a new
+`rust` job (Architect, 2026-10-19). It uses first-party actions only, and cargo tools
+are installed with `cargo install --locked` at their approved versions. The
 TypeScript jobs keep running over the frozen tree, unchanged, because they are `main`'s
 required checks. Every check above that *refuses* something gets the refutation pass
 before its package closes: a planted violation must fail it by file and line (memory:
@@ -318,8 +323,8 @@ re-read for TypeScript-specific mechanisms before its first package.
 
 ## 9. Decisions still owed (asked at their phase, not before)
 
-- R0: the CI matrix (macOS included or not), and whether `cargo xtask gate` replaces the
-  `npm` commands in CLAUDE.md now or at parity.
+- R0: ~~the CI matrix~~ (answered 2026-10-19: Linux, Windows and macOS), and whether
+  `cargo xtask gate` replaces the `npm` commands in CLAUDE.md now or at parity.
 - R1: each redesigned schema (new SDD §4), field by field, where it departs from today's.
 - R2: whether `portable-pty`'s process-tree kill suffices on Windows or a job object (an
   FFI boundary crate) is needed.

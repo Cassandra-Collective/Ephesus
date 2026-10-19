@@ -15,3 +15,8 @@ scripts/coverage-floors.json
 # The project website is a separate workspace with its own toolchain.
 # Prettier here owns the application only.
 site/
+
+# The Rust workspace (ADR-0041) has its own formatter, rustfmt, run by
+# `cargo xtask gate`. Its test fixtures are data in the shapes other tools write.
+xtask/
+crates/

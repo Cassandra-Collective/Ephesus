@@ -1,0 +1,16 @@
+# The mutation-round spec (GYM-008's rules in Rust; RUST-PLAN R0.2).
+#
+# cargo-mutants reads this file on every run. `cargo xtask mutants <package>`
+# runs the round with it and then the control (one shard, no test run, every
+# viable mutant must be missed); see xtask/src/mutants.rs for the five rules a
+# round is judged by.
+#
+# An exclusion is a decision: it names the mutant and why no test can or should
+# kill it, in a reviewed commit. A survivor no test COULD kill is a design smell
+# (memory: an equivalent mutant is a design smell): delete the duplicate before
+# reaching for an exclusion.
+exclude_re = []
+
+# Build without debug info ([profile.mutants] in Cargo.toml): a round relinks
+# every test binary once per mutant.
+profile = "mutants"

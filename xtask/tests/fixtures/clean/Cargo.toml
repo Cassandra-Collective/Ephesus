@@ -1,0 +1,6 @@
+[workspace]
+resolver = "3"
+members = ["eph-agora"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
