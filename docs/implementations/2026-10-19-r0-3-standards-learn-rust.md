@@ -101,8 +101,31 @@ summary row included.
 `check-invariants`, `check-attribution`. The Rust gate is unchanged by this package
 and green.
 
-**The mutation round:** §6.1, from `node scripts/mutate.cjs` run after the commit,
-outside OneDrive, as the tool requires.
+**The mutation round** (GYM-008's tool, DoD item 9). It ran from the committed spec in
+a detached scratch worktree of `efda5e6` under `%TEMP%`, outside OneDrive, with
+`node_modules` junctioned in. Free RAM was 2.66 GB. Verbatim:
+
+```
+anchors: 12 of 12 match exactly once
+baseline: PASS — 1 file, 16 passed: test/scripts/check-readme-current.test.ts
+  control-comment  control  SURVIVED — certifies the round  [1 file, 16 passed]
+  A1-archive-ignored  killed — 3 tests failed  [1 file]
+  A2-progress-read-first  killed — 2 tests failed  [1 file]
+  A3-string-sort  killed — 1 tests failed  [1 file]
+  A4-stray-skipped  killed — 1 tests failed  [1 file]
+  A5-no-archive-throws  killed — 9 tests failed  [1 file]
+  V1-surplus-ignored  killed — 2 tests failed  [1 file]
+  C1-exit-status-dropped  killed — 1 tests failed  [1 file]
+  C2-reasons-unprinted  killed — 1 tests failed  [1 file]
+  R1-r-track-unseen  killed — 4 tests failed  [1 file]
+  R2-number-only-key  killed — 8 tests failed  [1 file]
+  R3-summary-row-counted  killed — 2 tests failed  [1 file]
+ROUND OK — 11 of 11 real mutants killed; the control survived.
+```
+
+The three new mutants are each killed by the case built against them, and the nine
+from the archive split still are. The scratch worktree was removed after the junction,
+and the donor `node_modules` held 257 entries before and after.
 
 **Not proven here:** the skills' new text in a fresh session. Worktree sessions load
 skills from the main checkout, so they take effect when this merges and the main
