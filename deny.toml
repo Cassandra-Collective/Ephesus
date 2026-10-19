@@ -1,0 +1,48 @@
+# cargo-deny 0.20 configuration (docs/RUST-CRATES.md, approved 2026-10-19).
+#
+# This holds the WHOLE dependency graph to the approved license allowlist and the
+# RustSec advisory database. Which crates may be DIRECT dependencies is xtask's
+# `deps` check (R0.2), because the vetted set names direct dependencies only.
+
+[graph]
+all-features = true
+
+[advisories]
+# Every RustSec advisory fails the gate. An exception names its advisory id and
+# the reason here, in a reviewed commit.
+ignore = []
+
+[licenses]
+# The approved allowlist, verbatim from RUST-CRATES.md. MPL-2.0 is deliberately
+# absent: the Architect left it out on 2026-10-19.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "CC0-1.0",
+  "Unlicense",
+  "0BSD",
+  "BSL-1.0",
+  "Unicode-3.0",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[bans]
+# egui's graph carries some crates at two versions; that is reported, not refused.
+multiple-versions = "warn"
+# A `*` version requirement admits a crate nobody reviewed.
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+
+[sources]
+# crates.io only: a git or third-party registry source is a new supply chain.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -1,0 +1,40 @@
+# The Ephesus Rust workspace (ADR-0041, docs/RUST-PLAN.md §3).
+#
+# Crates are added when their phase starts (RUST-PLAN §3.1), never up front.
+# Every direct dependency must be in an approved set in docs/RUST-CRATES.md
+# (invariant 10); `cargo xtask deps` enforces that from R0.2.
+[workspace]
+resolver = "3"
+members = ["xtask"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+repository = "https://github.com/Cassandra-Collective/Ephesus"
+publish = false
+
+# The thirteen invariants in Rust (ADR-0041, Consequences). Each crate opts in
+# with `[lints] workspace = true`; xtask checks that none forgets (R0.2).
+[workspace.lints.rust]
+# Invariant 1: no `unsafe` outside a named FFI boundary crate with its own memo.
+unsafe_code = "forbid"
+# A public item states its contract (global standards: inputs, outputs, side
+# effects, invariants).
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+# Invariant 1: a failure is a typed error that teaches the rule, never a panic.
+# Tests may unwrap/expect/panic (clippy.toml).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+# Invariant 7: a must-use result is never discarded in silence.
+let_underscore_must_use = "deny"
+# Invariants 3 and 4: the paths in clippy.toml are refused outside the crates
+# RUST-PLAN §3.2 allows, which say so with `#[expect(..., reason = ...)]`.
+disallowed_methods = "deny"
+disallowed_types = "deny"
