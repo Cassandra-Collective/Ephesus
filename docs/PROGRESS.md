@@ -87,9 +87,15 @@ as every M package.
 
 ### R0 — The workspace and its gates
 
-- [ ] **R0.1 Workspace skeleton** — `Cargo.toml`, `rust-toolchain.toml` (1.96.0),
+- [x] **R0.1 Workspace skeleton** — `Cargo.toml`, `rust-toolchain.toml` (1.96.0),
   `[workspace.lints]`, `clippy.toml`, `deny.toml`, `target/` ignored, and
-  `CARGO_TARGET_DIR` outside OneDrive documented.
+  `CARGO_TARGET_DIR` outside OneDrive documented. *Evidence (2026-10-19, win32,
+  toolchain 1.96.0):* `cargo xtask gate` all steps green (9 unit + 5 integration tests;
+  cargo-deny advisories, bans, licenses, sources ok). 13 of 13 planted lint violations
+  refused by their own rule. An MPL-2.0 crate and a `*` version were each refused by
+  cargo-deny. Mutation round: 31 mutants, 26 caught, 5 unviable, 0 missed. Its control
+  (unit tests only) reports 12 missed. Linux and Windows CI not yet run (R0.2).
+  [`2026-10-19-r0-1-workspace-skeleton.md`](./implementations/2026-10-19-r0-1-workspace-skeleton.md)
 - [ ] **R0.2 The gate chain** — `xtask` with `gate`, `invariants` and `deps`, and the
   `rust` CI job on Linux and Windows. Each rule fails a planted violation by file and
   line.

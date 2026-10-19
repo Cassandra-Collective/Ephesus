@@ -1,0 +1,6 @@
+# Pinned so a lint, a format rule or a diagnostic never changes under a gate
+# without a commit that says so (RUST-PLAN R0.1). Bumping it is a reviewed change.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

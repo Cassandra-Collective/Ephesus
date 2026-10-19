@@ -1,0 +1,8 @@
+# `cargo xtask <command>` runs the workspace's own tooling (RUST-PLAN §4).
+#
+# The build output directory is deliberately NOT set here: it must be outside
+# OneDrive, and that path is per machine. Set CARGO_TARGET_DIR in your
+# environment (RUST-PLAN R0.1); `cargo xtask gate` warns when it is unset inside
+# a OneDrive folder.
+[alias]
+xtask = "run --quiet --package xtask --"
