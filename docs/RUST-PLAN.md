@@ -164,8 +164,13 @@ fails a planted violation by file and line.
 
 ### R1 — The home and the book of record
 
-- **R1.1** `eph-schema`: the persisted models, redesigned where the clean break allows,
-  each specified in the new SDD §4 first.
+- **R1.0** The design (approved 2026-10-19): a new SDD section for the harness home and
+  every persisted schema, each redesigned from first principles with today's used only
+  as a checklist of what must be covered, and each departure stated with its reason.
+  It goes to the Architect for one approval before R1.1 starts. No code.
+- **R1.1** `eph-schema`: the persisted models, built to R1.0's approved design, and the
+  Rust coverage floors (`cargo-llvm-cov`, measured on all three CI platforms) starting
+  with this first crate.
 - **R1.2** `eph-fs`: `write_atomic`, the append-only JSONL writer (seq recovery, torn-tail
   tolerance), the home layout and first-boot seeding (`gate-policy.json`,
   `authority.json`: only when absent, reported).

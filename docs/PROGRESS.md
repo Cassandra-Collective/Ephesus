@@ -27,12 +27,12 @@ recorded.
 2026-10-19), and the rewrite comes before everything below.** The Architect
 approved [`RUST-PLAN.md`](./RUST-PLAN.md), crate Set A in
 [`RUST-CRATES.md`](./RUST-CRATES.md), GYM-013's thresholds and the SRS wording on
-2026-10-19. **All three R0 packages are ticked.** R0 closes on its exit review: the gate green on
-win32 and on CI on Linux, Windows and macOS, and each rule refuted by file and line.
-R0.3's CI run is the last evidence it owes. **The next build step is R1, the home and
-the book of record, once the Architect has approved its package list.** A phase after
-R0 starts only then, through AskUserQuestion. Silence is not a yes. By ADR-0041 §3,
-every redesigned format is specified in the new SDD before it is built. The TypeScript tree is frozen as
+2026-10-19. **R0 is DONE** (verdict below, 2026-10-19). **The next build step is R1.0, the design
+of the home and every persisted schema, as a new SDD section put to the Architect for
+one approval before R1.1 starts.** The Architect approved R1's package list on
+2026-10-19, with every format redesigned from first principles (DECISIONS-LOG). A later
+phase still starts only when he approves its package list, through AskUserQuestion.
+Silence is not a yes. The TypeScript tree is frozen as
 the behavioural reference and is deleted at R14 (parity). The rewrite is measured by
 [GYM-013](./gymnasium/proposals/GYM-013-the-rust-rewrite-is-measured.md). The
 packages are in *The Rust rewrite* section below.
@@ -77,7 +77,7 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; R0's packages ticked, closing on R0.3's CI; R1 waits on its package list. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1 approved, R1.0 (the design) next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 
@@ -360,9 +360,38 @@ as every M package.
   real tree before the README learned them. Its four new cases pass, and its mutation
   round is in the doc. The SRS amendments to FR-1.1, NFR-8 and NFR-16 are applied.
 
+**R0 verdict (2026-10-19): DONE.** RUST-PLAN §5's exit criteria, verified by execution:
+
+| Criterion | Evidence | Tier |
+|---|---|---|
+| The chain is green on win32 | `cargo xtask gate` all six steps green at R0.2's and R0.3's heads | A |
+| …and on CI on Linux and Windows (macOS too, by the Architect's matrix) | Run 39312750826 at `970ac0b` (R0.2) and run 39317331295 at `b88da94` (R0.3): `Rust gate` success on ubuntu, windows and macos; every TypeScript check passed | B |
+| Each `xtask` rule fails a planted violation by file and line | R0.1: 13 of 13 lints. R0.2: 10 invariants violations and 3 deps plants on a real scratch workspace. R0.3: the README check named R0.1 and R0.2 on the real tree before the README described them | A |
+| Gate-shaped changes carry a mutation round with a control | R0.1: 26 caught, 5 unviable, control 12 missed. R0.2 round 3: ROUND OK, 225 mutants, control 55/55. R0.3: `mutate.cjs` ROUND OK, 11 of 11, control survived | A |
+
+Debt carried forward, none of it blocking:
+
+- the skills' new text takes effect in a session only after R0.3 merges and the main
+  checkout pulls;
+- Rust coverage floors start with R1.1's first crate (Architect, 2026-10-19);
+- R phases stay in this file, not `docs/progress/`, until the archive learns the
+  cross-track order (deferred by the Architect, 2026-10-19).
+
+Merged so far: R0.1 as #102 (`f484a33`). Open: R0.2 as #104. R0.3 is stacked on R0.2
+and opens when #104 merges.
+
 ### R1 to R14
 
-- [ ] **R1** The home and the book of record
+- [ ] **R1** The home and the book of record (package list approved 2026-10-19)
+  - [ ] **R1.0 The design** — the new SDD section for the home and every persisted
+    schema, redesigned from first principles; one Architect approval before R1.1.
+  - [ ] **R1.1 `eph-schema`** — the models to the approved design, and the first Rust
+    coverage floors.
+  - [ ] **R1.2 `eph-fs`** — atomic writes, the append-only log, the home and its seeding.
+  - [ ] **R1.3 `eph-git`** — the single committer and worktrees; hermetic git in every
+    git-running test.
+  - [ ] **R1.4 `eph-agora`** — registry, ledger, board, the book of record, degradations,
+    state stores, `DIAGNOSIS.md`.
 - [ ] **R2** The terminal plane and the engine seam
 - [ ] **R3** The event plane
 - [ ] **R4** The first window
