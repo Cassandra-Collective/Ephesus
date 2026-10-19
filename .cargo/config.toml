@@ -1,0 +1,11 @@
+# `cargo xtask <command>` runs the workspace's own tooling (RUST-PLAN §4).
+#
+# The build output directory is deliberately NOT set here: it must be outside
+# OneDrive, and that path is per machine. Set CARGO_TARGET_DIR in your
+# environment (RUST-PLAN R0.1); `cargo xtask gate` warns when it is unset inside
+# a OneDrive folder.
+[alias]
+# `--locked` here, not only on the chain's steps: without it this `cargo run`
+# rewrites a stale Cargo.lock before the gate starts, and every later `--locked`
+# step then passes against the rewritten file (measured, R0.1 §6).
+xtask = "run --quiet --locked --package xtask --"
