@@ -146,7 +146,10 @@ same commit, and an implementation doc.
   `clippy.toml`, `deny.toml`, `.gitignore` for `target/`, and the documented
   `CARGO_TARGET_DIR` outside OneDrive.
 - **R0.2** `xtask` with `gate`, `invariants` and `deps`, and the `rust` CI job on both
-  platforms.
+  platforms. CI starts the gate through the `--locked` alias (R0.1 §6). A mutation round
+  becomes `cargo xtask mutants <crate>`, driven by a committed spec and running its
+  control (a unit-tests-only pass that must report misses) inside the same command. That
+  keeps GYM-008's landed metric (every round cites a checked-in spec) true for Rust.
 - **R0.3** ENGINEERING-STANDARDS and BUILD-PROMPT §3 gain the Rust edition (ADR-0041's
   table). `check-readme-current.cjs` learns `R`. The skills (`/build-package`, `/goal`,
   `/milestone-review`) learn the R-order and the Rust gate.

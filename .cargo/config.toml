@@ -5,4 +5,7 @@
 # environment (RUST-PLAN R0.1); `cargo xtask gate` warns when it is unset inside
 # a OneDrive folder.
 [alias]
-xtask = "run --quiet --package xtask --"
+# `--locked` here, not only on the chain's steps: without it this `cargo run`
+# rewrites a stale Cargo.lock before the gate starts, and every later `--locked`
+# step then passes against the rewritten file (measured, R0.1 §6).
+xtask = "run --quiet --locked --package xtask --"

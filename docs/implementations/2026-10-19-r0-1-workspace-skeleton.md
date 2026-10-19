@@ -39,9 +39,12 @@ then pin the order, the stop-at-first-red rule and the missing-tool message with
 starting cargo. The real runner is a few lines and is exercised by every
 `cargo xtask gate`.
 
-**`--locked` on every build step.** A stale `Cargo.lock` fails the gate instead of being
-rewritten in silence. That is invariant 10's sibling: the dependency graph changes only
-in a reviewed commit.
+**`--locked` on every build step, and on the alias that starts the gate.** A stale
+`Cargo.lock` fails the gate instead of being rewritten in silence. That is invariant
+10's sibling: the dependency graph changes only in a reviewed commit. The first version
+put `--locked` on the chain's steps only, and the claim was false. The `cargo xtask`
+alias is itself a `cargo run`, which rewrote the lockfile before the first step ran.
+A review caught it, and §6 measures both versions.
 
 **A refusal teaches.** Each `clippy.toml` reason names the invariant and the allowed
 path, the missing-tool line prints the approved install command, and the OneDrive
@@ -144,6 +147,23 @@ licenses FAILED        (exit 4)
 error[wildcard]: found 1 wildcard dependency for crate 'xtask'.
 bans FAILED            (exit 2)
 ```
+
+**The `--locked` claim, refuted and then fixed.** In a scratch copy, `tempfile = "3"`
+(an approved crate) was added to `xtask/Cargo.toml` without updating `Cargo.lock`, and
+`cargo xtask gate` was run under each alias:
+
+```
+== old alias: xtask = "run --quiet --package xtask --"
+gate: all steps green
+rc=0 lock before=f1997875b203 after=59066b9db82b
+== new alias: xtask = "run --quiet --locked --package xtask --"
+error: cannot update the lock file …Cargo.lock because --locked was passed to prevent this
+rc=101 lock before=f1997875b203 after=f1997875b203
+```
+
+The old alias rewrote the lockfile and reported green. The fixed one refuses, and the
+lockfile is unchanged. CI must start the gate through the alias, or through
+`cargo run --locked`, too (R0.2).
 
 **The mutation round** (cargo-mutants 27.1.0, run from the worktree; it mutates a copy
 of the tree in `%TEMP%`, writes its report to `%TEMP%`, and `CARGO_TARGET_DIR` is unset

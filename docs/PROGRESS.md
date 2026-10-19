@@ -94,7 +94,9 @@ as every M package.
   cargo-deny advisories, bans, licenses, sources ok). 13 of 13 planted lint violations
   refused by their own rule. An MPL-2.0 crate and a `*` version were each refused by
   cargo-deny. Mutation round: 31 mutants, 26 caught, 5 unviable, 0 missed. Its control
-  (unit tests only) reports 12 missed. Linux and Windows CI not yet run (R0.2).
+  (unit tests only) reports 12 missed. A stale `Cargo.lock` refused (exit 101, lockfile
+  unchanged) after a review found the first alias rewrote it and reported green. Linux
+  and Windows CI not yet run (R0.2).
   [`2026-10-19-r0-1-workspace-skeleton.md`](./implementations/2026-10-19-r0-1-workspace-skeleton.md)
 - [ ] **R0.2 The gate chain** — `xtask` with `gate`, `invariants` and `deps`, and the
   `rust` CI job on Linux and Windows. Each rule fails a planted violation by file and
