@@ -106,8 +106,8 @@ as every M package.
   invariants violations and 3 deps plants, offline, lockfile unchanged. `cargo xtask
   mutants xtask` round 3: ROUND OK, 225 mutants, 211 caught, 0 missed, 14 unviable;
   control 55/55 missed; sources unchanged. Rounds 1 (34 survivors, each answered) and
-  2 (baseline failed in the copy) are in the doc. Owed: the CI `rust` job on all three
-  OSes, which runs on push, and macOS.
+  2 (baseline failed in the copy) are in the doc. CI run 39312750826 at `970ac0b`: the
+  Rust gate succeeded on ubuntu, windows and macos, and every TypeScript check passed.
   [`2026-10-19-r0-2-the-gate-chain.md`](./implementations/2026-10-19-r0-2-the-gate-chain.md)
 - [ ] **R0.3 The standards learn Rust** — the Rust edition of ENGINEERING-STANDARDS and
   BUILD-PROMPT §3 (ADR-0041's table), `check-readme-current.cjs` learning the `R`

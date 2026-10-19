@@ -298,6 +298,22 @@ With `xtask/` and `crates/` ignored it reads `All matched files use Prettier cod
 and `eslint . --max-warnings 0` passes. A Rust change can turn a TypeScript gate red,
 so every R package runs the frozen tree's lint over its own diff.
 
-**Not proven here:** macOS, and the CI `rust` job on any platform. That job runs when
-`feature/r0-2-gate-chain` is pushed (`ci.yml` runs on `feature/**` pushes), and is
-tier B evidence owed before the R0.2 PR.
+**CI, all three platforms (tier B).** The push of `970ac0b` to `feature/r0-2-gate-chain`
+ran workflow run 39312750826, which completed with success:
+
+```
+Rust gate (ubuntu-latest):  success (2 min)
+Rust gate (windows-latest): success (3 min)
+Rust gate (macos-latest):   success (3 min)
+Typecheck · lint · test:    success (2 min)
+Docs integrity:             success
+Commit attribution:         success
+```
+
+That is the whole chain, cargo-deny included, through the `--locked` alias, on each OS
+NFR-11 names. The cold-cache `cargo install cargo-deny` fits inside those minutes. The
+required TypeScript check is green on this tree, so the `.prettierignore` fix holds in
+CI too.
+
+**Not proven here:** the same run with a warm cache, which only makes it faster, and any
+macOS run outside CI.
