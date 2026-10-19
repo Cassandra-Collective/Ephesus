@@ -102,7 +102,12 @@ agents that finish silently have twice left work unattributed.
 ## 2. Engineering standards
 
 The full list is `BUILD-PROMPT.md` §3 and `docs/ENGINEERING-STANDARDS.md`. Check your
-diff against all thirteen before every commit; these are the ones violated by habit:
+diff against all thirteen before every commit. **In the Rust rewrite (ADR-0041, R0 →
+R14)**, each invariant holds by the mechanism ADR-0041's table names, and the
+operational rules are ENGINEERING-STANDARDS §1.1. That means `cargo xtask gate` plus the
+frozen tree's cheap checks, `#[expect]` exemptions with a category, crates only from
+`docs/RUST-CRATES.md`, and `cargo xtask mutants` for a gate. The TypeScript tree is frozen
+until R14. These are the ones violated by habit:
 
 1. **Strict TS.** No `any` outside third-party payload boundaries wrapped by validators.
 2. **The renderer is untrusted.** No Node APIs in renderer code, ever. Every mutation

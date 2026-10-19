@@ -88,22 +88,30 @@ function readRegister(root, files) {
  * what the README should be describing — rather than the first with unticked
  * work, so a milestone whose first package has not landed yet does not make
  * this demand a paragraph about nothing.
+ *
+ * Two tracks tick packages: `M` milestones and, since the Rust rewrite
+ * (ADR-0041), `R` phases (`R0.1`, `R1.3`). A milestone is keyed by its letter
+ * AND number, so `R0` is never `M0`. "Most recent" is register order, so the
+ * rewrite's section sits in PROGRESS.md where it falls in the build order:
+ * after M8c, before M9 (R0.3).
  */
 function landedPackages(progress) {
   const ticked = []
   for (const line of progress.split('\n')) {
-    const match = /^- \[x\] \*\*(M(\d+)(?:\.\d+)?[a-z]?)\b/.exec(line.trim())
-    if (match && match[1] && match[2]) ticked.push({ id: match[1], milestone: match[2] })
+    const match = /^- \[x\] \*\*(([MR])(\d+)(?:\.\d+)?[a-z]?)\b/.exec(line.trim())
+    if (match && match[1] && match[2] && match[3]) {
+      ticked.push({ id: match[1], milestone: `${match[2]}${match[3]}` })
+    }
   }
   const last = ticked[ticked.length - 1]
   if (last === undefined) return { milestone: null, ids: [] }
   const ids = []
   for (const entry of ticked) {
-    // The milestone's own summary row (`M8`) is not a package; the packages are
-    // the numbered ones under it.
-    if (entry.milestone === last.milestone && entry.id !== `M${entry.milestone}`) ids.push(entry.id)
+    // The milestone's own summary row (`M8`, `R1`) is not a package; the
+    // packages are the numbered ones under it.
+    if (entry.milestone === last.milestone && entry.id !== entry.milestone) ids.push(entry.id)
   }
-  return { milestone: `M${last.milestone}`, ids }
+  return { milestone: last.milestone, ids }
 }
 
 /** The README's own claim about what its narrative covers. */

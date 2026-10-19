@@ -165,6 +165,52 @@ describe('the verdict', () => {
   })
 })
 
+/**
+ * The Rust rewrite's phases tick `R` packages (ADR-0041; R0.3). Each case is
+ * built so one wrong reading gives a different verdict: the `R` track unseen,
+ * a milestone keyed by its number alone (so `R0` reads as `M0`), or a phase's
+ * own summary row counted as a package.
+ */
+describe('the R track (the Rust rewrite)', () => {
+  it('makes an R phase the milestone when its package is ticked last', () => {
+    const progress = [ticked('M8.1'), ticked('M8b'), ticked('R0.1'), ticked('R0.2')]
+    const current = script.check(repo({ marker: 'R0.1 R0.2', progress }))
+    expect(current.code).toBe(0)
+    expect(current.out).toEqual(['README landed list is current for R0 (2 package(s)).'])
+    const stale = script.check(repo({ marker: 'M8.1 M8b', progress }))
+    expect(stale.code).toBe(1)
+    const err = stale.err.join('\n')
+    expect(err).toContain('ticked in the register, absent from the README: R0.1, R0.2')
+    expect(err).toContain('claimed by the README, not ticked in the register: M8.1, M8b')
+  })
+
+  it('keys a milestone by its letter, so R0 is not M0', () => {
+    const progress = [ticked('M0.1'), ticked('M0.2'), ticked('R0.1')]
+    const result = script.check(repo({ marker: 'R0.1', progress }))
+    expect(result.code).toBe(0)
+    expect(result.out).toEqual(['README landed list is current for R0 (1 package(s)).'])
+    const merged = script.check(repo({ marker: 'M0.1 M0.2 R0.1', progress }))
+    expect(merged.code).toBe(1)
+    expect(merged.err.join('\n')).toContain(
+      'claimed by the README, not ticked in the register: M0.1, M0.2'
+    )
+  })
+
+  it("does not count an R phase's own summary row as a package", () => {
+    const progress = [ticked('R0.1'), ticked('R1.1'), ticked('R1')]
+    const result = script.check(repo({ marker: 'R1.1', progress }))
+    expect(result.code).toBe(0)
+    expect(result.out).toEqual(['README landed list is current for R1 (1 package(s)).'])
+  })
+
+  it('still reads an M milestone exactly as before, its summary row included', () => {
+    const progress = [ticked('M8.1'), ticked('M8b'), ticked('M8c'), ticked('M8')]
+    const result = script.check(repo({ marker: 'M8.1 M8b M8c', progress }))
+    expect(result.code).toBe(0)
+    expect(result.out).toEqual(['README landed list is current for M8 (3 package(s)).'])
+  })
+})
+
 describe('the command CI runs', () => {
   /**
    * CI runs the file, not `check()`, and only its exit status fails the job. The
@@ -208,12 +254,15 @@ describe('the command CI runs', () => {
 
 describe('this repository', () => {
   it('has a README current with the register as it is split today', () => {
-    // M8's packages are archived and M8b/M8c's are not; both halves are needed
-    // for the README's 32 names to match.
+    // The register is the archive plus PROGRESS.md, and since R0.3 the README
+    // describes the Rust rewrite's current phase (an R milestone) whenever its
+    // package is the most recent tick; M8's names became history then.
     const result = script.check(REPO_ROOT)
     expect(result.err).toEqual([])
     expect(result.code).toBe(0)
-    expect(result.out[0]).toMatch(/^README landed list is current for M\d+ \(\d+ package\(s\)\)\.$/)
+    expect(result.out[0]).toMatch(
+      /^README landed list is current for [MR]\d+ \(\d+ package\(s\)\)\.$/
+    )
     expect(script.archiveFiles(REPO_ROOT).strays).toEqual([])
   })
 })

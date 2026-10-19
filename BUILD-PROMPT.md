@@ -97,6 +97,12 @@ against this list before every commit:
     findings, and nothing from a source reaches code, prompts, or config except
     through a gated Gymnasium proposal citing the brief.
 
+**In the Rust workspace** (ADR-0041, the rewrite under way since 2026-10-19), each of
+these thirteen holds by the mechanism ADR-0041's invariant table names. Invariant 1
+becomes `unsafe`-free typed code with no panic paths. Invariant 2 becomes a window crate
+that cannot reach I/O, enforced by the crate graph. The operational rules are
+ENGINEERING-STANDARDS §1.1.
+
 ## 4. The working loop (every work package)
 
 ```
@@ -111,6 +117,13 @@ TEST  → write the tests the package owes (TEST-STRATEGY §2 level mapping) and
         npm run test:coverage && node scripts/check-coverage.cjs
         (since M8.0: the suite runs once, under coverage, and the seam rule's
         two checks run with it — ENGINEERING-STANDARDS §6.7)
+        A Rust package (R0 → R14) runs instead:
+        cargo xtask gate && npx prettier --check . && npx eslint . --max-warnings 0 &&
+        node scripts/check-invariants.cjs && node scripts/check-readme-current.cjs &&
+        node scripts/check-attribution.cjs
+        (the frozen tree's cheap checks, because a Rust change can break them;
+        Architect, 2026-10-19 — ENGINEERING-STANDARDS §1.1), and a gate-shaped
+        package adds `cargo xtask mutants <crate>`.
         Fix until all green. Never proceed on red. Never weaken a test to pass it.
 PROVE → run the real thing (npm run dev or the relevant script) and capture evidence:
         what you ran, what you observed. Evidence goes in the commit/PR description.
@@ -124,8 +137,13 @@ stop and report the blocker precisely (§9) instead of hacking around it.
 
 ## 5. Build order — strict
 
+**The Rust rewrite comes first** (ADR-0041, Architect 2026-10-19): phases R0 → R14 of
+`docs/RUST-PLAN.md` run after M8c and before M9, each phase's package list approved
+by the Architect at its start, one branch and one PR per package
+(`feature/r<phase>-<n>-<slug>`). The order below then resumes at M9, on the Rust tree.
+
 Execute `docs/IMPLEMENTATION.md` milestones **in order: M0 → M1 → M2 → M3 → M4 → M5 →
-M5b → M6 → M7 → M8 → M8b → M8c → M9 → M9b → M9d → M9e → M9f → M7b → M9g → M9h**, with
+M5b → M6 → M7 → M8 → M8b → M8c → (R0 → R14) → M9 → M9b → M9d → M9e → M9f → M7b → M9g → M9h**, with
 M9c free to run beside M9b and M9d. M7b is the v1 boundary; M9g and M9h follow v1. The
 order after M8c is the Architect's (DD-M9-1, DD-M9-18), and **M9 onward is approved for
 planning only: no package of it starts until he says the build may.** Never start

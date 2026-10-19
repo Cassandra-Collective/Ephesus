@@ -78,60 +78,6 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 
 ---
 
-## The Rust rewrite — R0 to R14 (ADR-0041; plan approved 2026-10-19)
-
-The order and each phase's exit criteria are in [`RUST-PLAN.md`](./RUST-PLAN.md) §5.
-A phase's packages are listed here when the Architect approves them at that phase's
-start. R0's were approved with the plan. A ticked box carries its evidence, the same
-as every M package.
-
-### R0 — The workspace and its gates
-
-- [x] **R0.1 Workspace skeleton** — `Cargo.toml`, `rust-toolchain.toml` (1.96.0),
-  `[workspace.lints]`, `clippy.toml`, `deny.toml`, `target/` ignored, and
-  `CARGO_TARGET_DIR` outside OneDrive documented. *Evidence (2026-10-19, win32,
-  toolchain 1.96.0):* `cargo xtask gate` all steps green (9 unit + 5 integration tests;
-  cargo-deny advisories, bans, licenses, sources ok). 13 of 13 planted lint violations
-  refused by their own rule. An MPL-2.0 crate and a `*` version were each refused by
-  cargo-deny. Mutation round: 31 mutants, 26 caught, 5 unviable, 0 missed. Its control
-  (unit tests only) reports 12 missed. A stale `Cargo.lock` refused (exit 101, lockfile
-  unchanged) after a review found the first alias rewrote it and reported green. Linux
-  and Windows CI not yet run (R0.2).
-  [`2026-10-19-r0-1-workspace-skeleton.md`](./implementations/2026-10-19-r0-1-workspace-skeleton.md)
-- [x] **R0.2 The gate chain** — `xtask` with `gate`, `invariants` and `deps`, and the
-  `rust` CI job on Linux and Windows. Each rule fails a planted violation by file and
-  line. *Evidence (2026-10-19):* gate all six steps green on win32 (76 unit + 8
-  integration tests), and fmt, clippy, tests, invariants and deps green on Linux (WSL2).
-  Every rule refused its plants by file and line in a scratch workspace: 10
-  invariants violations and 3 deps plants, offline, lockfile unchanged. `cargo xtask
-  mutants xtask` round 3: ROUND OK, 225 mutants, 211 caught, 0 missed, 14 unviable;
-  control 55/55 missed; sources unchanged. Rounds 1 (34 survivors, each answered) and
-  2 (baseline failed in the copy) are in the doc. CI run 39312750826 at `970ac0b`: the
-  Rust gate succeeded on ubuntu, windows and macos, and every TypeScript check passed.
-  [`2026-10-19-r0-2-the-gate-chain.md`](./implementations/2026-10-19-r0-2-the-gate-chain.md)
-- [ ] **R0.3 The standards learn Rust** — the Rust edition of ENGINEERING-STANDARDS and
-  BUILD-PROMPT §3 (ADR-0041's table), `check-readme-current.cjs` learning the `R`
-  prefix, and the skills learning the R-order and the Rust gate.
-
-### R1 to R14
-
-- [ ] **R1** The home and the book of record
-- [ ] **R2** The terminal plane and the engine seam
-- [ ] **R3** The event plane
-- [ ] **R4** The first window
-- [ ] **R5** Hermes
-- [ ] **R6** The Watch
-- [ ] **R7** Artemis, the control surface, the headless company
-- [ ] **R8** The Library
-- [ ] **R9** The Odeon, the org and the profiles
-- [ ] **R10** The Harbor
-- [ ] **R11** The Gymnasium, the Stoa and company modes
-- [ ] **R12** The Herald
-- [ ] **R13** The floor and the full window
-- [ ] **R14** Parity: the TypeScript tree deleted, the ruleset switched, M9 asked
-
----
-
 ## M8b — The crew can act, and the briefing can be read (plan drafted 2026-09-09)
 
 Derived from IMPLEMENTATION M8b + the numbered findings of
@@ -371,6 +317,64 @@ restarted at M6.9 or M7b. Every figure above is quoted from the package's own re
 **nothing was re-run to produce this entry**, and no box was ticked that its
 implementation doc did not already evidence. See
 [the status snapshot](status/2026-09-15-status.md).
+
+## The Rust rewrite — R0 to R14 (ADR-0041; plan approved 2026-10-19)
+
+The order and each phase's exit criteria are in [`RUST-PLAN.md`](./RUST-PLAN.md) §5.
+A phase's packages are listed here when the Architect approves them at that phase's
+start. R0's were approved with the plan. A ticked box carries its evidence, the same
+as every M package.
+
+### R0 — The workspace and its gates
+
+- [x] **R0.1 Workspace skeleton** — `Cargo.toml`, `rust-toolchain.toml` (1.96.0),
+  `[workspace.lints]`, `clippy.toml`, `deny.toml`, `target/` ignored, and
+  `CARGO_TARGET_DIR` outside OneDrive documented. *Evidence (2026-10-19, win32,
+  toolchain 1.96.0):* `cargo xtask gate` all steps green (9 unit + 5 integration tests;
+  cargo-deny advisories, bans, licenses, sources ok). 13 of 13 planted lint violations
+  refused by their own rule. An MPL-2.0 crate and a `*` version were each refused by
+  cargo-deny. Mutation round: 31 mutants, 26 caught, 5 unviable, 0 missed. Its control
+  (unit tests only) reports 12 missed. A stale `Cargo.lock` refused (exit 101, lockfile
+  unchanged) after a review found the first alias rewrote it and reported green. Linux
+  and Windows CI not yet run (R0.2).
+  [`2026-10-19-r0-1-workspace-skeleton.md`](./implementations/2026-10-19-r0-1-workspace-skeleton.md)
+- [x] **R0.2 The gate chain** — `xtask` with `gate`, `invariants` and `deps`, and the
+  `rust` CI job on Linux and Windows. Each rule fails a planted violation by file and
+  line. *Evidence (2026-10-19):* gate all six steps green on win32 (76 unit + 8
+  integration tests), and fmt, clippy, tests, invariants and deps green on Linux (WSL2).
+  Every rule refused its plants by file and line in a scratch workspace: 10
+  invariants violations and 3 deps plants, offline, lockfile unchanged. `cargo xtask
+  mutants xtask` round 3: ROUND OK, 225 mutants, 211 caught, 0 missed, 14 unviable;
+  control 55/55 missed; sources unchanged. Rounds 1 (34 survivors, each answered) and
+  2 (baseline failed in the copy) are in the doc. CI run 39312750826 at `970ac0b`: the
+  Rust gate succeeded on ubuntu, windows and macos, and every TypeScript check passed.
+  [`2026-10-19-r0-2-the-gate-chain.md`](./implementations/2026-10-19-r0-2-the-gate-chain.md)
+- [x] **R0.3 The standards learn Rust** — the Rust edition of ENGINEERING-STANDARDS and
+  BUILD-PROMPT §3 (ADR-0041's table), `check-readme-current.cjs` learning the `R`
+  prefix, and the skills learning the R-order and the Rust gate. *Evidence
+  (2026-10-19):* see [`2026-10-19-r0-3-standards-learn-rust.md`](./implementations/2026-10-19-r0-3-standards-learn-rust.md)
+  §6. The README check sees the R track and named R0.1 and R0.2 as undescribed on the
+  real tree before the README learned them. Its four new cases pass, and its mutation
+  round is in the doc. The SRS amendments to FR-1.1, NFR-8 and NFR-16 are applied.
+
+### R1 to R14
+
+- [ ] **R1** The home and the book of record
+- [ ] **R2** The terminal plane and the engine seam
+- [ ] **R3** The event plane
+- [ ] **R4** The first window
+- [ ] **R5** Hermes
+- [ ] **R6** The Watch
+- [ ] **R7** Artemis, the control surface, the headless company
+- [ ] **R8** The Library
+- [ ] **R9** The Odeon, the org and the profiles
+- [ ] **R10** The Harbor
+- [ ] **R11** The Gymnasium, the Stoa and company modes
+- [ ] **R12** The Herald
+- [ ] **R13** The floor and the full window
+- [ ] **R14** Parity: the TypeScript tree deleted, the ruleset switched, M9 asked
+
+---
 
 ## M9 — The harness is the product (plan drafted and APPROVED FOR PLANNING 2026-10-02; build NOT started)
 

@@ -36,9 +36,18 @@ and [contributions are welcome](./CONTRIBUTING.md).
 
 What works right now: the Electron shell, real agent CLIs under management with
 memory and mailboxes, the 2D floor, the Agora, the Odeon, the Stoa and the Gymnasium
-self-improvement loop. Every package through M8c is built. The current milestone is
-**M9 — the harness is the product**, planned and not yet started: the Architect has
-approved its plan and not yet its build ([`docs/M9-PLAN.md`](./docs/M9-PLAN.md)).
+self-improvement loop. Every package through M8c is built.
+
+**Ephesus is being rewritten in Rust, window included**
+([ADR-0041](./docs/adr/ADR-0041-ephesus-is-rewritten-in-rust.md), decided 2026-10-19).
+Everything this README shows and describes, and everything the Quick start builds, is
+still the TypeScript build. It is what runs today and is frozen as the reference the
+rewrite is checked against. It is replaced only when the Rust build does everything it
+does: phase R14 of [`docs/RUST-PLAN.md`](./docs/RUST-PLAN.md). The rewrite has started
+with its foundations, the workspace and the gates every Rust change must pass, and has
+no runnable app yet. **M9 — the harness is the product** follows the rewrite and is
+still planned and not started: the Architect has approved its plan and not yet its build
+([`docs/M9-PLAN.md`](./docs/M9-PLAN.md)).
 The pitch above describes where Phase 9 (M9b to M9h,
 [`docs/PHASE-9-PLAN.md`](./docs/PHASE-9-PLAN.md)) takes Ephesus; like M9, Phase 9 is
 approved for planning only, and none of it is built.
@@ -434,6 +443,40 @@ This repository is a complete, self-contained documentation suite. Read in this 
 
 ## Where the build stands
 
+**The Rust rewrite has started (R0 → R14).** On 2026-10-19 the Architect directed a
+rewrite of every component in Rust: the core, the hook shims, the CLI and the window,
+which moves to egui. The point is a faster, lighter harness. The TypeScript build takes
+1.53 s to start serving and holds 269.5 MB of private memory, and the rewrite is held to
+half of each, measured the same way at parity
+([GYM-013](./docs/gymnasium/proposals/GYM-013-the-rust-rewrite-is-measured.md)). The
+requirements and the thirteen invariants do not change. The order, phase by phase, is
+[`docs/RUST-PLAN.md`](./docs/RUST-PLAN.md). Phase R0 builds the gates first, so every
+later phase is checked from its first line.
+
+<!-- landed: R0.1 R0.2 R0.3
+     Checked by scripts/check-readme-current.cjs against the register (docs/PROGRESS.md
+     and the milestones archived in docs/progress/): every package of the milestone or
+     phase holding the most recent tick must be listed here, and listing one is a claim
+     that the prose below actually says what it did. The check catches the oversight
+     — a package landing while nobody touched this file — which is the failure that made
+     this section two milestones stale at M8.4 and three packages stale again by M8.9.
+     It cannot catch someone editing this line without writing the sentence, and is not
+     meant to. -->
+Landed so far:
+
+- **R0.1, the workspace.** Rust's toolchain is pinned. The lints refuse an unwrap, a
+  panic, an `unsafe` block, a discarded result, a direct file write or a process start
+  outside the crates allowed one. `cargo xtask gate` runs format, lint, test and the
+  license and advisory scan, and stops at the first red step.
+- **R0.2, the checks clippy cannot make.** Every crate must opt into those lints, the
+  window crate cannot reach file, process or network I/O, only the single committer may
+  start git, and every dependency is one the Architect approved. An exemption has to
+  say what it excuses. A mutation command judges its own rounds against a control, and
+  a CI job runs the whole gate on Linux, Windows and macOS.
+- **R0.3, the rules taught the new tree.** The engineering standards, the requirements'
+  wording, this check and the skills that drive a build session now know the Rust gate
+  and the phase order.
+
 > **What comes next is decided and not started.** On 2026-10-02 the Architect
 > planned **M9 — The harness is the product**: Ephesus's own agent engine
 > (`eph-agent`, [ADR-0036](./docs/adr/ADR-0036-two-engine-kinds.md)) running any
@@ -470,7 +513,9 @@ mid-run. That run has not happened, so the row is open — as M7's own exit has
 been since 2026-09-01, for the same reason. The script for it is
 [`docs/EXIT-M8.md`](./docs/EXIT-M8.md).
 
-<!-- landed: M8.0 M8.1 M8.2 M8.3 M8.4 M8.5 M8.6 M8.7a M8.7b M8.8 M8.9 M8.10 M8.11 M8.12 M8.13 M8.14 M8b M8c
+<!-- M8 was the current milestone until the Rust rewrite; this was its marker, kept
+     as history: M8.0 M8.1 M8.2 M8.3 M8.4 M8.5 M8.6 M8.7a M8.7b M8.8 M8.9 M8.10 M8.11
+     M8.12 M8.13 M8.14 M8b M8c. The marker the check reads is the R0 one above.
      Checked by scripts/check-readme-current.cjs against the register (docs/PROGRESS.md
      and the milestones archived in docs/progress/): every
      package ticked there must be listed here, and listing one is a claim that

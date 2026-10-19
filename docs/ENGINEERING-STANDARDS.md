@@ -20,6 +20,45 @@ decision memo, not via an exception.
   `main/herald/` imports a voice SDK; nothing outside `main/engines/` imports
   engine-specific code (NFR-12).
 
+### 1.1 The Rust workspace (ADR-0041; binding for everything under `xtask/` and `crates/`)
+
+Ephesus is being rewritten in Rust. Until parity (R14), the bullets above bind the
+frozen TypeScript tree, which its own CI still checks, and this section binds the
+Rust workspace. How each of the thirteen invariants holds in Rust is ADR-0041's
+invariant table. It lives there and is not restated here. What follows is the
+operational rules the workspace's first packages established (R0.1, R0.2).
+
+- **Toolchain.** `rust-toolchain.toml` pins 1.96.0 with rustfmt and clippy. A bump is a
+  reviewed commit. Set `CARGO_TARGET_DIR` outside OneDrive. `cargo xtask gate` warns
+  when it is unset inside a OneDrive folder.
+- **The gate** is `cargo xtask gate`: `fmt --check`, `clippy -D warnings`, `test`,
+  `cargo deny check`, `xtask invariants`, `xtask deps`, in that order, stopping at the
+  first red step (RUST-PLAN §4). It runs through the `cargo xtask` alias, which carries
+  `--locked`, so a stale `Cargo.lock` fails instead of being rewritten. CI's `rust` job
+  runs the same chain on Linux, Windows and macOS.
+- **Lints.** Every crate opts into `[workspace.lints]` (`[lints] workspace = true`), and
+  `xtask invariants` refuses one that does not. A disallowed method is exempted only by
+  `#[expect(clippy::disallowed_methods, reason = "<category>: …")]`, where the category
+  is `process:`, `git:` or `fs-write:`. The exemption sits on the fn, impl, module or
+  file it covers, in a crate RUST-PLAN §3.2 allows that category. `#[allow]` is refused,
+  because an `expect` fails once its call is gone.
+- **Dependencies.** A direct dependency is a crate in an approved set in
+  `docs/RUST-CRATES.md` (`xtask deps`). A crate outside it gets its own memo row first
+  (invariant 10). `cargo deny` holds the whole graph to the license allowlist and the
+  advisory database.
+- **Mutation rounds** are `cargo xtask mutants <crate>`, with `.cargo/mutants.toml` as
+  the committed spec. Its control (one shard, no test run, every viable mutant must be
+  missed) runs inside the same command, and the verdict is ROUND OK, survivors or
+  INVALID by the five rules in `xtask/src/mutants.rs`. A test fixture must not live
+  under `mutants.out/` or `target/`, because cargo-mutants does not copy either into the
+  tree it mutates.
+- **Before each commit of a Rust package** (Architect, 2026-10-19): `cargo xtask gate`,
+  plus the frozen tree's checks a Rust change can break: `prettier --check .`,
+  `eslint . --max-warnings 0`, `node scripts/check-invariants.cjs`,
+  `node scripts/check-readme-current.cjs` and `node scripts/check-attribution.cjs`.
+  R0.2 showed a Rust fixture turning `main`'s required check red through Prettier. The
+  full typecheck and vitest suite stay CI's job for a Rust-only diff.
+
 ## 2. Repository conventions
 
 ```
@@ -142,7 +181,9 @@ The boundaries these rules defend, what each one actually stops, and the risks t
 ## 6. Definition of Done
 
 A change is done when:
-1. Typecheck, lint, and the test suite pass locally and in CI.
+1. Typecheck, lint, and the test suite pass locally and in CI. For the Rust workspace:
+   `cargo xtask gate` and the frozen tree's checks pass locally (§1.1), and CI's `rust`
+   job passes on all three platforms.
 2. New behavior has tests at the right pyramid level (TEST-STRATEGY §2) and every
    fixed bug has a regression test named for its issue.
 3. Evidence is attached to the PR (§2).
@@ -192,7 +233,11 @@ A change is done when:
    test written, or the reason none can be, recorded — rather than counted
    (TEST-STRATEGY §10). The bar is the control and the triage, never a percentage: a
    tool that implied a score would replace the question a survivor asks.
-   *(GYM-008.)*
+   *(GYM-008.)* In the Rust workspace the round is `cargo xtask mutants <crate>`
+   (§1.1), and its control is certified when every viable control mutant is missed.
+   The coverage half of item 7 arrives for Rust with `cargo-llvm-cov` floors at R1.
+   Until then a Rust package's evidence names its production call path, or records
+   that there is none.
 
 ## 7. Agent-specific standards
 

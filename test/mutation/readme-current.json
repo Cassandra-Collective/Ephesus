@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "package": "PROGRESS-ARCHIVE",
-  "about": "the README check reads the register as PROGRESS.md plus the milestones archived in docs/progress/, in build order, refuses a stray file in the archive, and fails CI by its exit status",
+  "about": "the README check reads the register as PROGRESS.md plus the milestones archived in docs/progress/, in build order, refuses a stray file in the archive, fails CI by its exit status, and reads the Rust rewrite's R track keyed by letter and number (R0.3)",
   "tests": ["test/scripts/check-readme-current.test.ts"],
   "mutants": [
     {
@@ -67,6 +67,27 @@
       "find": "  for (const line of result.err) console.error(line)",
       "replace": "",
       "why": "a failing check names what disagrees; a bare exit 1 teaches nothing"
+    },
+    {
+      "id": "R1-r-track-unseen",
+      "file": "scripts/check-readme-current.cjs",
+      "find": "    const match = /^- \\[x\\] \\*\\*(([MR])(\\d+)(?:\\.\\d+)?[a-z]?)\\b/.exec(line.trim())",
+      "replace": "    const match = /^- \\[x\\] \\*\\*((M)(\\d+)(?:\\.\\d+)?[a-z]?)\\b/.exec(line.trim())",
+      "why": "the Rust rewrite ticks R packages: with the track unseen, the README is held to the M milestone while R work lands undescribed"
+    },
+    {
+      "id": "R2-number-only-key",
+      "file": "scripts/check-readme-current.cjs",
+      "find": "      ticked.push({ id: match[1], milestone: `${match[2]}${match[3]}` })",
+      "replace": "      ticked.push({ id: match[1], milestone: match[3] })",
+      "why": "a milestone is keyed by its letter and number: keyed by number alone, R0 swallows M0's packages"
+    },
+    {
+      "id": "R3-summary-row-counted",
+      "file": "scripts/check-readme-current.cjs",
+      "find": "    if (entry.milestone === last.milestone && entry.id !== entry.milestone) ids.push(entry.id)",
+      "replace": "    if (entry.milestone === last.milestone) ids.push(entry.id)",
+      "why": "a phase or milestone's own summary row (R1, M8) is not a package the README must name"
     }
   ]
 }
