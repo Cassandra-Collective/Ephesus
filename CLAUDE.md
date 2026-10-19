@@ -1,7 +1,9 @@
 # Ephesus — project memory for Claude Code sessions
 
-Ephesus is a multi-agent harness desktop app (Electron + React + TypeScript + Pixi.js +
-xterm.js + node-pty): a "company of agents" governed by a human Architect. **The
+Ephesus is a multi-agent harness desktop app: a "company of agents" governed by a human
+Architect. It was built in Electron + React + TypeScript + Pixi.js + xterm.js + node-pty,
+and **is being rewritten in Rust, window included (ADR-0041, 2026-10-19)**. The
+TypeScript tree is frozen as the behavioural reference until parity. **The
 company's primary standing mission is to improve itself** — every session here either
 builds the system or improves how it is built, and both flow through the same
 documentation and gates.
@@ -11,7 +13,8 @@ documentation and gates.
 - **Implementing the system** → follow `BUILD-PROMPT.md` exactly. It defines your role,
   reading protocol, work packages, and report format. Resume from the *Resume here*
   block at the top of `docs/PROGRESS.md` — it names the next step and what waits on the
-  Architect (M9, planned and not authorised to start, as of 2026-10-11).
+  Architect. As of 2026-10-19 that is the Rust rewrite, `docs/RUST-PLAN.md` (R0 → R14),
+  which runs before M9. M9 is still planned and not authorised to start.
 - **Improving the system/process** → follow the Gymnasium loop:
   `docs/adr/ADR-0015-gymnasium-self-improvement.md`. Improvement work is proposed,
   gated, and measured — never freelanced.
@@ -36,7 +39,15 @@ never edit an accepted ADR; supersede it.
 | Build order and current state | `docs/IMPLEMENTATION.md` + `docs/PROGRESS.md` (its *Resume here* block; closed milestones in `docs/progress/`) |
 | Claude Code automation in this repo | `docs/AUTOMATION.md` |
 
-## Commands (once code exists — no-ops before M0.1)
+## Commands
+
+The Rust workspace (from R0.1; set `CARGO_TARGET_DIR` outside OneDrive first):
+
+```bash
+cargo xtask gate   # fmt, clippy -D warnings, test, deny, invariants, deps (RUST-PLAN §4)
+```
+
+The frozen TypeScript tree (its CI still guards `main` until R14):
 
 ```bash
 npm run dev        # Electron app with hot reload
