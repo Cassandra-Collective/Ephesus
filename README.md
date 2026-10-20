@@ -453,7 +453,7 @@ requirements and the thirteen invariants do not change. The order, phase by phas
 [`docs/RUST-PLAN.md`](./docs/RUST-PLAN.md). Phase R0 builds the gates first, so every
 later phase is checked from its first line.
 
-<!-- landed: R1.0 R1.1 R1.2
+<!-- landed: R1.0 R1.1 R1.2 R1.3
      Checked by scripts/check-readme-current.cjs against the register (docs/PROGRESS.md
      and the milestones archived in docs/progress/): every package of the milestone or
      phase holding the most recent tick must be listed here, and listing one is a claim
@@ -482,6 +482,13 @@ Landed so far in R1, the home and the book of record:
   cut, and a line torn by a crash is left as it is. A new home is marked as this build's.
   A directory it did not make, the TypeScript build's live home included, is reported
   once and never written to.
+- **R1.3, the single committer and the worktrees.** One thread makes every commit to the
+  Agora and holds a lock the operating system releases if the harness dies, so a second
+  harness cannot commit beside it and a crash leaves no stale lock to clean up. The
+  Agora's git reads none of the machine's git settings, so no global ignore file can hide
+  work from history. A harness killed mid-commit loses nothing: the next boot commits what
+  it left. An agent's checkout is never deleted while it holds uncommitted work, or a
+  commit no branch keeps.
 
 **R0, the workspace and its gates, is done** (2026-10-19):
 

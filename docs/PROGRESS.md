@@ -21,7 +21,7 @@ recorded.
 
 ## Resume here
 
-*As of 2026-10-20: R0.1 is merged as #102 and R0.2 is PR #104. R0.3 (`feature/r0-3-standards-learn-rust`), R1.0 (`feature/r1-0-home-design`), R1.1 (`feature/r1-1-eph-schema`) and R1.2 (`feature/r1-2-eph-fs`) are stacked on it, pushed, and get their PRs as the one below each merges. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
+*As of 2026-10-20: R0.1 is merged as #102 and R0.2 is PR #104. R0.3 (`feature/r0-3-standards-learn-rust`), R1.0 (`feature/r1-0-home-design`), R1.1 (`feature/r1-1-eph-schema`), R1.2 (`feature/r1-2-eph-fs`) and R1.3 (`feature/r1-3-eph-git`) are stacked on it, pushed, and get their PRs as the one below each merges. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
 
 **Ephesus is being rewritten in Rust (ADR-0041, the Architect's direction of
 2026-10-19), and the rewrite comes before everything below.** The Architect
@@ -31,13 +31,16 @@ approved [`RUST-PLAN.md`](./RUST-PLAN.md), crate Set A in
 (2026-10-20: `docs/sdd/SDD-RUST.md` §2 and §4). **R1.1 is done** (2026-10-20):
 `eph-schema` and the per-crate coverage floors, seeded from CI. **R1.2 is done**
 (2026-10-20): `eph-fs`, the one write path, the append-only log, and a home marked
-`home.json` that leaves a TypeScript-era home untouched. **The next build step is R1.3,
-`eph-git`**: the single committer and worktrees, with hermetic git in every test. Three
-constraints carry forward. A new crate's first push is red at the coverage step until
+`home.json` that leaves a TypeScript-era home untouched. **R1.3 is done** (2026-10-20):
+`eph-git`, the single committer with its own OS lock, hermetic Agora git, and worktrees
+that never delete work. **The next build step is R1.4, `eph-agora`**: the registry, the
+ledger, the board, the book of record and its readers, the degradation channel and the
+state stores. Four constraints carry forward. A new crate's first push is red at the coverage step until
 its floor is seeded from that push's CI runs (ENGINEERING-STANDARDS §1.1). R1.4's
 retention of done tasks must keep any task another depends on (SDD-RUST §4.5). And a
 `.tmp` file left by a crash before its rename is a recorded residual until the boot that
-runs ADR-0034's probe (R7). A later
+runs ADR-0034's probe (R7), and R1.4 seeds the Agora's `.gitignore` with `.*.tmp` so a
+commit never sweeps one into history (SDD-RUST §2). A later
 phase still starts only when he approves its package list, through AskUserQuestion.
 Silence is not a yes. The TypeScript tree is frozen as
 the behavioural reference and is deleted at R14 (parity). The rewrite is measured by
@@ -84,7 +87,7 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1.0 (the design) approved, and R1.1 (`eph-schema`, the coverage floors) and R1.2 (`eph-fs`) done, 2026-10-20; R1.3 next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1.0 (the design) approved, and R1.1 (`eph-schema`, the coverage floors) R1.2 (`eph-fs`) and R1.3 (`eph-git`) done, 2026-10-20; R1.4 next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 
@@ -432,8 +435,39 @@ and opens when #104 merges.
     commit carrying the floor is green on every job, including all seven gate steps on
     all three platforms.
     [`2026-10-20-r1-2-eph-fs.md`](./implementations/2026-10-20-r1-2-eph-fs.md)
-  - [ ] **R1.3 `eph-git`** — the single committer and worktrees; hermetic git in every
+  - [x] **R1.3 `eph-git`** — the single committer and worktrees; hermetic git in every
     git-running test.
+    *Evidence (2026-10-20):* `crates/eph-git` is the one crate that runs git. Its two
+    Architect decisions:
+    - the committer holds an OS lock on `.git/ephesus-committer.lock` for life, so a
+      second committer is refused and a crash leaves no stale lock;
+    - the Agora's git reads none of the machine's configuration.
+
+    Open takes the lock before `git init --template=` and judges a killed harness's
+    `index.lock` before any commit. Commits run on one queue thread, batched, retried over
+    a fixed schedule, and a failure nobody waits for is reported. Worktrees identify
+    repositories by git's common directory. They never delete uncommitted work, or a
+    detached commit nothing holds.
+
+    A design-fidelity review and a refutation pass found real defects, several measured:
+    - XDG ignore files and a template reached the "hermetic" Agora;
+    - `status.showUntrackedFiles=no` made `git worktree remove` delete work, which is
+      also patched in the TypeScript build as `fix/worktree-untracked-files`.
+
+    Three answers came from the Architect after review. Real kills, with the test binary
+    rerun as the harness, at each fault point and at random, lose nothing on reopen, and
+    fsck is clean.
+
+    Mutation rounds with controls: `eph-git` ROUND OK on round 4 (103 of 103 viable),
+    with one timing-only exclusion recorded, and `eph-fs` ROUND OK (83 of 83). CI found
+    three more defects, all fixed: a lock a forked child still held on Linux, and two
+    tests on Windows that claimed more than the design does.
+
+    The floor was seeded from CI run 39465824068's three attempts on all three
+    platforms, on tree `fnv1a64:26f0592f6e03d9d1`: `eph-git` 98.92% (Windows 99.05%), and
+    `eph-fs` raised to 97.24%. CI run 39471410815 on `15b77f6`, the final tree, is green on
+    every job, including all seven gate steps on all three platforms.
+    [`2026-10-20-r1-3-eph-git.md`](./implementations/2026-10-20-r1-3-eph-git.md)
   - [ ] **R1.4 `eph-agora`** — registry, ledger, board, the book of record, degradations,
     state stores, `DIAGNOSIS.md`.
 - [ ] **R2** The terminal plane and the engine seam
