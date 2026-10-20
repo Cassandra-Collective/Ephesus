@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 2,
+  "seededFrom": 1,
+  "autonomy": "autonomous",
+  "rules": {
+    "destructive": {
+      "autonomy": "supervised"
+    },
+    "spend": {
+      "autonomy": "supervised",
+      "maxSpendTokens": 200000
+    },
+    "scope-change": {
+      "autonomy": "supervised"
+    },
+    "prod-facing": {
+      "autonomy": "supervised"
+    },
+    "outbound": {
+      "autonomy": "supervised"
+    },
+    "needs-human": {
+      "autonomy": "manual"
+    }
+  }
+}

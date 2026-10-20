@@ -85,6 +85,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "eph-fs"
+version = "0.0.0"
+dependencies = [
+ "eph-schema",
+]
+
+[[package]]
 name = "eph-schema"
 version = "0.0.0"
 dependencies = [
