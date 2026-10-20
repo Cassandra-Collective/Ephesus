@@ -8,6 +8,8 @@
 //!   append, `seq` recovered at open, a torn tail left alone, rotation by rename.
 //! - [`home`] for the harness home: whose a directory is, its marker, its
 //!   directories, and the defaults seeded only when absent.
+//! - [`lock::Exclusive`] for a lock one holder keeps while it runs, released by
+//!   the OS when the process dies: the single committer's lock.
 //!
 //! This is the one crate RUST-PLAN §3.2 allows to write a file another process
 //! reads, and each write says so with an `fs-write:` exemption.
@@ -15,3 +17,4 @@
 pub mod append;
 pub mod atomic;
 pub mod home;
+pub mod lock;
