@@ -3,8 +3,8 @@
 //!
 //! Contract: [`Git::run`] runs `git <overrides> <args>` in `cwd` and returns a
 //! [`GitResult`]. It never panics and never returns an error. A git that could
-//! not start, failed, or overran its deadline is a result whose `code` and
-//! `stderr` say which.
+//! not start, failed, overran its deadline, or whose output never arrived is a
+//! result with no `code`, and its `stderr` ends with a sentence saying which.
 //!
 //! **Every call**, whatever its profile:
 //! - takes no input (stdin is null) and asks nothing (`GIT_TERMINAL_PROMPT=0`),
@@ -12,25 +12,43 @@
 //! - takes no optional lock (`GIT_OPTIONAL_LOCKS=0`), so `status` never holds
 //!   `index.lock`, and reads a pathspec literally (`GIT_LITERAL_PATHSPECS=1`);
 //! - drops the variables that point git at a repository (`GIT_DIR`,
-//!   `GIT_WORK_TREE`, `GIT_INDEX_FILE`, …). A harness started from a git hook
-//!   or an agent's shell would otherwise run against someone else's repository;
+//!   `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_QUARANTINE_PATH`, …). A harness
+//!   started from a git hook or an agent's shell would otherwise run against
+//!   someone else's repository;
 //! - never signs and never runs a hook, and the housekeeping a commit starts
 //!   runs in the foreground, inside the call (`maintenance.autoDetach=false`,
 //!   `gc.autoDetach=false`; memory: git's housekeeping outlives the commit);
 //! - has its output read on two threads while the deadline is watched, so a git
-//!   that fills a pipe is never stalled. One past its deadline (20 s) is killed.
-//!   A grandchild, such as a shell alias, can keep the pipes open after git is
-//!   gone, so its output is waited for only briefly;
+//!   that fills a pipe is never stalled;
 //! - opens no console window on Windows.
 //!
+//! **The deadline (20 s) bounds the call, not git.** Past it, the process this
+//! runner started is killed and the call returns. That process is not always
+//! the whole git: on Windows the `git.exe` on PATH is Git for Windows' wrapper,
+//! and killing it leaves the real git running (measured, 2026-10-20). On POSIX
+//! the kill does not reach git's own children, such as a commit's housekeeping.
+//! So a git killed at its deadline may finish its work later, or leave a lock
+//! behind. Killing the whole tree is R2's, with `eph-pty`'s Job Objects and
+//! process groups (DECISIONS-LOG 2026-10-20, *R1.3 — Architect decisions,
+//! after review*). Output is waited for until the deadline and half a second
+//! more. A grandchild such as a shell alias can hold the pipes open after git
+//! has exited, and output that never arrives makes the call a failure, not an
+//! empty success.
+//!
 //! **Two profiles** (DECISIONS-LOG 2026-10-20, *R1.3 — Architect decisions*):
-//! - [`Git::agora`] reads no system or global configuration
-//!   (`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, every
-//!   config-value variable dropped) and commits as `Ephesus
-//!   <harness@ephesus.local>` through the identity variables, which outrank
-//!   configuration from any source. So a global `excludesFile` cannot hide an
-//!   Agora file from `add -A`, a system `autocrlf` cannot rewrite its line
-//!   endings, and an exported `GIT_AUTHOR_NAME` cannot rename its committer.
+//! - [`Git::agora`] reads no machine configuration:
+//!   - no system or global config (`GIT_CONFIG_NOSYSTEM=1`,
+//!     `GIT_CONFIG_GLOBAL=/dev/null`, every config-value variable dropped);
+//!   - none of git's default user files either (the XDG `git/ignore` and
+//!     `git/attributes`, the system attributes);
+//!   - nothing the environment would choose for a new repository (a template
+//!     directory, a hash, a ref format).
+//!
+//!   It commits as `Ephesus <harness@ephesus.local>` through the identity
+//!   variables, which outrank configuration from any source. So no host
+//!   setting can hide an Agora file from `add -A`, rewrite its line endings,
+//!   run its code through a planted `core.fsmonitor`, or rename its committer.
+//!   It is the committer's alone, so it is not public.
 //! - [`Git::target`] reads the user's configuration (`core.longpaths`,
 //!   `url.insteadOf`), for worktrees and remotes of a target repository.
 //!   [`Git::without_machine_config`] gives it the Agora's isolation, which is
@@ -56,6 +74,10 @@ pub const AGORA_EMAIL: &str = "harness@ephesus.local";
 
 /// How long one git call may run before it is killed (today's figure).
 pub const TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The longest deadline a caller may set: one hour, so a deadline is always a
+/// time `Instant` can hold.
+pub const MAX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// How often a running git is checked against its deadline.
 const POLL: Duration = Duration::from_millis(2);
@@ -84,7 +106,9 @@ const ALWAYS: [(&str, &str); 3] = [
 ];
 
 /// The variables that point git at a repository, dropped from every call.
-const REPOSITORY_VARS: [&str; 8] = [
+/// `GIT_QUARANTINE_PATH` is set inside a `pre-receive` hook, where it forbids
+/// every ref update.
+const REPOSITORY_VARS: [&str; 9] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",
@@ -93,21 +117,42 @@ const REPOSITORY_VARS: [&str; 8] = [
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_CEILING_DIRECTORIES",
     "GIT_NAMESPACE",
+    "GIT_QUARANTINE_PATH",
 ];
 
-/// The config-value variables dropped when no machine configuration is read,
-/// beside every `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>`.
-const CONFIG_VARS: [&str; 4] = [
+/// The machine's variables dropped when no machine configuration is read,
+/// beside every `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>`: the
+/// config-value variables, and what the environment would choose for a new
+/// repository or read attributes from.
+const MACHINE_VARS: [&str; 8] = [
     "GIT_CONFIG",
     "GIT_CONFIG_SYSTEM",
     "GIT_CONFIG_COUNT",
     "GIT_CONFIG_PARAMETERS",
+    "GIT_TEMPLATE_DIR",
+    "GIT_DEFAULT_HASH",
+    "GIT_DEFAULT_REF_FORMAT",
+    "GIT_ATTR_SOURCE",
 ];
 
 /// The variables that read no machine configuration.
-const NO_MACHINE_CONFIG: [(&str, &str); 2] = [
+const NO_MACHINE_CONFIG: [(&str, &str); 3] = [
     ("GIT_CONFIG_NOSYSTEM", "1"),
     ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ("GIT_ATTR_NOSYSTEM", "1"),
+];
+
+/// The command-line configuration that reads no machine configuration: with
+/// the keys unset, git falls back to the user's XDG `git/ignore` and
+/// `git/attributes` (measured, 2026-10-20). `core.fsmonitor` would run a
+/// command on every `status`.
+const NO_MACHINE_OVERRIDES: [&str; 6] = [
+    "-c",
+    "core.excludesFile=/dev/null",
+    "-c",
+    "core.attributesFile=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
 ];
 
 /// The Agora's identity, as the variables that outrank any configuration.
@@ -126,15 +171,17 @@ const IDENTITY_DATES: [&str; 2] = ["GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"];
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// What one git call did.
+#[must_use]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitResult {
     /// What git printed on stdout, decoded lossily.
     pub stdout: String,
     /// What git printed on stderr, decoded lossily, with this runner's own
-    /// sentence appended when it stopped git or could not start it.
+    /// sentence appended when it could not start git, stopped it, could not
+    /// read its status, or never received its output.
     pub stderr: String,
-    /// The exit code, or `None` when git could not start, was killed at its
-    /// deadline, or was ended by a signal.
+    /// The exit code, or `None` in each of those cases, or when a signal ended
+    /// git.
     pub code: Option<i32>,
 }
 
@@ -155,8 +202,9 @@ pub struct Git {
 }
 
 impl Git {
-    /// The Agora's runner: no machine configuration, the Agora's identity.
-    pub fn agora() -> Git {
+    /// The Agora's runner: no machine configuration, the Agora's identity. The
+    /// committer's alone: any other git on the Agora would bypass its queue.
+    pub(crate) fn agora() -> Git {
         Git {
             machine_config: false,
             identity: true,
@@ -186,9 +234,9 @@ impl Git {
         self.machine_config
     }
 
-    /// The same runner with another deadline.
+    /// The same runner with another deadline, at most [`MAX_TIMEOUT`].
     pub fn with_timeout(mut self, timeout: Duration) -> Git {
-        self.timeout = timeout;
+        self.timeout = timeout.min(MAX_TIMEOUT);
         self
     }
 
@@ -216,9 +264,9 @@ impl Git {
         let deadline = Instant::now() + self.timeout;
         let exit = finish(&mut child, deadline);
         let until = Instant::now().max(deadline) + DRAIN_GRACE;
-        let stdout = collect(stdout.as_ref(), until);
-        let mut stderr = collect(stderr.as_ref(), until);
-        let code = match exit {
+        let (stdout, stdout_arrived) = collect(stdout.as_ref(), until);
+        let (mut stderr, stderr_arrived) = collect(stderr.as_ref(), until);
+        let mut code = match exit {
             Exit::Exited(code) => code,
             Exit::Stopped => {
                 stderr.push_str(&format!(
@@ -227,7 +275,15 @@ impl Git {
                 ));
                 None
             }
+            Exit::Lost(error) => {
+                stderr.push_str(&format!("\ngit's status could not be read: {error}"));
+                None
+            }
         };
+        if !(stdout_arrived && stderr_arrived) {
+            stderr.push_str("\ngit's output did not arrive in time");
+            code = None;
+        }
         GitResult {
             stdout,
             stderr,
@@ -252,9 +308,9 @@ impl Git {
         for name in inherited.iter().filter(|name| self.drops(name)) {
             command.env_remove(name);
         }
-        command.envs(ALWAYS);
+        command.envs(ALWAYS).args(OVERRIDES);
         if !self.machine_config {
-            command.envs(NO_MACHINE_CONFIG);
+            command.envs(NO_MACHINE_CONFIG).args(NO_MACHINE_OVERRIDES);
         }
         if self.identity {
             command.envs(IDENTITY);
@@ -265,7 +321,6 @@ impl Git {
             command.creation_flags(CREATE_NO_WINDOW);
         }
         command
-            .args(OVERRIDES)
             .args(args)
             .current_dir(cwd)
             .stdin(Stdio::null())
@@ -281,7 +336,7 @@ impl Git {
         let name = name.as_str();
         REPOSITORY_VARS.contains(&name)
             || (!self.machine_config
-                && (CONFIG_VARS.contains(&name)
+                && (MACHINE_VARS.contains(&name)
                     || name.starts_with("GIT_CONFIG_KEY_")
                     || name.starts_with("GIT_CONFIG_VALUE_")))
             || (self.identity && IDENTITY_DATES.contains(&name))
@@ -294,13 +349,18 @@ enum Exit {
     Exited(Option<i32>),
     /// It overran its deadline and was killed.
     Stopped,
+    /// Its status could not be read. It is not killed: its pid may already
+    /// belong to another process.
+    Lost(std::io::Error),
 }
 
 /// Waits for `child` until `deadline`, then kills it.
 fn finish(child: &mut Child, deadline: Instant) -> Exit {
     loop {
-        if let Ok(Some(status)) = child.try_wait() {
-            return Exit::Exited(status.code());
+        match child.try_wait() {
+            Ok(Some(status)) => return Exit::Exited(status.code()),
+            Ok(None) => {}
+            Err(error) => return Exit::Lost(error),
         }
         match deadline.checked_duration_since(Instant::now()) {
             Some(left) => thread::sleep(left.min(POLL)),
@@ -328,16 +388,18 @@ fn drain<R: Read + Send + 'static>(mut pipe: R) -> Receiver<Vec<u8>> {
     receiver
 }
 
-/// A drained pipe's text, waited for until `until`; none for no pipe.
-fn collect(output: Option<&Receiver<Vec<u8>>>, until: Instant) -> String {
-    let bytes = output
-        .and_then(|output| {
-            output
-                .recv_timeout(until.saturating_duration_since(Instant::now()))
-                .ok()
-        })
-        .unwrap_or_default();
-    String::from_utf8_lossy(&bytes).into_owned()
+/// A drained pipe's text, waited for until `until`, and whether it arrived.
+fn collect(output: Option<&Receiver<Vec<u8>>>, until: Instant) -> (String, bool) {
+    let bytes = output.and_then(|output| {
+        output
+            .recv_timeout(until.saturating_duration_since(Instant::now()))
+            .ok()
+    });
+    let arrived = bytes.is_some();
+    (
+        String::from_utf8_lossy(&bytes.unwrap_or_default()).into_owned(),
+        arrived,
+    )
 }
 
 #[cfg(test)]
@@ -584,6 +646,7 @@ pub(crate) mod tests {
             ("GIT_DIR", other_git.to_str().unwrap()),
             ("GIT_WORK_TREE", other.to_str().unwrap()),
             ("git_index_file", "nowhere"),
+            ("GIT_QUARANTINE_PATH", "nowhere"),
         ]);
         for git in [Git::agora(), Git::target()] {
             let top = git
@@ -596,6 +659,22 @@ pub(crate) mod tests {
                 "git ran against the directory it was given"
             );
         }
+        // Inside a pre-receive hook git forbids every ref update; the variable
+        // that says so is dropped with the others.
+        let committed = git().with_environment(host).run(
+            &mine,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "q",
+            ],
+        );
+        assert!(committed.ok(), "{committed:?}");
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -699,7 +778,7 @@ pub(crate) mod tests {
         assert!(
             result
                 .stderr
-                .ends_with("git was stopped at its 300 ms deadline"),
+                .contains("\ngit was stopped at its 300 ms deadline"),
             "{result:?}"
         );
         assert!(took >= Duration::from_millis(300), "{took:?}");
@@ -708,5 +787,149 @@ pub(crate) mod tests {
             "a grandchild holding the pipes cannot hold the call: {took:?}"
         );
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn output_that_never_arrives_is_a_failure_not_an_empty_success() {
+        let dir = scratch("output-lost");
+        let started = Instant::now();
+        // git exits well inside its deadline, even on a loaded machine; the
+        // backgrounded sleep keeps its pipes open well past deadline and grace.
+        let result = git().with_timeout(Duration::from_secs(2)).run(
+            &dir,
+            &["-c", "alias.linger=!(sleep 10 &); echo hi", "linger"],
+        );
+        assert_eq!(result.code, None, "{result:?}");
+        assert!(
+            result
+                .stderr
+                .ends_with("\ngit's output did not arrive in time"),
+            "{result:?}"
+        );
+        assert!(
+            !result.stderr.contains("stopped"),
+            "git itself exited: {result:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(6),
+            "deadline plus grace, not the sleep"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_deadline_beyond_what_an_instant_can_hold_is_clamped() {
+        let dir = scratch("clamped");
+        let result = git().with_timeout(Duration::MAX).run(&dir, &["--version"]);
+        assert!(result.ok(), "{result:?}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn no_machine_config_holds_for_a_host_that_never_asked_for_it() {
+        let dir = scratch("nosystem");
+        let host = host_with(&[]);
+        let shown = |git: Git| {
+            git.with_environment(host.clone())
+                .run(
+                    &dir,
+                    &[
+                        "-c",
+                        "alias.eph-env=!echo \"[$GIT_CONFIG_NOSYSTEM] [$GIT_CONFIG_GLOBAL] [$GIT_ATTR_NOSYSTEM]\"",
+                        "eph-env",
+                    ],
+                )
+                .stdout
+                .trim()
+                .to_string()
+        };
+        assert_eq!(shown(Git::agora()), "[1] [/dev/null] [1]");
+        assert_eq!(shown(git()), "[1] [/dev/null] [1]");
+        assert_eq!(
+            shown(Git::target()),
+            "[] [] []",
+            "the user's profile sets none of them"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_agora_reads_no_users_default_ignore_or_attributes_file() {
+        let dir = scratch("xdg");
+        let xdg = dir.join("xdg");
+        write_atomic_in(&xdg.join("git").join("ignore"), "*.json\n");
+        write_atomic_in(&xdg.join("git").join("attributes"), "*.md text eol=crlf\n");
+        let empty = dir.join("empty.gitconfig");
+        write_atomic(&empty, b"").unwrap();
+        let host = host_with(&[
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+            ("GIT_CONFIG_GLOBAL", empty.to_str().unwrap()),
+            ("XDG_CONFIG_HOME", xdg.to_str().unwrap()),
+        ]);
+        let repo = dir.join("repo");
+        repo_with_commit(&repo);
+        write_atomic(&repo.join("registry.json"), b"{}\n").unwrap();
+        let status = |git: Git| {
+            git.with_environment(host.clone())
+                .run(&repo, &["status", "--porcelain"])
+                .stdout
+        };
+        let eol = |git: Git| {
+            git.with_environment(host.clone())
+                .run(&repo, &["check-attr", "eol", "--", "a.md"])
+                .stdout
+        };
+        assert!(
+            !status(Git::target()).contains("registry.json"),
+            "the plant is live for the user's profile"
+        );
+        assert!(
+            eol(Git::target()).contains("eol: crlf"),
+            "the plant is live for the user's profile"
+        );
+        assert!(
+            status(Git::agora()).contains("registry.json"),
+            "an XDG ignore cannot hide an Agora file"
+        );
+        assert!(
+            eol(Git::agora()).contains("eol: unspecified"),
+            "nor an XDG attributes file rewrite one"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_environment_cannot_choose_a_new_agoras_template_or_hash() {
+        let dir = scratch("template");
+        let template = dir.join("template");
+        write_atomic_in(&template.join("info").join("exclude"), "*.txt\n");
+        let host = host_with(&[
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_TEMPLATE_DIR", template.to_str().unwrap()),
+            ("GIT_DEFAULT_HASH", "sha256"),
+        ]);
+        for (git, name, planted) in [
+            (Git::target(), "user", true),
+            (Git::agora(), "agora", false),
+        ] {
+            let repo = dir.join(name);
+            fs::create_dir_all(&repo).unwrap();
+            let git = git.with_environment(host.clone());
+            assert!(git.run(&repo, &["init", "-b", "main"]).ok());
+            let format = git
+                .run(&repo, &["rev-parse", "--show-object-format"])
+                .stdout;
+            assert_eq!(format.trim() == "sha256", planted, "{name}: {format}");
+            let exclude = fs::read_to_string(repo.join(".git").join("info").join("exclude"))
+                .unwrap_or_default();
+            assert_eq!(exclude.contains("*.txt"), planted, "{name}: {exclude}");
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn write_atomic_in(path: &Path, text: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write_atomic(path, text.as_bytes()).unwrap();
     }
 }

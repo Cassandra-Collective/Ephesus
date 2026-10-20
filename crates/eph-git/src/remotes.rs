@@ -22,6 +22,7 @@ pub struct Remote {
 }
 
 /// What reading a checkout's remotes found.
+#[must_use]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemotesRead {
     /// The remotes, each name and URL once, in git's order.
@@ -40,18 +41,22 @@ pub fn read_remotes(git: &Git, cwd: &Path) -> RemotesRead {
     }
 }
 
-/// The remotes in `git remote -v` output: one line per remote per direction
-/// (`origin\thttps://… (fetch)`), so each name and URL is kept once. A line of
-/// any other shape is skipped.
+/// The remotes in `git remote -v` output: one line per remote per direction,
+/// `<name>\t<url> (fetch)`, so each name and URL is kept once. The name ends at
+/// the tab and the direction follows the last space, so a URL may hold spaces
+/// (`C:/My Repos/x`). A line of any other shape is skipped.
 pub fn parse_remotes(stdout: &str) -> Vec<Remote> {
     let mut remotes: Vec<Remote> = Vec::new();
     for line in stdout.lines() {
-        let mut words = line.split_whitespace();
-        let (Some(name), Some(url), Some("(fetch)" | "(push)"), None) =
-            (words.next(), words.next(), words.next(), words.next())
-        else {
+        let Some((name, rest)) = line.trim_end().split_once('\t') else {
             continue;
         };
+        let Some((url, "(fetch)" | "(push)")) = rest.rsplit_once(' ') else {
+            continue;
+        };
+        if name.trim().is_empty() || url.trim().is_empty() {
+            continue;
+        }
         let remote = Remote {
             name: name.to_string(),
             url: url.to_string(),
@@ -187,8 +192,20 @@ mod tests {
 
     #[test]
     fn a_line_of_any_other_shape_is_skipped() {
-        let stdout = "hint: something\norigin\thttps://a (fetch)\norigin\thttps://a (push)\nodd\thttps://b (fetchx)\nshort (fetch)\nlong https://c (push) extra\n\n";
+        let stdout = "hint: something\norigin\thttps://a (fetch)\norigin\thttps://a (push)\nodd\thttps://b (fetchx)\nshort (fetch)\nlong\thttps://c (push) extra\n\thttps://d (fetch)\nnourl\t (fetch)\n\n";
         assert_eq!(parse_remotes(stdout), vec![remote("origin", "https://a")]);
         assert_eq!(parse_remotes(""), Vec::new());
+    }
+
+    #[test]
+    fn a_url_holding_a_space_is_read_whole() {
+        let dir = scratch("remotes-space");
+        repo_with_commit(&dir);
+        must(&dir, &["remote", "add", "origin", "C:/My Repos/x"]);
+        assert_eq!(
+            read_remotes(&git(), &dir),
+            RemotesRead::Read(vec![remote("origin", "C:/My Repos/x")])
+        );
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

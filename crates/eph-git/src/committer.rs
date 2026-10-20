@@ -2,32 +2,39 @@
 //!
 //! Contract:
 //! - **One committer per Agora, enforced.** [`Committer::open`] takes an OS lock
-//!   on `.git/ephesus-committer.lock` and holds it until the committer is
-//!   dropped and its last git has finished. A second committer on the same
-//!   Agora, in this process or another, is refused with [`OpenError::Held`].
-//!   The OS releases the lock when the process dies, however it dies
-//!   (DECISIONS-LOG 2026-10-20, *R1.3 — Architect decisions*).
+//!   on `.git/ephesus-committer.lock` before it does anything else, and holds it
+//!   until the committer is dropped and its last git has finished. A second
+//!   committer on the same Agora, in this process or another, is refused with
+//!   [`OpenError::Held`]. The OS releases the lock when the process dies,
+//!   however it dies (DECISIONS-LOG 2026-10-20, *R1.3 — Architect decisions*).
+//! - **A killed harness's `index.lock` is judged at open**, with the lock held
+//!   and before any commit can run. Open waits while `.git/index.lock` exists,
+//!   over the retry schedule, so a git still running for a killed harness can
+//!   finish, and then removes one that outlived it ([`Opened::index_lock`]).
 //! - **One queue.** One thread runs every git call on the Agora, so two can never
 //!   run at once and `index.lock` contention cannot be self-inflicted.
 //! - **Batching.** Commits enqueued while the thread is busy land together, as
 //!   one commit whose message names every subject. Delivery is a rename,
 //!   durability is a commit, and commit throughput stays off delivery's path.
 //! - **Retries live here and nowhere else** (BUILD-PROMPT §7). A failed git
-//!   call is retried, five attempts in all, over the fixed [`RETRY_WAITS`], and
-//!   a stale `index.lock` is cleared before each retry. A lock can only be
-//!   stale here: this committer's own lock is held, so no other committer runs,
-//!   and none of its own gits does.
-//! - **A fault aborts its batch, with no retry.** A [`Faults`] hook that refuses
+//!   call is retried, five attempts in all, over the fixed [`RETRY_WAITS`].
+//!   Before each retry an `index.lock` is removed only if it is older than the
+//!   runner's deadline, because no git of this committer's can still hold one
+//!   that old. A younger one belongs to someone else, such as a `git status` in
+//!   the Architect's shell, and is waited on, never removed.
+//! - **A fault aborts its batch, with no retry.** A [`Hooks`] fault that refuses
 //!   at a [`FaultPoint`] stands for the harness dying there (TEST-STRATEGY §3,
 //!   S-BLACKOUT). Its reason is the batch's failure, word for word.
-//! - **Reconcile after a restart.** [`Committer::reconcile`] gives a git still
-//!   running for a killed harness the retry schedule to finish, removes
-//!   `index.lock` if it outlived it, and commits whatever was left.
-//! - **A failure loses no work.** A commit that gives up leaves the files on
-//!   disk, correct and not yet in history, and the next commit picks them up. A
-//!   failure nobody waits for is kept ([`Committer::failures`], the latest
-//!   [`MAX_RECORDED_FAILURES`]) instead of vanishing (invariant 7).
+//! - **Reconcile after a restart.** [`Committer::reconcile`] commits whatever a
+//!   killed harness left, under [`RECONCILE_SUBJECT`].
+//! - **A failure loses no work and is never silent.** A commit that gives up
+//!   leaves the files on disk, correct and not yet in history, and the next
+//!   commit picks them up. A failure nobody waits for, from
+//!   [`Committer::commit_soon`] or a dropped [`Ticket`], is reported through
+//!   [`Hooks::reporting_to`] and kept ([`Committer::failures`], the latest
+//!   [`MAX_RECORDED_FAILURES`]) (invariant 7).
 //! - **Dropping the committer lands its queue first**, then releases the lock.
+//!   That can take as long as the queued gits do, each bounded by its deadline.
 //!
 //! The Agora's own files (`PROTOCOL.md`, the registry, the ledger, the board,
 //! the book of record) are R1.4's. [`Opened::initialized`] tells that boot
@@ -38,22 +45,32 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::iter;
-use std::path::{Path, PathBuf};
+use std::path::{self, Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use eph_fs::atomic::write_atomic;
 use eph_fs::lock::Exclusive;
 
-use crate::runner::{Git, GitResult};
+use crate::runner::{Git, GitResult, TIMEOUT};
 
 /// The committer's lock file, inside the Agora's `.git`, so no `add -A` sees it.
 pub const LOCK_FILE: &str = "ephesus-committer.lock";
 
+/// The file a batch's message is written to inside `.git`, and committed from
+/// with `-F`: a message on the command line is capped by the OS (about 32,000
+/// characters on Windows), and a large batch would never land.
+pub const MESSAGE_FILE: &str = "EPHESUS_COMMIT_MSG";
+
 /// The waits before each retry, in milliseconds: five attempts in all, 25 ms
 /// doubling (today's figures), as a fixed schedule that cannot run forever.
 pub const RETRY_WAITS: [u64; 4] = [25, 50, 100, 200];
+
+/// How old an `index.lock` must be before a retry removes it: the runner's
+/// deadline, past which every git of this committer's has been killed.
+pub const STALE_AFTER: Duration = TIMEOUT;
 
 /// How many failures nobody waited for are kept, oldest dropped first.
 pub const MAX_RECORDED_FAILURES: usize = 50;
@@ -77,28 +94,48 @@ pub enum FaultPoint {
     AfterCommit,
 }
 
-type Hook = dyn Fn(FaultPoint) -> Result<(), String> + Send + Sync;
+type FaultHook = dyn Fn(FaultPoint) -> Result<(), String> + Send + Sync;
+type ReportHook = dyn Fn(&CommitFailure) + Send + Sync;
 
-/// A fault hook: `Err(reason)` at a point aborts that batch with `reason`.
-/// Production passes [`Faults::none`]. The seam is in the production path on
-/// purpose, because a seam that exists only under a mock proves nothing about
-/// the real order of the steps (TEST-STRATEGY §3).
-#[derive(Clone, Default)]
-pub struct Faults(Option<Arc<Hook>>);
+/// What a caller hangs on the committer. Production passes a reporter, for the
+/// degradation channel (R1.4); tests add faults. The fault seam is in the
+/// production path on purpose, because a seam that exists only under a mock
+/// proves nothing about the real order of the steps (TEST-STRATEGY §3).
+#[derive(Clone)]
+pub struct Hooks {
+    faults: Option<Arc<FaultHook>>,
+    report: Option<Arc<ReportHook>>,
+}
 
-impl Faults {
-    /// No faults: what production runs.
-    pub fn none() -> Faults {
-        Faults(None)
+impl Hooks {
+    /// No faults and no reporter.
+    pub fn none() -> Hooks {
+        Hooks {
+            faults: None,
+            report: None,
+        }
     }
 
-    /// Faults decided by `hook` at every point.
-    pub fn at(hook: impl Fn(FaultPoint) -> Result<(), String> + Send + Sync + 'static) -> Faults {
-        Faults(Some(Arc::new(hook)))
+    /// The same hooks with faults decided by `hook` at every point: `Err(reason)`
+    /// aborts that batch with `reason`.
+    pub fn with_faults(
+        mut self,
+        hook: impl Fn(FaultPoint) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Hooks {
+        self.faults = Some(Arc::new(hook));
+        self
+    }
+
+    /// The same hooks reporting every failure nobody waited for to `hook`, on
+    /// the committer's thread. Contract: `hook` must not queue a commit. The
+    /// failing path is git itself, and a reporter that commits would recurse.
+    pub fn reporting_to(mut self, hook: impl Fn(&CommitFailure) + Send + Sync + 'static) -> Hooks {
+        self.report = Some(Arc::new(hook));
+        self
     }
 
     fn check(&self, point: FaultPoint) -> Result<(), String> {
-        match &self.0 {
+        match &self.faults {
             Some(hook) => hook(point),
             None => Ok(()),
         }
@@ -126,25 +163,20 @@ pub struct CommitFailure {
     pub reason: String,
 }
 
-/// What a reconcile found at `.git/index.lock`.
+/// What open found at `.git/index.lock`.
+#[must_use]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexLock {
     /// There was none, or the git holding it finished within the schedule.
     Absent,
     /// One outlived the schedule and was removed.
     Removed,
-    /// One outlived the schedule and could not be removed: on Windows, a git
-    /// still holds it. The commit's own retries come back to it.
-    Held(String),
-}
-
-/// What a reconcile did.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Reconciled {
-    /// The state of `index.lock` before the commit.
-    pub index_lock: IndexLock,
-    /// The commit of whatever a killed harness left behind.
-    pub commit: Result<CommitOutcome, CommitFailure>,
+    /// One outlived the schedule and could not be removed, with the OS's
+    /// reason. On Windows a refusal (OS error 5 or 32) means some process
+    /// holds it open; a delete that succeeds proves nothing, because git closes
+    /// the file while it waits to rename it (measured, 2026-10-20). The
+    /// commit's retries come back to it once it is older than [`STALE_AFTER`].
+    Stuck(String),
 }
 
 /// Why an Agora could not be opened. Each says what to do about it.
@@ -188,15 +220,20 @@ impl From<io::Error> for OpenError {
 }
 
 /// An opened Agora.
+#[must_use]
 #[derive(Debug)]
 pub struct Opened {
     /// Its committer.
     pub committer: Committer,
-    /// Whether this open ran `git init`.
+    /// Whether this open ran `git init`: there was no repository yet.
     pub initialized: bool,
+    /// What open found at `.git/index.lock`, for the boot to report.
+    pub index_lock: IndexLock,
 }
 
-/// The answer to one [`Committer::commit`].
+/// The answer to one [`Committer::commit`]. Dropping it is allowed: a failure
+/// nobody waits for is reported and kept.
+#[must_use = "a dropped ticket's failure is only reported, never returned"]
 #[derive(Debug)]
 pub struct Ticket {
     receiver: Receiver<Result<CommitOutcome, CommitFailure>>,
@@ -219,58 +256,68 @@ pub struct Committer {
     root: PathBuf,
     requests: Option<Sender<Request>>,
     worker: Option<JoinHandle<()>>,
-    failures: Arc<Mutex<VecDeque<CommitFailure>>>,
+    record: Arc<Record>,
 }
 
 impl Committer {
-    /// Opens the Agora at `root`: makes the directory and runs `git init -b
-    /// main` when there is no `.git`, takes the committer's lock, and starts
-    /// the queue. `faults` is [`Faults::none`] in production.
-    pub fn open(root: &Path, faults: Faults) -> Result<Opened, OpenError> {
-        Committer::open_with(root, faults, Git::agora())
+    /// Opens the Agora at `root`. See the module contract for the order: the
+    /// directory, the lock, `git init -b main` (with no template) when there is
+    /// no repository yet, the stale `index.lock`, then the queue.
+    pub fn open(root: &Path, hooks: Hooks) -> Result<Opened, OpenError> {
+        Committer::open_with(root, hooks, Git::agora())
     }
 
     /// [`Committer::open`] with a runner a test chose.
-    pub(crate) fn open_with(root: &Path, faults: Faults, git: Git) -> Result<Opened, OpenError> {
-        fs::create_dir_all(root)?;
+    pub(crate) fn open_with(root: &Path, hooks: Hooks, git: Git) -> Result<Opened, OpenError> {
+        let root = path::absolute(root)?;
         let dot_git = root.join(".git");
-        let initialized = !dot_git.exists();
-        if initialized {
-            let init = git.run(root, &["init", "-b", "main"]);
-            if !init.ok() {
-                return Err(OpenError::Init(init.stderr.trim().to_string()));
-            }
-        } else if !dot_git.is_dir() {
+        if fs::symlink_metadata(&dot_git).is_ok_and(|meta| !meta.is_dir()) {
             return Err(OpenError::NotARepository(dot_git));
         }
+        fs::create_dir_all(&dot_git)?;
         let lock_path = dot_git.join(LOCK_FILE);
         let Some(lock) = Exclusive::try_acquire(&lock_path)? else {
             return Err(OpenError::Held(lock_path));
         };
-        let failures = Arc::new(Mutex::new(VecDeque::new()));
+        // Only the lock's holder may make the repository, so two opens of a new
+        // Agora cannot both run `init`, and a `.git` a crash left half made is
+        // finished here.
+        let initialized = !dot_git.join("HEAD").exists();
+        if initialized {
+            let init = git.run(&root, &["init", "--template=", "-b", "main"]);
+            if !init.ok() {
+                return Err(OpenError::Init(init.stderr.trim().to_string()));
+            }
+        }
+        let record = Arc::new(Record {
+            kept: Mutex::new(VecDeque::new()),
+            report: hooks.report.clone(),
+        });
         let worker = Worker {
-            root: root.to_path_buf(),
+            root: root.clone(),
             git,
-            faults,
-            failures: Arc::clone(&failures),
+            hooks,
+            record: Arc::clone(&record),
             _lock: lock,
         };
+        let index_lock = worker.settle_index_lock();
         let (sender, receiver) = mpsc::channel();
         let handle = thread::Builder::new()
             .name("eph-git-committer".to_string())
             .spawn(move || worker.serve(&receiver))?;
         Ok(Opened {
             committer: Committer {
-                root: root.to_path_buf(),
+                root,
                 requests: Some(sender),
                 worker: Some(handle),
-                failures,
+                record,
             },
             initialized,
+            index_lock,
         })
     }
 
-    /// The Agora's root.
+    /// The Agora's root, absolute.
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -286,8 +333,7 @@ impl Committer {
         Ticket { receiver, subject }
     }
 
-    /// Queues a commit nobody waits for. Its failure is kept in
-    /// [`Committer::failures`].
+    /// Queues a commit nobody waits for. Its failure is reported and kept.
     pub fn commit_soon(&self, subject: impl Into<String>) {
         self.send(Request::Commit(Pending {
             subject: subject.into(),
@@ -295,13 +341,10 @@ impl Committer {
         }));
     }
 
-    /// Clears a stale `index.lock` and commits what a killed harness left. See
-    /// the module contract.
-    pub fn reconcile(&self) -> Reconciled {
-        self.ask(Query::Reconcile, || Reconciled {
-            index_lock: IndexLock::Absent,
-            commit: Err(stopped(RECONCILE_SUBJECT.to_string())),
-        })
+    /// Commits whatever a killed harness left, under [`RECONCILE_SUBJECT`].
+    /// Its stale `index.lock` was dealt with by open ([`Opened::index_lock`]).
+    pub fn reconcile(&self) -> Ticket {
+        self.commit(RECONCILE_SUBJECT)
     }
 
     /// Waits until everything queued before this call has landed or given up.
@@ -322,12 +365,12 @@ impl Committer {
 
     /// The failures nobody waited for, oldest first.
     pub fn failures(&self) -> Vec<CommitFailure> {
-        guard(&self.failures).iter().cloned().collect()
+        guard(&self.record.kept).iter().cloned().collect()
     }
 
     /// Queues `request`. One the queue cannot take is answered as stopped: a
     /// ticket's sender is dropped with it, and a commit nobody waits for is
-    /// recorded as a failure rather than lost.
+    /// kept as a failure rather than lost.
     fn send(&self, request: Request) {
         let refused = match &self.requests {
             Some(requests) => requests.send(request).err().map(|refused| refused.0),
@@ -338,7 +381,7 @@ impl Committer {
             reply: None,
         })) = refused
         {
-            record(&self.failures, stopped(subject));
+            self.record.keep(stopped(subject));
         }
     }
 
@@ -393,12 +436,34 @@ fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Keeps `failure`, dropping the oldest past [`MAX_RECORDED_FAILURES`].
-fn record(failures: &Mutex<VecDeque<CommitFailure>>, failure: CommitFailure) {
-    let mut failures = guard(failures);
-    failures.push_back(failure);
-    while failures.len() > MAX_RECORDED_FAILURES {
-        failures.pop_front();
+/// The failures nobody waited for, and who hears of them.
+struct Record {
+    kept: Mutex<VecDeque<CommitFailure>>,
+    report: Option<Arc<ReportHook>>,
+}
+
+impl fmt::Debug for Record {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Record")
+            .field("kept", &guard(&self.kept).len())
+            .field("reported", &self.report.is_some())
+            .finish()
+    }
+}
+
+impl Record {
+    /// Reports `failure`, then keeps it, dropping the oldest past
+    /// [`MAX_RECORDED_FAILURES`]. The reporter runs before the lock is taken,
+    /// so it may read [`Committer::failures`].
+    fn keep(&self, failure: CommitFailure) {
+        if let Some(report) = &self.report {
+            report(&failure);
+        }
+        let mut kept = guard(&self.kept);
+        kept.push_back(failure);
+        while kept.len() > MAX_RECORDED_FAILURES {
+            kept.pop_front();
+        }
     }
 }
 
@@ -413,7 +478,6 @@ struct Pending {
 }
 
 enum Query {
-    Reconcile(Sender<Reconciled>),
     Drained(Sender<()>),
     Head(Sender<Option<String>>),
     Dirty(Sender<bool>),
@@ -430,8 +494,8 @@ enum Attempt {
 struct Worker {
     root: PathBuf,
     git: Git,
-    faults: Faults,
-    failures: Arc<Mutex<VecDeque<CommitFailure>>>,
+    hooks: Hooks,
+    record: Arc<Record>,
     _lock: Exclusive,
 }
 
@@ -454,9 +518,6 @@ impl Worker {
 
     fn answer(&self, query: Query) {
         match query {
-            Query::Reconcile(reply) => {
-                let _sent = reply.send(self.reconcile());
-            }
             Query::Drained(reply) => {
                 let _sent = reply.send(());
             }
@@ -483,12 +544,14 @@ impl Worker {
                 subject: pending.subject,
                 reason,
             });
-            match (pending.reply, result) {
-                (Some(reply), result) => {
-                    let _sent = reply.send(result);
-                }
-                (None, Err(failure)) => record(&self.failures, failure),
-                (None, Ok(_)) => {}
+            let unheard = match pending.reply {
+                Some(reply) => reply.send(result).err().map(|unsent| unsent.0),
+                None => Some(result),
+            };
+            // A failure nobody is waiting for, whether no ticket was asked for
+            // or it was dropped, is reported and kept.
+            if let Some(Err(failure)) = unheard {
+                self.record.keep(failure);
             }
         }
     }
@@ -500,7 +563,7 @@ impl Worker {
         for (attempt, wait) in (1..).zip(waits) {
             if let Some(wait) = wait {
                 thread::sleep(Duration::from_millis(wait));
-                self.clear_index_lock();
+                self.clear_stale_index_lock();
             }
             match self.attempt(&message) {
                 Attempt::Landed => {
@@ -522,14 +585,14 @@ impl Worker {
     }
 
     fn attempt(&self, message: &str) -> Attempt {
-        if let Err(reason) = self.faults.check(FaultPoint::BeforeStage) {
+        if let Err(reason) = self.hooks.check(FaultPoint::BeforeStage) {
             return Attempt::Aborted(reason);
         }
         let staged = self.git(&["add", "-A"]);
         if !staged.ok() {
             return Attempt::Failed(staged.stderr.trim().to_string());
         }
-        if let Err(reason) = self.faults.check(FaultPoint::AfterStage) {
+        if let Err(reason) = self.hooks.check(FaultPoint::AfterStage) {
             return Attempt::Aborted(reason);
         }
         // Nothing staged is a landing; a status that fails is not, and the
@@ -538,28 +601,22 @@ impl Worker {
         if status.ok() && status.stdout.trim().is_empty() {
             return Attempt::Landed;
         }
-        if let Err(reason) = self.faults.check(FaultPoint::BeforeCommit) {
+        if let Err(reason) = self.hooks.check(FaultPoint::BeforeCommit) {
             return Attempt::Aborted(reason);
         }
-        let committed = self.git(&["commit", "-m", message]);
+        let file = self.root.join(".git").join(MESSAGE_FILE);
+        let relative = format!(".git/{MESSAGE_FILE}");
+        if let Err(error) = write_atomic(&file, message.as_bytes()) {
+            return Attempt::Failed(format!("the commit message could not be written: {error}"));
+        }
+        let committed = self.git(&["commit", "-F", &relative]);
         if !committed.ok() {
             return Attempt::Failed(committed.stderr.trim().to_string());
         }
-        if let Err(reason) = self.faults.check(FaultPoint::AfterCommit) {
+        if let Err(reason) = self.hooks.check(FaultPoint::AfterCommit) {
             return Attempt::Aborted(reason);
         }
         Attempt::Landed
-    }
-
-    fn reconcile(&self) -> Reconciled {
-        let index_lock = self.settle_index_lock();
-        let commit = self
-            .run_commit(vec![RECONCILE_SUBJECT.to_string()])
-            .map_err(|reason| CommitFailure {
-                subject: RECONCILE_SUBJECT.to_string(),
-                reason,
-            });
-        Reconciled { index_lock, commit }
     }
 
     /// Waits while `index.lock` exists, over the retry schedule, so a git left
@@ -570,17 +627,28 @@ impl Worker {
         while lock.exists() {
             match waits.next() {
                 Some(wait) => thread::sleep(Duration::from_millis(*wait)),
-                None => return self.clear_index_lock(),
+                None => {
+                    return match fs::remove_file(&lock) {
+                        Ok(()) => IndexLock::Removed,
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => IndexLock::Absent,
+                        Err(error) => IndexLock::Stuck(error.to_string()),
+                    };
+                }
             }
         }
         IndexLock::Absent
     }
 
-    fn clear_index_lock(&self) -> IndexLock {
-        match fs::remove_file(self.index_lock()) {
-            Ok(()) => IndexLock::Removed,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => IndexLock::Absent,
-            Err(error) => IndexLock::Held(error.to_string()),
+    /// Removes an `index.lock` older than [`STALE_AFTER`], and nothing younger.
+    /// One that cannot be removed fails the next attempt in git's own words,
+    /// which the give-up reason carries.
+    fn clear_stale_index_lock(&self) {
+        let lock = self.index_lock();
+        let age = fs::metadata(&lock)
+            .and_then(|meta| meta.modified())
+            .map(|modified| modified.elapsed().unwrap_or_default());
+        if age.is_ok_and(|age| age >= STALE_AFTER) {
+            let _removed = fs::remove_file(&lock);
         }
     }
 
@@ -619,15 +687,18 @@ mod tests {
     const CHILD_MODE: &str = "EPH_GIT_TEST_MODE";
     /// The exit code of a child that died at its fault point.
     const DIED: i32 = 86;
+    /// The longest any test waits on a child: well inside a mutation round's
+    /// per-mutant timeout, so a mutant that hangs a child fails, not times out.
+    const CHILD_PATIENCE: Duration = Duration::from_secs(10);
 
     fn open(root: &Path) -> Committer {
-        Committer::open(root, Faults::none()).unwrap().committer
+        Committer::open(root, Hooks::none()).unwrap().committer
     }
 
-    /// Faults that refuse once, at `at`, with `reason`.
-    fn once_at(at: FaultPoint, reason: &'static str) -> Faults {
+    /// Hooks whose faults refuse once, at `at`, with `reason`.
+    fn once_at(at: FaultPoint, reason: &'static str) -> Hooks {
         let armed = AtomicBool::new(true);
-        Faults::at(move |point| {
+        Hooks::none().with_faults(move |point| {
             if point == at && armed.swap(false, Ordering::SeqCst) {
                 return Err(reason.to_string());
             }
@@ -635,94 +706,15 @@ mod tests {
         })
     }
 
-    #[test]
-    fn a_second_committer_through_a_link_is_refused_too() {
-        let (dir, root) = agora("second-link");
-        let first = open(&root);
-        let link = dir.join("via-link");
-        link_dir(&root, &link);
-        assert!(matches!(
-            Committer::open(&link, Faults::none()),
-            Err(OpenError::Held(_))
-        ));
-        drop(first);
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn a_fault_before_or_after_the_commit_aborts_its_batch_where_it_stands() {
-        for (point, landed) in [
-            (FaultPoint::BeforeCommit, false),
-            (FaultPoint::AfterCommit, true),
-        ] {
-            let (dir, root) = agora("fault-around-commit");
-            let committer = Committer::open(&root, once_at(point, "died"))
-                .unwrap()
-                .committer;
-            write(&root.join("m.json"), "{}\n");
-            let failure = committer.commit("deliver").wait().unwrap_err();
-            assert_eq!(failure.reason, "died", "{point:?}");
-            assert_eq!(
-                tracked(&root, "m.json"),
-                landed,
-                "{point:?}: a harness dying after its commit has its work in history"
-            );
-            committer.commit("next").wait().unwrap();
-            assert!(tracked(&root, "m.json"), "{point:?}");
-            drop(committer);
-            fs::remove_dir_all(&dir).unwrap();
-        }
-    }
-
-    #[test]
-    fn a_commit_git_refuses_after_staging_is_retried_then_given_up() {
-        let (dir, root) = agora("commit-refused");
-        let committer = open(&root);
-        // Staging works; moving the branch cannot.
-        let branch_lock = root
-            .join(".git")
-            .join("refs")
-            .join("heads")
-            .join("main.lock");
-        write(&branch_lock, "");
-        write(&root.join("m.json"), "{}\n");
-        let failure = committer.commit("deliver").wait().unwrap_err();
-        assert!(
-            failure.reason.contains("after 5 attempts"),
-            "{}",
-            failure.reason
-        );
-        assert!(failure.reason.contains("main.lock"), "{}", failure.reason);
-        fs::remove_file(&branch_lock).unwrap();
-        assert_eq!(committer.commit("again").wait().unwrap().attempts, 1);
-        assert!(tracked(&root, "m.json"));
-        drop(committer);
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn a_committer_whose_queue_is_gone_answers_instead_of_hanging() {
-        let gone = Committer {
-            root: PathBuf::from("nowhere"),
-            requests: None,
-            worker: None,
-            failures: Arc::default(),
-        };
-        assert_eq!(
-            gone.commit("late").wait().unwrap_err(),
-            stopped("late".to_string())
-        );
-        let reconciled = gone.reconcile();
-        assert_eq!(reconciled.index_lock, IndexLock::Absent);
-        assert_eq!(
-            reconciled.commit.unwrap_err(),
-            stopped(RECONCILE_SUBJECT.to_string())
-        );
-        assert_eq!(gone.head(), None);
-        assert!(!gone.is_dirty());
-        gone.drained();
-        gone.commit_soon("dropped");
-        assert_eq!(gone.failures(), [stopped("dropped".to_string())]);
+    /// Hooks whose faults refuse at `at` while `armed` holds.
+    fn armed_at(at: FaultPoint, reason: &'static str, armed: &Arc<AtomicBool>) -> Hooks {
+        let armed = Arc::clone(armed);
+        Hooks::none().with_faults(move |point| {
+            if point == at && armed.load(Ordering::SeqCst) {
+                return Err(reason.to_string());
+            }
+            Ok(())
+        })
     }
 
     /// A fresh Agora with one commit, its committer dropped.
@@ -755,15 +747,32 @@ mod tests {
             .ok()
     }
 
+    /// Sets `path`'s modification time to the year 2000, through git's shell.
+    fn age(root: &Path, path: &str) {
+        agora_git(
+            root,
+            &[
+                "-c",
+                &format!("alias.eph-age=!touch -t 200001010000 {path}"),
+                "eph-age",
+            ],
+        );
+    }
+
     #[test]
     fn a_new_agora_is_made_on_main_and_committed_as_ephesus() {
         let dir = scratch("new-agora");
         let root = dir.join("agora");
-        let opened = Committer::open(&root, Faults::none()).unwrap();
+        let opened = Committer::open(&root, Hooks::none()).unwrap();
         assert!(opened.initialized);
+        assert_eq!(opened.index_lock, IndexLock::Absent);
         let committer = opened.committer;
         assert_eq!(committer.root(), root);
         assert_eq!(committer.head(), None, "no commit yet");
+        assert!(
+            !root.join(".git").join("hooks").exists() && !root.join(".git").join("info").exists(),
+            "no template, not even the system's"
+        );
         write(&root.join("registry.json"), "{}\n");
         assert!(committer.is_dirty());
         let outcome = committer.commit("seed the Agora").wait().unwrap();
@@ -782,7 +791,7 @@ mod tests {
             "main"
         );
         drop(committer);
-        let again = Committer::open(&root, Faults::none()).unwrap();
+        let again = Committer::open(&root, Hooks::none()).unwrap();
         assert!(!again.initialized, "a second open makes nothing");
         assert_eq!(commits(&root), 1);
         drop(again);
@@ -790,10 +799,27 @@ mod tests {
     }
 
     #[test]
+    fn a_dot_git_a_crash_left_half_made_is_finished() {
+        let dir = scratch("half-made");
+        let root = dir.join("agora");
+        write(&root.join(".git").join(LOCK_FILE), "");
+        let opened = Committer::open(&root, Hooks::none()).unwrap();
+        assert!(
+            opened.initialized,
+            "a .git with no HEAD is no repository yet"
+        );
+        write(&root.join("m.json"), "{}\n");
+        opened.committer.commit("first").wait().unwrap();
+        assert!(tracked(&root, "m.json"));
+        drop(opened);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_second_committer_is_refused_until_the_first_is_gone() {
         let (dir, root) = agora("second");
         let first = open(&root);
-        let refused = Committer::open(&root, Faults::none()).unwrap_err();
+        let refused = Committer::open(&root, Hooks::none()).unwrap_err();
         let lock = root.join(".git").join(LOCK_FILE);
         assert!(
             matches!(&refused, OpenError::Held(path) if *path == lock),
@@ -811,11 +837,25 @@ mod tests {
     }
 
     #[test]
+    fn a_second_committer_through_a_link_is_refused_too() {
+        let (dir, root) = agora("second-link");
+        let first = open(&root);
+        let link = dir.join("via-link");
+        link_dir(&root, &link);
+        assert!(matches!(
+            Committer::open(&link, Hooks::none()),
+            Err(OpenError::Held(_))
+        ));
+        drop(first);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_dot_git_that_is_not_a_directory_is_refused() {
         let dir = scratch("dot-git-file");
         let root = dir.join("agora");
         write(&root.join(".git"), "gitdir: elsewhere\n");
-        let refused = Committer::open(&root, Faults::none()).unwrap_err();
+        let refused = Committer::open(&root, Hooks::none()).unwrap_err();
         assert!(matches!(&refused, OpenError::NotARepository(path) if *path == root.join(".git")));
         assert!(
             refused.to_string().contains("is not a directory"),
@@ -829,25 +869,30 @@ mod tests {
         let dir = scratch("cannot-make");
         let file = dir.join("a-file");
         write(&file, "x");
-        let io = Committer::open(&file.join("agora"), Faults::none()).unwrap_err();
+        let io = Committer::open(&file.join("agora"), Hooks::none()).unwrap_err();
         assert!(matches!(io, OpenError::Io(_)), "{io:?}");
         assert!(
             io.to_string()
                 .starts_with("the Agora could not be opened: "),
             "{io}"
         );
-        let refusing = host_with(&[("GIT_DEFAULT_HASH", "nonsense")]);
+        // A deadline already past stops `git init` before it can finish.
+        let root = dir.join("agora");
         let init = Committer::open_with(
-            &dir.join("agora"),
-            Faults::none(),
-            Git::agora().with_environment(refusing),
+            &root,
+            Hooks::none(),
+            Git::agora().with_timeout(Duration::ZERO),
         )
         .unwrap_err();
         assert!(matches!(init, OpenError::Init(_)), "{init:?}");
         let said = init.to_string();
         assert!(said.starts_with("git init failed: "), "{said}");
-        assert!(said.contains("nonsense"), "in git's words: {said}");
-        assert!(!dir.join("agora").join(".git").join(LOCK_FILE).exists());
+        assert!(said.contains("deadline"), "{said}");
+        // The lock came first, and the next open finishes the repository.
+        assert!(root.join(".git").join(LOCK_FILE).exists());
+        let opened = Committer::open(&root, Hooks::none()).unwrap();
+        assert!(opened.initialized);
+        drop(opened);
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -863,7 +908,7 @@ mod tests {
             ("GIT_AUTHOR_NAME", "Mallory"),
         ]);
         let committer =
-            Committer::open_with(&root, Faults::none(), Git::agora().with_environment(host))
+            Committer::open_with(&root, Hooks::none(), Git::agora().with_environment(host))
                 .unwrap()
                 .committer;
         write(&root.join("inbox").join("m1.json"), "{}\n");
@@ -900,17 +945,19 @@ mod tests {
         let entered = Mutex::new(entered);
         let released = Mutex::new(released);
         let first = AtomicBool::new(true);
-        let faults = Faults::at(move |point| {
+        let hooks = Hooks::none().with_faults(move |point| {
             if point == FaultPoint::AfterCommit && first.swap(false, Ordering::SeqCst) {
                 guard(&entered).send(()).unwrap();
-                let _resumed = guard(&released).recv();
+                let _resumed = guard(&released).recv_timeout(CHILD_PATIENCE);
             }
             Ok(())
         });
-        let committer = Committer::open(&root, faults).unwrap().committer;
+        let committer = Committer::open(&root, hooks).unwrap().committer;
         write(&root.join("a.txt"), "a");
         let a = committer.commit("first");
-        parked.recv().unwrap();
+        parked
+            .recv_timeout(CHILD_PATIENCE)
+            .expect("the first batch parks at its fault point");
         write(&root.join("b.txt"), "b");
         let b = committer.commit("second");
         let c = committer.commit("third");
@@ -927,6 +974,47 @@ mod tests {
             "second (+1 more)\n\n- second\n- third"
         );
         assert_eq!(commits(&root), 3);
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_batch_too_long_for_a_command_line_still_lands() {
+        let (dir, root) = agora("long-batch");
+        let (entered, parked) = mpsc::channel();
+        let (release, released) = mpsc::channel::<()>();
+        let entered = Mutex::new(entered);
+        let released = Mutex::new(released);
+        let first = AtomicBool::new(true);
+        let hooks = Hooks::none().with_faults(move |point| {
+            if point == FaultPoint::AfterCommit && first.swap(false, Ordering::SeqCst) {
+                guard(&entered).send(()).unwrap();
+                let _resumed = guard(&released).recv_timeout(CHILD_PATIENCE);
+            }
+            Ok(())
+        });
+        let committer = Committer::open(&root, hooks).unwrap().committer;
+        write(&root.join("a.txt"), "a");
+        let parked_first = committer.commit("first");
+        parked.recv_timeout(CHILD_PATIENCE).unwrap();
+        write(&root.join("b.txt"), "b");
+        // 600 subjects of 70 characters: past Windows' 32,767-character limit.
+        let tickets: Vec<Ticket> = (0..600)
+            .map(|n| {
+                committer.commit(format!(
+                    "hermes: deliver message {n:04} to agent.mason {}",
+                    "x".repeat(30)
+                ))
+            })
+            .collect();
+        release.send(()).unwrap();
+        parked_first.wait().unwrap();
+        for ticket in tickets {
+            assert_eq!(ticket.wait().unwrap().attempts, 1);
+        }
+        let body = agora_git(&root, &["log", "-1", "--format=%B"]);
+        assert!(body.len() > 40_000, "{}", body.len());
+        assert!(body.contains("(+599 more)"));
         drop(committer);
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -955,15 +1043,44 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_index_lock_is_cleared_by_the_retry_and_the_commit_lands() {
+    fn a_lock_older_than_the_deadline_is_cleared_by_the_retry() {
         let (dir, root) = agora("stale-retry");
         let committer = open(&root);
         let lock = root.join(".git").join("index.lock");
         write(&lock, "");
+        age(&root, ".git/index.lock");
         write(&root.join("m.json"), "{}\n");
-        let outcome = committer.commit("after a crash").wait().unwrap();
+        let outcome = committer.commit("after a killed git").wait().unwrap();
         assert_eq!(outcome.attempts, 2, "the first attempt met the lock");
         assert!(!lock.exists());
+        assert!(tracked(&root, "m.json"));
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_young_lock_is_someone_elses_and_is_never_removed() {
+        let (dir, root) = agora("young-lock");
+        let committer = open(&root);
+        let lock = root.join(".git").join("index.lock");
+        write(&lock, "");
+        write(&root.join("m.json"), "{}\n");
+        let failure = committer
+            .commit("while another git works")
+            .wait()
+            .unwrap_err();
+        assert!(
+            failure.reason.contains("after 5 attempts"),
+            "{}",
+            failure.reason
+        );
+        assert!(failure.reason.contains("index.lock"), "{}", failure.reason);
+        assert!(
+            lock.exists(),
+            "a lock this committer did not leave is left alone"
+        );
+        fs::remove_file(&lock).unwrap();
+        assert_eq!(committer.commit("after it").wait().unwrap().attempts, 1);
         assert!(tracked(&root, "m.json"));
         drop(committer);
         fs::remove_dir_all(&dir).unwrap();
@@ -974,9 +1091,10 @@ mod tests {
         let (dir, root) = agora("gives-up");
         let committer = open(&root);
         // A directory where git makes its lock: no attempt can stage, and no
-        // retry can clear it.
+        // retry can clear it, however old it is.
         let lock = root.join(".git").join("index.lock");
         fs::create_dir_all(&lock).unwrap();
+        age(&root, ".git/index.lock");
         write(&root.join("m.json"), "{}\n");
         let started = Instant::now();
         let failure = committer.commit("deliver d").wait().unwrap_err();
@@ -1005,17 +1123,41 @@ mod tests {
     }
 
     #[test]
+    fn a_commit_git_refuses_after_staging_is_retried_then_given_up() {
+        let (dir, root) = agora("commit-refused");
+        let committer = open(&root);
+        // Staging works; moving the branch cannot.
+        let branch_lock = root
+            .join(".git")
+            .join("refs")
+            .join("heads")
+            .join("main.lock");
+        write(&branch_lock, "");
+        write(&root.join("m.json"), "{}\n");
+        let failure = committer.commit("deliver").wait().unwrap_err();
+        assert!(
+            failure.reason.contains("after 5 attempts"),
+            "{}",
+            failure.reason
+        );
+        assert!(failure.reason.contains("main.lock"), "{}", failure.reason);
+        fs::remove_file(&branch_lock).unwrap();
+        assert_eq!(committer.commit("again").wait().unwrap().attempts, 1);
+        assert!(tracked(&root, "m.json"));
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_fault_aborts_its_batch_with_its_own_words_and_no_retry() {
         let (dir, root) = agora("fault");
         let armed = Arc::new(AtomicBool::new(true));
-        let hook = Arc::clone(&armed);
-        let faults = Faults::at(move |point| {
-            if point == FaultPoint::AfterStage && hook.load(Ordering::SeqCst) {
-                return Err("blackout between stage and commit".to_string());
-            }
-            Ok(())
-        });
-        let committer = Committer::open(&root, faults).unwrap().committer;
+        let hooks = armed_at(
+            FaultPoint::AfterStage,
+            "blackout between stage and commit",
+            &armed,
+        );
+        let committer = Committer::open(&root, hooks).unwrap().committer;
         write(&root.join("inbox").join("m1.json"), "{}\n");
         let failure = committer.commit("hermes: deliver 1").wait().unwrap_err();
         assert_eq!(
@@ -1040,17 +1182,39 @@ mod tests {
     }
 
     #[test]
-    fn a_failure_nobody_waits_for_is_kept_and_the_record_is_bounded() {
+    fn a_fault_before_or_after_the_commit_aborts_its_batch_where_it_stands() {
+        for (point, landed) in [
+            (FaultPoint::BeforeCommit, false),
+            (FaultPoint::AfterCommit, true),
+        ] {
+            let (dir, root) = agora("fault-around-commit");
+            let committer = Committer::open(&root, once_at(point, "died"))
+                .unwrap()
+                .committer;
+            write(&root.join("m.json"), "{}\n");
+            let failure = committer.commit("deliver").wait().unwrap_err();
+            assert_eq!(failure.reason, "died", "{point:?}");
+            assert_eq!(
+                tracked(&root, "m.json"),
+                landed,
+                "{point:?}: a harness dying after its commit has its work in history"
+            );
+            committer.commit("next").wait().unwrap();
+            assert!(tracked(&root, "m.json"), "{point:?}");
+            drop(committer);
+            fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_failure_nobody_waits_for_is_reported_kept_and_bounded() {
         let (dir, root) = agora("soon");
         let armed = Arc::new(AtomicBool::new(true));
-        let hook = Arc::clone(&armed);
-        let faults = Faults::at(move |point| {
-            if point == FaultPoint::BeforeStage && hook.load(Ordering::SeqCst) {
-                return Err("cannot commit".to_string());
-            }
-            Ok(())
-        });
-        let committer = Committer::open(&root, faults).unwrap().committer;
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        let heard = Arc::clone(&reported);
+        let hooks = armed_at(FaultPoint::BeforeStage, "cannot commit", &armed)
+            .reporting_to(move |failure| guard(&heard).push(failure.subject.clone()));
+        let committer = Committer::open(&root, hooks).unwrap().committer;
         for n in 0..=MAX_RECORDED_FAILURES {
             committer.commit_soon(format!("s{n}"));
             committer.drained();
@@ -1067,17 +1231,31 @@ mod tests {
                 .iter()
                 .all(|failure| failure.reason == "cannot commit")
         );
+        assert_eq!(
+            guard(&reported).len(),
+            MAX_RECORDED_FAILURES + 1,
+            "every one is reported"
+        );
+        // A ticket dropped unread is nobody waiting either.
+        drop(committer.commit("dropped"));
+        committer.drained();
+        assert_eq!(committer.failures().last().unwrap().subject, "dropped");
+        assert_eq!(guard(&reported).last().unwrap(), "dropped");
         armed.store(false, Ordering::SeqCst);
         write(&root.join("late.txt"), "late");
         committer.commit_soon("lands");
         committer.drained();
         assert_eq!(
-            committer.failures().len(),
-            MAX_RECORDED_FAILURES,
-            "a landing records nothing"
+            guard(&reported).len(),
+            MAX_RECORDED_FAILURES + 2,
+            "a landing reports nothing"
         );
         assert!(!committer.is_dirty());
+        // A failure in the landing Drop waits for is reported too.
+        armed.store(true, Ordering::SeqCst);
+        committer.commit_soon("at quit");
         drop(committer);
+        assert_eq!(guard(&reported).last().unwrap(), "at quit");
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1109,66 +1287,121 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_removes_a_lock_that_outlived_the_schedule_and_commits_what_was_left() {
+    fn open_removes_a_lock_that_outlived_the_schedule_and_reconcile_commits_the_rest() {
         let (dir, root) = agora("reconcile-stale");
         let lock = root.join(".git").join("index.lock");
         write(&lock, "");
         write(&root.join("inbox").join("m1.json"), "{}\n");
-        let committer = open(&root);
-        let reconciled = committer.reconcile();
-        assert_eq!(reconciled.index_lock, IndexLock::Removed);
-        let outcome = reconciled.commit.unwrap();
+        let opened = Committer::open(&root, Hooks::none()).unwrap();
+        assert_eq!(opened.index_lock, IndexLock::Removed);
+        let outcome = opened.committer.reconcile().wait().unwrap();
         assert_eq!(outcome.subjects, [RECONCILE_SUBJECT]);
         assert_eq!(outcome.attempts, 1);
-        assert!(!committer.is_dirty());
+        assert!(!opened.committer.is_dirty());
         assert!(tracked(&root, "inbox/m1.json"));
         assert_eq!(
             agora_git(&root, &["log", "-1", "--format=%s"]).trim(),
             RECONCILE_SUBJECT
         );
-        drop(committer);
+        drop(opened);
         fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn reconcile_lets_a_live_git_finish_instead_of_removing_its_lock() {
+    fn open_lets_a_live_git_finish_before_any_commit_can_meet_its_lock() {
         let (dir, root) = agora("reconcile-live");
         let lock = root.join(".git").join("index.lock");
         write(&lock, "");
-        let committer = open(&root);
-        let reconciled = thread::scope(|scope| {
+        let opened = thread::scope(|scope| {
             scope.spawn(|| {
-                thread::sleep(Duration::from_millis(60));
+                thread::sleep(Duration::from_millis(200));
                 fs::remove_file(&lock).unwrap();
             });
-            committer.reconcile()
+            Committer::open(&root, Hooks::none()).unwrap()
         });
         assert_eq!(
-            reconciled.index_lock,
+            opened.index_lock,
             IndexLock::Absent,
             "the git finished on its own"
         );
-        assert_eq!(reconciled.commit.unwrap().attempts, 1);
-        assert_eq!(committer.reconcile().index_lock, IndexLock::Absent);
-        drop(committer);
+        assert_eq!(opened.committer.reconcile().wait().unwrap().attempts, 1);
+        drop(opened);
         fs::remove_dir_all(&dir).unwrap();
     }
 
     #[cfg(windows)]
     #[test]
-    fn reconcile_reports_a_lock_a_git_still_holds_on_windows() {
+    fn open_reports_a_lock_some_process_holds_open_on_windows() {
         let (dir, root) = agora("reconcile-held");
+        // Git for Windows holds index.lock open without delete sharing while
+        // it works (measured, 2026-10-20); `Exclusive` opens it the same way.
         let held = Exclusive::try_acquire(&root.join(".git").join("index.lock"))
             .unwrap()
             .unwrap();
-        let committer = open(&root);
-        let reconciled = committer.reconcile();
+        let opened = Committer::open(&root, Hooks::none()).unwrap();
         assert!(
-            matches!(&reconciled.index_lock, IndexLock::Held(_)),
-            "{reconciled:?}"
+            matches!(&opened.index_lock, IndexLock::Stuck(_)),
+            "{:?}",
+            opened.index_lock
         );
-        assert_eq!(reconciled.commit.unwrap_err().subject, RECONCILE_SUBJECT);
         drop(held);
+        drop(opened);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_commits_housekeeping_has_finished_when_drained_returns() {
+        // The TypeScript build's test (agora.test.ts): the repository's own
+        // config asks for detached housekeeping on every commit, so the
+        // runner's `maintenance.autoDetach=false` must win, and one log-sized
+        // blob of incompressible bytes gives the repack real work. Git for
+        // Windows cannot detach, so this has teeth on POSIX only.
+        let (dir, root) = agora("housekeeping");
+        for (key, value) in [
+            ("maintenance.auto", "true"),
+            ("maintenance.autoDetach", "true"),
+            ("maintenance.loose-objects.enabled", "true"),
+            ("maintenance.loose-objects.auto", "-1"),
+        ] {
+            agora_git(&root, &["config", key, value]);
+        }
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let noise: Vec<u8> = (0..4 * 1024 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 24) as u8
+            })
+            .collect();
+        write_atomic(&root.join("segment.bin"), &noise).unwrap();
+        let committer = open(&root);
+        committer.commit_soon("a log-sized blob for the housekeeping to pack");
+        committer.drained();
+        assert!(committer.failures().is_empty());
+        let packs = root.join(".git").join("objects").join("pack");
+        let packed = || {
+            fs::read_dir(&packs).is_ok_and(|entries| {
+                entries
+                    .flatten()
+                    .any(|entry| entry.file_name().to_string_lossy().ends_with(".idx"))
+            })
+        };
+        let packed_at_drained = packed();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut packed_ever = packed_at_drained;
+        while !packed_ever && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+            packed_ever = packed();
+        }
+        assert!(
+            packed_ever,
+            "this git never ran the loose-objects task, so nothing was tested"
+        );
+        assert!(
+            packed_at_drained,
+            "drained returned while the commit's housekeeping was still packing"
+        );
         drop(committer);
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -1200,9 +1433,43 @@ mod tests {
         assert_eq!(ticket.wait().unwrap_err(), stopped("orphan".to_string()));
     }
 
+    #[test]
+    fn a_committer_whose_queue_is_gone_answers_instead_of_hanging() {
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        let heard = Arc::clone(&reported);
+        let gone = Committer {
+            root: PathBuf::from("nowhere"),
+            requests: None,
+            worker: None,
+            record: Arc::new(Record {
+                kept: Mutex::new(VecDeque::new()),
+                report: Some(Arc::new(move |failure: &CommitFailure| {
+                    guard(&heard).push(failure.subject.clone());
+                })),
+            }),
+        };
+        assert_eq!(
+            gone.commit("late").wait().unwrap_err(),
+            stopped("late".to_string())
+        );
+        assert_eq!(
+            gone.reconcile().wait().unwrap_err(),
+            stopped(RECONCILE_SUBJECT.to_string())
+        );
+        assert_eq!(gone.head(), None);
+        assert!(!gone.is_dirty());
+        gone.drained();
+        gone.commit_soon("dropped");
+        assert_eq!(gone.failures(), [stopped("dropped".to_string())]);
+        assert_eq!(*guard(&reported), ["dropped"]);
+        assert!(format!("{gone:?}").contains("kept: 1"), "{gone:?}");
+    }
+
     // The kill tests. Each starts this test binary again, as a harness running
     // `child` below, and kills it for real: by its own exit at a fault point,
-    // or by the OS at a random moment of a commit loop.
+    // between git calls, or by the OS at random moments of a commit loop, which
+    // may or may not land inside a git. Either way they assert the outcome on
+    // reopen, not where the kill landed.
 
     #[expect(
         clippy::disallowed_methods,
@@ -1223,6 +1490,22 @@ mod tests {
             .stderr(Stdio::null())
             .spawn()
             .unwrap()
+    }
+
+    /// Waits for `child` to exit, killing it if it outlives [`CHILD_PATIENCE`].
+    fn exit_of(mut child: Child) -> Option<i32> {
+        let deadline = Instant::now() + CHILD_PATIENCE;
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                return status.code();
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                let _reaped = child.wait();
+                return None;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     /// Not a test of its own: the body of the child process the kill tests
@@ -1258,13 +1541,13 @@ mod tests {
                     "before-commit" => FaultPoint::BeforeCommit,
                     _ => FaultPoint::AfterCommit,
                 };
-                let faults = Faults::at(move |at| {
+                let hooks = Hooks::none().with_faults(move |at| {
                     if at == point {
                         std::process::exit(DIED);
                     }
                     Ok(())
                 });
-                let committer = Committer::open(&root, faults).unwrap().committer;
+                let committer = Committer::open(&root, hooks).unwrap().committer;
                 let _never = committer.commit("killed").wait();
             }
         }
@@ -1280,19 +1563,17 @@ mod tests {
         ] {
             let (dir, root) = agora(&format!("killed-{point}"));
             write(&root.join("inbox").join("m1.json"), "{}\n");
-            let status = spawn_child(&root, point).wait().unwrap();
             assert_eq!(
-                status.code(),
+                exit_of(spawn_child(&root, point)),
                 Some(DIED),
                 "{point}: the child died at its point"
             );
-            let committer = open(&root);
-            let reconciled = committer.reconcile();
-            assert_eq!(reconciled.index_lock, IndexLock::Absent, "{point}");
-            reconciled.commit.unwrap();
-            assert!(!committer.is_dirty(), "{point}");
+            let opened = Committer::open(&root, Hooks::none()).unwrap();
+            assert_eq!(opened.index_lock, IndexLock::Absent, "{point}");
+            opened.committer.reconcile().wait().unwrap();
+            assert!(!opened.committer.is_dirty(), "{point}");
             assert!(tracked(&root, "inbox/m1.json"), "{point}");
-            drop(committer);
+            drop(opened);
             agora_git(&root, &["fsck", "--no-dangling"]);
             fs::remove_dir_all(&dir).unwrap();
         }
@@ -1307,17 +1588,36 @@ mod tests {
             child.kill().unwrap();
             let _reaped = child.wait().unwrap();
         }
-        let written = fs::read_dir(root.join("work")).map_or(0, Iterator::count);
+        // A write the kill cut short leaves a `.<name>.<hex>.tmp` beside its
+        // target (R1.2's residual). Only finished files are work.
+        let finished = |names: Vec<String>| {
+            names
+                .into_iter()
+                .filter(|name| !name.rsplit('/').next().unwrap_or(name).starts_with('.'))
+                .count()
+        };
+        let written = finished(
+            fs::read_dir(root.join("work"))
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect(),
+        );
         assert!(written > 0, "the children wrote work to lose");
-        let committer = open(&root);
-        committer.reconcile().commit.unwrap();
-        assert!(!committer.is_dirty());
-        let committed = agora_git(&root, &["ls-files", "work"]).lines().count();
+        let opened = Committer::open(&root, Hooks::none()).unwrap();
+        opened.committer.reconcile().wait().unwrap();
+        assert!(!opened.committer.is_dirty());
+        let committed = finished(
+            agora_git(&root, &["ls-files", "work"])
+                .lines()
+                .map(str::to_string)
+                .collect(),
+        );
         assert_eq!(
             committed, written,
-            "every file a killed harness wrote is committed"
+            "every file a killed harness finished is committed"
         );
-        drop(committer);
+        drop(opened);
         agora_git(&root, &["fsck", "--no-dangling"]);
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -1327,17 +1627,15 @@ mod tests {
         let (dir, root) = agora("killed-holder");
         let marker = root.with_file_name("held");
         let mut child = spawn_child(&root, "hold");
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !marker.exists() {
-            assert!(Instant::now() < deadline, "the child never took the lock");
+        let deadline = Instant::now() + CHILD_PATIENCE;
+        while !marker.exists() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(20));
         }
-        assert!(matches!(
-            Committer::open(&root, Faults::none()),
-            Err(OpenError::Held(_))
-        ));
+        let held = Committer::open(&root, Hooks::none());
         child.kill().unwrap();
         let _reaped = child.wait().unwrap();
+        assert!(marker.exists(), "the child never took the lock");
+        assert!(matches!(held, Err(OpenError::Held(_))), "{held:?}");
         drop(open(&root));
         fs::remove_dir_all(&dir).unwrap();
     }

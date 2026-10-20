@@ -3,29 +3,51 @@
 //!
 //! Contract. Two rules are enforced here rather than trusted to the caller:
 //! - **Never the Agora.** A worktree of the company's own repository would put a
-//!   second working copy behind the single committer's back (ADR-0004). A
-//!   repository at or under the Agora's root is refused on every create.
+//!   second working copy behind the single committer's back (ADR-0004). Refused
+//!   on every create: a repository at or under the Agora's root, a repository
+//!   whose git directory holds the committer's lock file (the Agora reached any
+//!   other way, such as a linked worktree of it), and a worktree path inside the
+//!   Agora, which its committer would sweep into history.
 //! - **Never destroy work** (FR-1.5). Nothing at a worktree path is deleted to
-//!   make room, and `--force` is never passed. A worktree with uncommitted
-//!   changes is not removed: it is reported, with the changes, so the Architect
-//!   decides. The one removal is of a directory git left behind already empty.
+//!   make room, and `--force` is never passed. `remove` keeps two kinds of
+//!   worktree, and says why, so the Architect decides:
+//!   - one with uncommitted changes. Every untracked file counts, whatever the
+//!     repository's `status.showUntrackedFiles` says: measured on git 2.53, a
+//!     repository that hid them had them deleted with the worktree
+//!     (DECISIONS-LOG 2026-10-20, *R1.3 — Architect decisions, after review*);
+//!   - a detached one whose commit no branch, remote branch or tag holds, since
+//!     removing it would leave that commit to garbage collection (the same
+//!     decision).
 //!
-//! A respawn lands where its agent left off. A checkout that is a worktree of
-//! the planned repository is the agent's own and is reused where it stands, on
-//! whatever branch it is on (M8c.9: the repository link is the proof of
-//! ownership, not the branch name). A path that holds nothing is used as it
-//! stands, since `git worktree add` accepts an empty directory. Anything else
-//! is refused, and the refusal names the way out.
+//!   Ignored files are deleted with a removed worktree, as `git worktree remove`
+//!   does: they are not treated as work. The one removal of this crate's own is
+//!   of a directory git left behind already empty.
 //!
-//! Paths are compared after resolving every part of them that exists
-//! (`fs::canonicalize`), so an Agora reached through a link, or written in
-//! another case on Windows, is still the Agora. Every method answers; none
-//! panics. The runner is the caller's: [`Git::target`] in production, so the
-//! user's configuration (`core.longpaths`) applies.
+//! A respawn lands where its agent left off. A checkout whose git common
+//! directory is the planned repository's is the agent's own, and is reused where
+//! it stands, on whatever branch it is on (M8c.9: the repository link is the
+//! proof of ownership, not the branch name). A path that holds nothing is used
+//! as it stands, since `git worktree add` accepts an empty directory. Anything
+//! else is refused, and the refusal names the way out.
+//!
+//! Repositories are identified by their absolute git common directory and
+//! working tree, as git reports them, so a plan naming a repository's
+//! subdirectory is judged as that repository. Paths are compared after
+//! resolving every part of them that exists (`fs::canonicalize`), so an Agora
+//! reached through a link, or written in another case on Windows, is still the
+//! Agora. Every method answers; none panics. The runner is the caller's:
+//! [`Git::target`] in production, so the user's configuration
+//! (`core.longpaths`) applies.
+//!
+//! Residuals, recorded: a link planted at the path between the vacancy check
+//! and `git worktree add` is followed by git, and `git worktree prune` drops
+//! every stale entry of the repository, not only this one's.
 
 use std::fs;
+use std::io;
 use std::path::{self, Path, PathBuf};
 
+use crate::committer::LOCK_FILE;
 use crate::runner::{Git, GitResult};
 
 /// Where a spawn's own checkout goes, and on which branch.
@@ -40,6 +62,7 @@ pub struct WorktreePlan {
 }
 
 /// What [`Worktrees::create`] did.
+#[must_use]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorktreeOutcome {
     /// The checkout is there: made now, or the agent's own reused.
@@ -56,10 +79,12 @@ pub enum WorktreeOutcome {
 }
 
 /// What `git status` said about a worktree.
+#[must_use]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeState {
-    /// Its porcelain lines verbatim, or one `status failed: …` line when it
-    /// could not be read: the evidence behind a refusal.
+    /// Its porcelain lines verbatim, every untracked file included, or one
+    /// `status failed: …` line when it could not be read: the evidence behind
+    /// a refusal.
     pub changes: Vec<String>,
 }
 
@@ -71,6 +96,7 @@ impl WorktreeState {
 }
 
 /// What [`Worktrees::remove`] did.
+#[must_use]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorktreeRemoval {
     /// Unregistered and gone.
@@ -89,6 +115,7 @@ pub enum WorktreeRemoval {
 }
 
 /// Whether a path may take a worktree.
+#[must_use]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Vacancy {
     /// An empty real directory: it holds nobody's work.
@@ -104,9 +131,17 @@ pub struct Worktrees {
     forbidden_root: PathBuf,
 }
 
+/// A repository as git identifies it.
+struct Identity {
+    /// Its git common directory, resolved.
+    common: PathBuf,
+    /// Its working tree's top, resolved, or `None` for a bare repository.
+    top: Option<PathBuf>,
+}
+
 impl Worktrees {
-    /// Worktrees made with `git`, refusing any repository at or under
-    /// `forbidden_root`, the Agora's root.
+    /// Worktrees made with `git`, refusing the Agora whose root is
+    /// `forbidden_root`.
     pub fn new(git: Git, forbidden_root: &Path) -> Worktrees {
         Worktrees {
             git,
@@ -117,32 +152,51 @@ impl Worktrees {
     /// Makes `plan.path` a worktree of `plan.repo`, reuses the agent's own, or
     /// says why not. See the module contract.
     pub fn create(&self, plan: &WorktreePlan) -> WorktreeOutcome {
-        let repo = resolved(&plan.repo);
-        if repo.starts_with(resolved(&self.forbidden_root)) {
-            return WorktreeOutcome::Refused(format!(
-                "worktree refused: \"{}\" is inside the Agora, which has exactly one working copy (ADR-0004)",
+        let repo = path::absolute(&plan.repo).unwrap_or_else(|_| plan.repo.clone());
+        let path = path::absolute(&plan.path).unwrap_or_else(|_| plan.path.clone());
+        let agora = resolved(&self.forbidden_root);
+        if resolved(&repo).starts_with(&agora) {
+            return refused(format!(
+                "\"{}\" is inside the Agora, which has exactly one working copy (ADR-0004)",
                 plan.repo.display()
             ));
         }
-        let path = path::absolute(&plan.path).unwrap_or_else(|_| plan.path.clone());
-        if resolved(&path).starts_with(&repo) {
-            return WorktreeOutcome::Refused(format!(
-                "worktree refused: \"{}\" is inside the target repository, which would dirty it",
+        if resolved(&path).starts_with(&agora) {
+            return refused(format!(
+                "\"{}\" is inside the Agora, whose committer would sweep a checkout into its history",
                 plan.path.display()
             ));
         }
-        if !self.git.run(&plan.repo, &["rev-parse", "--git-dir"]).ok() {
-            return WorktreeOutcome::Refused(format!(
-                "worktree refused: \"{}\" is not a git repository",
+        let Some(target) = self.identity(&repo) else {
+            return refused(format!(
+                "\"{}\" is not a git repository",
                 plan.repo.display()
+            ));
+        };
+        if target.common.join(LOCK_FILE).exists() {
+            return refused(format!(
+                "\"{}\" is the Agora's own repository, which has exactly one working copy (ADR-0004)",
+                plan.repo.display()
+            ));
+        }
+        if target
+            .top
+            .as_ref()
+            .is_some_and(|top| resolved(&path).starts_with(top))
+        {
+            return refused(format!(
+                "\"{}\" is inside the target repository, which would dirty it",
+                plan.path.display()
             ));
         }
         if fs::symlink_metadata(&path).is_ok() {
             let head = self.git.run(&path, &["rev-parse", "--abbrev-ref", "HEAD"]);
-            let common = self.git.run(&path, &["rev-parse", "--git-common-dir"]);
-            let linked =
-                common.ok() && resolved(&path.join(common.stdout.trim())).starts_with(&repo);
-            if head.ok() && linked {
+            let theirs = self.identity(&path);
+            let owned = head.ok()
+                && theirs
+                    .as_ref()
+                    .is_some_and(|theirs| theirs.common == target.common);
+            if owned {
                 // The agent's own: reused where it stands, on whatever branch
                 // holds its work.
                 return WorktreeOutcome::Ready {
@@ -152,23 +206,20 @@ impl Worktrees {
                 };
             }
             if let Vacancy::Occupied(because) = path_is_vacant(&path) {
-                return WorktreeOutcome::Refused(format!(
-                    "worktree refused: \"{}\" {because}{}",
+                return refused(format!(
+                    "\"{}\" {because}{}",
                     plan.path.display(),
-                    recovery_for(common.ok(), &plan.repo, &plan.path)
+                    recovery_for(theirs.is_some(), &plan.repo, &plan.path)
                 ));
             }
             // Git may still hold an entry for the emptied path, and would then
             // refuse it as registered.
-            let _pruned = self.git.run(&plan.repo, &["worktree", "prune"]);
+            let _pruned = self.git.run(&repo, &["worktree", "prune"]);
         }
         let branch_ref = format!("refs/heads/{}", plan.branch);
         let branch_created = !self
             .git
-            .run(
-                &plan.repo,
-                &["rev-parse", "--verify", "--quiet", &branch_ref],
-            )
+            .run(&repo, &["rev-parse", "--verify", "--quiet", &branch_ref])
             .ok();
         if let Some(parent) = path.parent() {
             // A parent that cannot be made fails the add below, in git's words.
@@ -180,7 +231,7 @@ impl Worktrees {
         } else {
             vec!["worktree", "add", &at, &plan.branch]
         };
-        let added = self.git.run(&plan.repo, &args);
+        let added = self.git.run(&repo, &args);
         if !added.ok() {
             return WorktreeOutcome::Refused(format!("worktree add failed: {}", said(&added)));
         }
@@ -191,9 +242,12 @@ impl Worktrees {
         }
     }
 
-    /// Whether the worktree at `path` holds uncommitted work.
+    /// Whether the worktree at `path` holds uncommitted work: every untracked
+    /// file counts, whatever the repository's configuration says.
     pub fn state(&self, path: &Path) -> WorktreeState {
-        let status = self.git.run(path, &["status", "--porcelain"]);
+        let status = self
+            .git
+            .run(path, &["status", "--porcelain", "--untracked-files=all"]);
         if !status.ok() {
             return WorktreeState {
                 changes: vec![format!("status failed: {}", said(&status))],
@@ -210,9 +264,10 @@ impl Worktrees {
     }
 
     /// Removes a clean worktree of `repo` and prunes git's entry for it, or
-    /// keeps a dirty one and returns its changes. Never forced.
+    /// keeps one with uncommitted changes, or a detached one whose commit
+    /// nothing else holds, and says why. Never forced.
     pub fn remove(&self, repo: &Path, path: &Path) -> WorktreeRemoval {
-        if fs::symlink_metadata(path).is_err() {
+        if fs::symlink_metadata(path).is_err_and(|error| error.kind() == io::ErrorKind::NotFound) {
             // Already gone: prune the stale entry, so the next create at the
             // same path is not refused by git's own bookkeeping.
             let _pruned = self.git.run(repo, &["worktree", "prune"]);
@@ -229,9 +284,25 @@ impl Worktrees {
                 changes: state.changes,
             };
         }
-        let removed = self
-            .git
-            .run(repo, &["worktree", "remove", &path.to_string_lossy()]);
+        if let Some(reason) = self.unheld_detached(path) {
+            return WorktreeRemoval::Kept {
+                reason,
+                changes: Vec::new(),
+            };
+        }
+        // git's own clean check reads the repository's config too, so it gets
+        // the same override: a file written after `state()` looked is still
+        // refused, not deleted.
+        let removed = self.git.run(
+            repo,
+            &[
+                "-c",
+                "status.showUntrackedFiles=all",
+                "worktree",
+                "remove",
+                &path.to_string_lossy(),
+            ],
+        );
         if !removed.ok() {
             return WorktreeRemoval::Kept {
                 reason: format!("worktree remove failed: {}", said(&removed)),
@@ -242,6 +313,54 @@ impl Worktrees {
         WorktreeRemoval::Removed {
             residue: sweep_empty_residue(path),
         }
+    }
+
+    /// The reason to keep a detached worktree whose `HEAD` no branch, remote
+    /// branch or tag holds, or `None` when it is on a branch or its commit is
+    /// held. A lookup that fails keeps it.
+    fn unheld_detached(&self, path: &Path) -> Option<String> {
+        let head = self.git.run(path, &["rev-parse", "--abbrev-ref", "HEAD"]);
+        if head.stdout.trim() != "HEAD" {
+            return None;
+        }
+        let holders = self.git.run(
+            path,
+            &[
+                "for-each-ref",
+                "--count=1",
+                "--contains",
+                "HEAD",
+                "refs/heads",
+                "refs/remotes",
+                "refs/tags",
+            ],
+        );
+        if holders.ok() && !holders.stdout.trim().is_empty() {
+            return None;
+        }
+        let sha = self.git.run(path, &["rev-parse", "HEAD"]);
+        let sha = sha.stdout.trim();
+        Some(format!(
+            "worktree \"{}\" is detached at {sha}, a commit no branch, remote branch or tag holds, so removing it would lose that commit; left in place. Keep the commit with `git branch <name> {sha}` in that worktree, then remove it again",
+            path.display()
+        ))
+    }
+
+    /// The repository at `dir` as git identifies it, or `None` when `dir` is
+    /// not in one.
+    fn identity(&self, dir: &Path) -> Option<Identity> {
+        let common = self.git.run(
+            dir,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        );
+        if !common.ok() {
+            return None;
+        }
+        let top = self.git.run(dir, &["rev-parse", "--show-toplevel"]);
+        Some(Identity {
+            common: resolved(Path::new(common.stdout.trim())),
+            top: top.ok().then(|| resolved(Path::new(top.stdout.trim()))),
+        })
     }
 
     /// The branch `head` names, or, for a detached checkout, where it is:
@@ -259,6 +378,11 @@ impl Worktrees {
             "detached".to_string()
         }
     }
+}
+
+/// A refusal, in the shape every one of them takes.
+fn refused(why: String) -> WorktreeOutcome {
+    WorktreeOutcome::Refused(format!("worktree refused: {why}"))
 }
 
 /// Whether `target` is an empty real directory. Reads only; changes nothing.
@@ -835,5 +959,159 @@ mod tests {
             code: Some(1),
         };
         assert_eq!(said(&silent), "git said nothing");
+    }
+
+    #[test]
+    fn a_worktree_path_inside_the_agora_is_refused() {
+        let rig = Rig::new("path-in-agora");
+        let plan = WorktreePlan {
+            path: rig.agora.join("agents").join("mason"),
+            ..rig.plan("mason")
+        };
+        let reason = rig.refused(&plan);
+        assert!(
+            reason.contains("is inside the Agora, whose committer would sweep"),
+            "{reason}"
+        );
+        assert!(!plan.path.exists());
+    }
+
+    #[test]
+    fn the_agora_reached_through_a_linked_worktree_is_still_refused() {
+        let rig = Rig::new("agora-linked");
+        let agora = rig.dir.join("home").join("agora");
+        let opened =
+            crate::committer::Committer::open(&agora, crate::committer::Hooks::none()).unwrap();
+        write(&agora.join("PROTOCOL.md"), "# protocol\n");
+        opened.committer.commit("seed").wait().unwrap();
+        drop(opened);
+        let elsewhere = rig.dir.join("agora-elsewhere");
+        must(
+            &agora,
+            &[
+                "worktree",
+                "add",
+                &elsewhere.to_string_lossy(),
+                "-b",
+                "side",
+            ],
+        );
+        let worktrees = Worktrees::new(git(), &agora);
+        let plan = WorktreePlan {
+            repo: elsewhere,
+            ..rig.plan("mason")
+        };
+        let WorktreeOutcome::Refused(reason) = worktrees.create(&plan) else {
+            panic!("a checkout of the Agora took a worktree");
+        };
+        assert!(reason.contains("is the Agora's own repository"), "{reason}");
+    }
+
+    #[test]
+    fn a_plan_naming_a_repositorys_subdirectory_is_judged_as_that_repository() {
+        let rig = Rig::new("subdir");
+        let sub = rig.target.join("sub");
+        write(&sub.join("notes.md"), "n");
+        must(&rig.target, &["add", "-A"]);
+        must(
+            &rig.target,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@example.invalid",
+                "commit",
+                "-m",
+                "sub",
+            ],
+        );
+        let inside = WorktreePlan {
+            repo: sub.clone(),
+            path: rig.target.join("wt"),
+            branch: "agent/mason".to_string(),
+        };
+        let reason = rig.refused(&inside);
+        assert!(
+            reason.contains("is inside the target repository"),
+            "{reason}"
+        );
+        let plan = WorktreePlan {
+            repo: sub,
+            ..rig.plan("mason")
+        };
+        let (path, _, created) = rig.create(&plan);
+        assert!(created);
+        write(&path.join("wip.md"), "unpushed");
+        let (again, _, created) = rig.create(&plan);
+        assert_eq!(again, path, "a respawn finds its own checkout");
+        assert!(!created);
+    }
+
+    #[test]
+    fn untracked_work_a_repository_hides_is_still_kept() {
+        let rig = Rig::new("hidden-untracked");
+        let plan = rig.plan("mason");
+        let (path, _, _) = rig.create(&plan);
+        must(&rig.target, &["config", "status.showUntrackedFiles", "no"]);
+        write(&path.join("wip.md"), "unpushed");
+        assert_eq!(rig.worktrees.state(&path).changes, ["?? wip.md"]);
+        let WorktreeRemoval::Kept { changes, .. } = rig.worktrees.remove(&rig.target, &path) else {
+            panic!("hidden untracked work was removed");
+        };
+        assert_eq!(changes, ["?? wip.md"]);
+        assert_eq!(fs::read_to_string(path.join("wip.md")).unwrap(), "unpushed");
+    }
+
+    #[test]
+    fn a_detached_worktree_is_kept_while_nothing_else_holds_its_commit() {
+        let rig = Rig::new("detached-remove");
+        let plan = rig.plan("mason");
+        let (path, _, _) = rig.create(&plan);
+        must(&path, &["switch", "--detach", "HEAD"]);
+        assert_eq!(
+            rig.worktrees.remove(&rig.target, &path),
+            WorktreeRemoval::Removed { residue: None },
+            "a detached checkout of a commit its branch holds goes as any other"
+        );
+        let (path, _, _) = rig.create(&plan);
+        must(&path, &["switch", "--detach", "HEAD"]);
+        write(&path.join("fix.md"), "the fix");
+        must(&path, &["add", "-A"]);
+        must(
+            &path,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@example.invalid",
+                "commit",
+                "-m",
+                "fix",
+            ],
+        );
+        let sha = must(&path, &["rev-parse", "HEAD"]);
+        let sha = sha.trim();
+        let WorktreeRemoval::Kept { reason, changes } = rig.worktrees.remove(&rig.target, &path)
+        else {
+            panic!("a commit nothing holds was handed to garbage collection");
+        };
+        assert!(
+            reason.contains(&format!("is detached at {sha}")),
+            "{reason}"
+        );
+        assert!(
+            reason.contains(&format!("`git branch <name> {sha}`")),
+            "{reason}"
+        );
+        assert!(changes.is_empty());
+        must(&path, &["branch", "keep-the-fix", sha]);
+        assert_eq!(
+            rig.worktrees.remove(&rig.target, &path),
+            WorktreeRemoval::Removed { residue: None }
+        );
+        assert_eq!(
+            must(&rig.target, &["rev-parse", "keep-the-fix"]).trim(),
+            sha
+        );
     }
 }
