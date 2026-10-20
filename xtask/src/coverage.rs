@@ -966,9 +966,12 @@ fn points(value: &Value, what: &str) -> Result<u64, String> {
         format!("{what} must be a percentage from 0 to 100 with at most two decimals, like 93.73")
     };
     let number = value.as_f64().ok_or_else(bad)?;
-    let scaled = number * 100.0;
-    let rounded = scaled.round();
-    if !(0.0..=10_000.0).contains(&rounded) || (scaled - rounded).abs() > 1e-6 {
+    let rounded = (number * 100.0).round();
+    // A number has at most two decimals exactly when its hundredths, divided
+    // back, are the same double: both sides are the nearest double to one real
+    // number. An epsilon test had a boundary no input could reach (xtask
+    // mutation round 1, 2026-10-20).
+    if !(0.0..=10_000.0).contains(&rounded) || rounded / 100.0 != number {
         return Err(bad());
     }
     // A whole number from 0 to 10000, checked above, so the cast is exact.
@@ -1261,9 +1264,13 @@ impl Harness for Real {
             .args(["llvm-cov", "--version"])
             .output()
             .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        // The version line as the tool prints it; a tool that prints nothing is
+        // still the tool, and its empty name is compared like any other.
         let text = String::from_utf8_lossy(&out.stdout);
-        let line = text.lines().next()?.trim();
-        (out.status.success() && !line.is_empty()).then(|| line.to_string())
+        Some(text.lines().next().unwrap_or_default().trim().to_string())
     }
 
     fn target_dir(&mut self, root: &Path) -> Result<PathBuf, String> {
@@ -1571,18 +1578,45 @@ pub fn ratchet_dir(
     Ok((render_floors(&next), notes))
 }
 
+/// What `cargo xtask coverage` was asked to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verb {
+    /// Measure this platform and check the floors.
+    Run,
+    /// Print the last measurement for CI to upload.
+    Emit,
+    /// Print the floors the measurements under the directory justify.
+    Ratchet(PathBuf),
+}
+
+/// Reads the command's arguments, or `None` for anything else, which is a
+/// usage error. Pure, so every form is tested without running cargo-llvm-cov
+/// (xtask mutation round 1 found `main`'s arms untested, 2026-10-20).
+pub fn parse_args(args: &[String]) -> Option<Verb> {
+    match args {
+        [] => Some(Verb::Run),
+        [verb] if verb == "emit" => Some(Verb::Emit),
+        [verb, dir] if verb == "ratchet" => Some(Verb::Ratchet(PathBuf::from(dir))),
+        _ => None,
+    }
+}
+
 /// `cargo xtask coverage [emit | ratchet <dir>]`. Exit 0: green. 1: red. 2: usage.
 pub fn main(args: &[String]) -> u8 {
+    let Some(verb) = parse_args(args) else {
+        eprintln!("{USAGE}");
+        return 2;
+    };
     let root = workspace_root();
     let os = std::env::consts::OS;
     let mut harness = Real::from_env();
-    match args {
-        [] => {
+    match verb {
+        Verb::Run => {
             let (code, report) = run(&mut harness, &root, os);
             print!("{report}");
             code
         }
-        [verb] if verb == "emit" => match emit(&mut harness, &root, os) {
+        Verb::Emit => match emit(&mut harness, &root, os) {
             Ok(json) => {
                 print!("{json}");
                 0
@@ -1594,27 +1628,21 @@ pub fn main(args: &[String]) -> u8 {
                 1
             }
         },
-        [verb, dir] if verb == "ratchet" => {
-            match ratchet_dir(&mut harness, &root, Path::new(dir)) {
-                Ok((floors, notes)) => {
-                    for note in notes {
-                        eprintln!("coverage ratchet: {note}");
-                    }
-                    print!("{floors}");
-                    0
+        Verb::Ratchet(dir) => match ratchet_dir(&mut harness, &root, &dir) {
+            Ok((floors, notes)) => {
+                for note in notes {
+                    eprintln!("coverage ratchet: {note}");
                 }
-                Err(errors) => {
-                    for error in errors {
-                        eprintln!("coverage ratchet: {error}");
-                    }
-                    1
-                }
+                print!("{floors}");
+                0
             }
-        }
-        _ => {
-            eprintln!("{USAGE}");
-            2
-        }
+            Err(errors) => {
+                for error in errors {
+                    eprintln!("coverage ratchet: {error}");
+                }
+                1
+            }
+        },
     }
 }
 
@@ -3139,6 +3167,40 @@ pub fn ships_too() {}
         let mut fake = Fake::new("{");
         assert!(
             ratchet_dir(&mut fake, &root(), Path::new("/dl")).unwrap_err()[0].contains("not JSON")
+        );
+    }
+
+    #[test]
+    fn every_command_form_parses_and_anything_else_is_usage() {
+        let args = |list: &[&str]| list.iter().map(|a| (*a).to_string()).collect::<Vec<_>>();
+        assert_eq!(parse_args(&args(&[])), Some(Verb::Run));
+        assert_eq!(parse_args(&args(&["emit"])), Some(Verb::Emit));
+        assert_eq!(
+            parse_args(&args(&["ratchet", "dl"])),
+            Some(Verb::Ratchet(PathBuf::from("dl")))
+        );
+        for bad in [
+            &["bogus"][..],
+            &["emit", "x"],
+            &["ratchet"],
+            &["ratchet", "a", "b"],
+            &["Emit"],
+        ] {
+            assert_eq!(parse_args(&args(bad)), None, "{bad:?}");
+        }
+    }
+
+    /// The gate's coverage step needs cargo-llvm-cov wherever the suite runs
+    /// (CI installs it before the gate), so the real probe is tested against
+    /// the real tool: a stand-in can only show the failing half (xtask
+    /// mutation round 1, 2026-10-20).
+    #[test]
+    fn the_real_probe_names_the_installed_tool() {
+        let tool = Real::from_env().tool();
+        assert!(
+            tool.as_deref()
+                .is_some_and(|line| line.starts_with("cargo-llvm-cov ")),
+            "cargo-llvm-cov must be installed for this suite: {INSTALL} (got {tool:?})"
         );
     }
 

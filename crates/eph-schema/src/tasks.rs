@@ -411,4 +411,21 @@ mod tests {
                 .is_empty()
         );
     }
+
+    /// Round 1 (2026-10-20): each task cap was tested past its limit, never at.
+    #[test]
+    fn each_task_bound_admits_its_limit() {
+        let mut top = task(1);
+        top.priority = 9;
+        let mut same_instant = task(2);
+        same_instant.updated_at = same_instant.created_at;
+        let mut many = task(3);
+        many.deps = (0..64).map(wide_id).collect();
+        let mut tasks = vec![top, same_instant, many];
+        tasks.extend((0..64).map(|n| Task {
+            id: wide_id(n),
+            ..task(1)
+        }));
+        assert!(render(&ledger(tasks)).is_ok());
+    }
 }

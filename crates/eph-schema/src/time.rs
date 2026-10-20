@@ -321,4 +321,14 @@ mod tests {
         );
         assert!(BadDuration("x".into()).to_string().contains("90s"));
     }
+
+    /// Round 1 (2026-10-20): `Duration::from_millis` was tested only for the
+    /// value it refuses.
+    #[test]
+    fn a_duration_is_made_from_whole_milliseconds() {
+        let d = Duration::from_millis(90_000).unwrap();
+        assert_eq!(d.as_millis(), 90_000);
+        assert_eq!(d, "90s".parse::<Duration>().unwrap());
+        assert_eq!(Duration::from_millis(0).map(Duration::as_millis), Some(0));
+    }
 }

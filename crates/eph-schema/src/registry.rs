@@ -375,4 +375,12 @@ mod tests {
             );
         }
     }
+
+    /// Round 1 (2026-10-20): retiring an agent the moment it was hired is allowed.
+    #[test]
+    fn an_agent_may_retire_the_instant_it_was_hired() {
+        let mut instant = agent();
+        instant.retired_at = Some(instant.spawned_at);
+        assert!(render(&registry(vec![("agent.mason", instant)])).is_ok());
+    }
 }

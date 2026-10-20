@@ -212,4 +212,14 @@ mod tests {
         assert!(render(&at_cap).is_ok());
         assert!(parse::<KnownTargets>(&render(&KnownTargets::empty()).unwrap()).is_ok());
     }
+
+    /// Round 1 (2026-10-20): the id cap was tested past its limit, never at it.
+    #[test]
+    fn an_id_of_exactly_forty_eight_characters_is_kept() {
+        let targets = KnownTargets {
+            schema_version: 1,
+            targets: vec![known("crew", &"a".repeat(48), 1)],
+        };
+        assert!(render(&targets).is_ok());
+    }
 }

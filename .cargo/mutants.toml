@@ -9,7 +9,13 @@
 # kill it, in a reviewed commit. A survivor no test COULD kill is a design smell
 # (memory: an equivalent mutant is a design smell): delete the duplicate before
 # reaching for an exclusion.
-exclude_re = []
+exclude_re = [
+  # eph-schema's strict JSON reader turns `null` into `Value::Null`, and
+  # `Value::default()` IS `Value::Null`, so this mutant is the same program.
+  # There is no duplicate to delete: serde calls `visit_unit` for `null`, and the
+  # trait's default refuses it (R1.1 round 1, 2026-10-20).
+  'StrictVisitor>::visit_unit -> Result<Value, E> with Ok\(Default::default\(\)\)',
+]
 
 # Build without debug info ([profile.mutants] in Cargo.toml): a round relinks
 # every test binary once per mutant.

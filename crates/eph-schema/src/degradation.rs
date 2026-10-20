@@ -284,18 +284,12 @@ impl Degradation {
 
 /// Whether the `count`th occurrence earns a line in the book of record: the
 /// first, then every power of ten. Every occurrence stays countable in the
-/// channel; only the ladder's steps are written.
+/// channel; only the ladder's steps are written. The powers of ten a `u64`
+/// holds are twenty, so walking all of them is the whole rule; an early exit
+/// once a step passed `count` changed no answer, and was a guard no test
+/// could see (mutation round 1, 2026-10-20).
 pub fn earns_log_line(count: u64) -> bool {
-    let mut step = 1u64;
-    loop {
-        if count == step {
-            return true;
-        }
-        match step.checked_mul(10) {
-            Some(next) if next <= count => step = next,
-            _ => return false,
-        }
-    }
+    std::iter::successors(Some(1u64), |step| step.checked_mul(10)).any(|step| step == count)
 }
 
 #[cfg(test)]

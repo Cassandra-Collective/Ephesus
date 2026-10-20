@@ -67,13 +67,16 @@ pub fn check_version(
         .get("schemaVersion")
         .and_then(serde_json::Value::as_u64)
         .ok_or(SchemaError::NoVersion { file, expected })?;
-    if found == u64::from(expected) {
-        return Ok(());
-    }
-    let why = if found > u64::from(expected) {
-        "a newer Ephesus wrote it; run that version, or restore an older copy of the file (a file in the Agora has one in its git history)"
-    } else {
-        "an older Ephesus wrote it, such as the TypeScript build, and this build has no migration for it; start this build on another home, or rewrite the file in this version's shape"
+    // One three-way comparison: a separate equality test followed by `>` left
+    // a `>=` no test could tell apart (mutation round 1, 2026-10-20).
+    let why = match found.cmp(&u64::from(expected)) {
+        std::cmp::Ordering::Equal => return Ok(()),
+        std::cmp::Ordering::Greater => {
+            "a newer Ephesus wrote it; run that version, or restore an older copy of the file (a file in the Agora has one in its git history)"
+        }
+        std::cmp::Ordering::Less => {
+            "an older Ephesus wrote it, such as the TypeScript build, and this build has no migration for it; start this build on another home, or rewrite the file in this version's shape"
+        }
     };
     Err(SchemaError::UnknownVersion {
         file,

@@ -178,3 +178,17 @@ fn the_real_coverage_harness_returns_cargos_exit_code_or_none() {
     assert_eq!(missing.tool(), None);
     assert_eq!(missing.llvm_cov(&root, &report), None);
 }
+
+#[test]
+fn the_real_gate_runner_reports_a_coverage_step_without_its_tool_red() {
+    // The gate's coverage step through the real runner, with the xtask binary
+    // as cargo: its probe fails, so the step says how to install the tool and
+    // exits 1. A green coverage step needs a real instrumented run of a whole
+    // workspace, which `cargo xtask gate` performs on every invocation; a
+    // test of it here would nest one coverage run inside another (xtask
+    // mutation round 1 triage, 2026-10-20).
+    let mut runner = CargoRunner {
+        cargo: OsString::from(XTASK),
+    };
+    assert_eq!(runner.coverage(&workspace_root()), Some(1));
+}

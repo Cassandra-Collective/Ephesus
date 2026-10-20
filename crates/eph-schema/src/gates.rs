@@ -233,4 +233,11 @@ mod tests {
         assert!(Autonomy::Manual < Autonomy::Supervised);
         assert!(Autonomy::Supervised < Autonomy::Autonomous);
     }
+
+    /// Round 1 (2026-10-20): the spend ceiling was tested one over, never at.
+    #[test]
+    fn a_rule_may_spend_up_to_the_ceiling() {
+        let at = r#"{"schemaVersion":2,"autonomy":"manual","rules":{"spend":{"autonomy":"manual","maxSpendTokens":1000000000}}}"#;
+        assert!(parse::<GatePolicy>(at).is_ok());
+    }
 }

@@ -274,4 +274,28 @@ mod tests {
                 .contains("must be 2, the version")
         );
     }
+
+    /// Round 1 (2026-10-20): every pacing bound was tested past its limit and
+    /// none at it.
+    #[test]
+    fn each_pacing_bound_admits_its_limit() {
+        let pacing = |body: &str| format!("{{\"schemaVersion\":2,\"pacing\":{{{body}}}}}");
+        for body in [
+            "\"slowAtPercent\":100",
+            "\"holdAtPercent\":200",
+            "\"slowWakeGap\":\"6h\"",
+            "\"wakeCap\":\"60s\"",
+            "\"wakeCap\":\"6h\"",
+        ] {
+            assert!(parse::<Config>(&pacing(body)).is_ok(), "{body}");
+        }
+        for (body, field) in [
+            ("\"slowAtPercent\":101", "pacing.slowAtPercent"),
+            ("\"wakeCap\":\"7h\"", "pacing.wakeCap"),
+            ("\"slowWakeGap\":\"6h 1s\"", "pacing.slowWakeGap"),
+        ] {
+            let error = parse::<Config>(&pacing(body)).unwrap_err().to_string();
+            assert!(error.contains(field), "{body}: {error}");
+        }
+    }
 }

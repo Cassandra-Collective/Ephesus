@@ -214,4 +214,42 @@ mod tests {
                 .contains("at most 64")
         );
     }
+
+    /// Round 1 (2026-10-20): every cap was tested past its limit and none at it.
+    #[test]
+    fn each_cap_admits_its_limit_and_refuses_one_more() {
+        let table = |grants: Vec<String>| {
+            format!("{{\"schemaVersion\":1,\"grants\":[{}]}}", grants.join(","))
+        };
+        let routes = |n: usize| -> Vec<String> {
+            (0..n)
+                .map(|i| format!("{{\"class\":\"route\",\"domains\":[\"d{i}\"]}}"))
+                .collect()
+        };
+        assert!(parse::<Authority>(&table(routes(64))).is_ok(), "64 grants");
+        assert!(parse::<Authority>(&table(routes(65))).is_err(), "65 grants");
+        let domains = |n: usize| {
+            let names: Vec<String> = (0..n).map(|i| format!("\"d{i}\"")).collect();
+            table(vec![format!(
+                "{{\"class\":\"route\",\"domains\":[{}]}}",
+                names.join(",")
+            )])
+        };
+        assert!(parse::<Authority>(&domains(32)).is_ok(), "32 domains");
+        let error = parse::<Authority>(&domains(33)).unwrap_err().to_string();
+        assert!(error.contains("grants[0].domains"), "33 domains: {error}");
+        let spend = |tokens: u64| {
+            table(vec![format!(
+                "{{\"class\":\"spend\",\"domains\":[\"*\"],\"maxSpendTokens\":{tokens}}}"
+            )])
+        };
+        assert!(
+            parse::<Authority>(&spend(1_000_000_000)).is_ok(),
+            "the ceiling's ceiling"
+        );
+        assert!(
+            parse::<Authority>(&spend(1_000_000_001)).is_err(),
+            "one over"
+        );
+    }
 }

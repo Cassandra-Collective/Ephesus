@@ -428,4 +428,20 @@ mod tests {
         kinds.dedup();
         assert_eq!(kinds.len(), LogKind::ALL.len());
     }
+
+    /// Round 1 (2026-10-20): a version-0 line was unreadable for the wrong
+    /// reason (its shape) when the version rule says why.
+    #[test]
+    fn an_older_line_says_it_is_older() {
+        let older = render_line(&degradation_line())
+            .unwrap()
+            .replace("\"schemaVersion\":1", "\"schemaVersion\":0");
+        let LineRead::Unreadable { reason } = read_line(&older) else {
+            panic!("{older}");
+        };
+        assert!(
+            reason.contains("older than any this build reads"),
+            "{reason}"
+        );
+    }
 }

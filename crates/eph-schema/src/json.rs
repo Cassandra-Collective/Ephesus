@@ -59,12 +59,12 @@ impl<'de> Visitor<'de> for StrictVisitor {
             .ok_or_else(|| E::custom("a number JSON cannot hold"))
     }
 
+    // Every string arrives here: serde_json's text reader hands a decoded
+    // escape to `visit_str` too, and serde's default `visit_string` forwards
+    // to it. An own `visit_string` was a method nothing called (eph-schema
+    // mutation round 2, 2026-10-20).
     fn visit_str<E>(self, value: &str) -> Result<Value, E> {
         Ok(Value::String(value.to_string()))
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Value, E> {
-        Ok(Value::String(value))
     }
 
     fn visit_unit<E>(self) -> Result<Value, E> {
@@ -134,5 +134,20 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    /// Round 1 (2026-10-20): escapes are decoded through the strict reader as
+    /// through serde_json's own, and the visitor's own words were never read.
+    #[test]
+    fn an_escaped_string_reads_and_the_visitor_says_what_it_expects() {
+        let value = strict_value(r#"{"s":"line\nbreak \u00e9"}"#).unwrap();
+        assert_eq!(value["s"], "line\nbreak é");
+        struct Expecting;
+        impl fmt::Display for Expecting {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                StrictVisitor.expecting(f)
+            }
+        }
+        assert_eq!(Expecting.to_string(), "a JSON value");
     }
 }

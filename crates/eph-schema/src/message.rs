@@ -197,4 +197,11 @@ mod tests {
             assert!(error.contains(needle), "{needle}: {error}");
         }
     }
+
+    /// Round 1 (2026-10-20): the hop cap was tested one over, never at.
+    #[test]
+    fn a_message_may_carry_exactly_the_hop_cap() {
+        let at = MESSAGE.replace("\"hops\":0", "\"hops\":100");
+        assert!(parse::<Message>(&at).is_ok());
+    }
 }
