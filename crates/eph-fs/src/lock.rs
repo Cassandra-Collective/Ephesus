@@ -24,9 +24,11 @@ use std::fs::{self, File, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// `FILE_SHARE_READ | FILE_SHARE_WRITE`: everything but `FILE_SHARE_DELETE`.
+/// `FILE_SHARE_READ` (1) with `FILE_SHARE_WRITE` (2): everything but
+/// `FILE_SHARE_DELETE` (4). Written as the one number it is, since `1 | 2` and
+/// `1 ^ 2` are the same 3 (mutation round over R1.3).
 #[cfg(windows)]
-const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+const SHARE_READ_WRITE: u32 = 3;
 
 /// A held exclusive lock. Dropping it releases the lock.
 #[must_use = "the lock is released as soon as this is dropped"]
