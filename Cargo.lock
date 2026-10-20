@@ -85,6 +85,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "eph-agora"
+version = "0.0.0"
+dependencies = [
+ "eph-fs",
+ "eph-git",
+ "eph-schema",
+ "serde",
+]
+
+[[package]]
 name = "eph-fs"
 version = "0.0.0"
 dependencies = [
