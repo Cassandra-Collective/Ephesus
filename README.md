@@ -453,7 +453,7 @@ requirements and the thirteen invariants do not change. The order, phase by phas
 [`docs/RUST-PLAN.md`](./docs/RUST-PLAN.md). Phase R0 builds the gates first, so every
 later phase is checked from its first line.
 
-<!-- landed: R1.0
+<!-- landed: R1.0 R1.1
      Checked by scripts/check-readme-current.cjs against the register (docs/PROGRESS.md
      and the milestones archived in docs/progress/): every package of the milestone or
      phase holding the most recent tick must be listed here, and listing one is a claim
@@ -470,6 +470,12 @@ Landed so far in R1, the home and the book of record:
   database, a typed book of record, no stored copy of a running process's state, and
   prompts that stay overrides so improvements reach existing homes. Every path the
   requirements name keeps its name.
+- **R1.1, the formats as types.** Every file the book of record needs now has one model
+  that checks it on the way in and again before it is written. A key written twice, a
+  missing field and a version from another build are each refused with the fix, so an
+  old home is told it is old, not that it is damaged. Every Rust crate now holds a
+  coverage floor measured on Linux, macOS and Windows. It counts production code only,
+  rises only by measurement, and is never lowered.
 
 **R0, the workspace and its gates, is done** (2026-10-19):
 

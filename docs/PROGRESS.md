@@ -21,17 +21,21 @@ recorded.
 
 ## Resume here
 
-*As of 2026-10-19, on `main` @ `9269eaf`: R0.1 is PR #102 (`feature/r0-1-workspace-skeleton`). R0.2 (`feature/r0-2-gate-chain`) and R0.3 (`feature/r0-3-standards-learn-rust`) are stacked on it, pushed, and get their PRs as the one below each merges. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
+*As of 2026-10-20: R0.1 is merged as #102 and R0.2 is PR #104. R0.3 (`feature/r0-3-standards-learn-rust`), R1.0 (`feature/r1-0-home-design`) and R1.1 (`feature/r1-1-eph-schema`) are stacked on it, pushed, and get their PRs as the one below each merges. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
 
 **Ephesus is being rewritten in Rust (ADR-0041, the Architect's direction of
 2026-10-19), and the rewrite comes before everything below.** The Architect
 approved [`RUST-PLAN.md`](./RUST-PLAN.md), crate Set A in
 [`RUST-CRATES.md`](./RUST-CRATES.md), GYM-013's thresholds and the SRS wording on
 2026-10-19. **R0 is DONE** (verdict below, 2026-10-19). **R1.0, the design, is approved**
-(2026-10-20: `docs/sdd/SDD-RUST.md` §2 and §4). **The next build step is R1.1,
-`eph-schema`, built to that design, with the first Rust coverage floors.** Its first
-commit applies the approved §4.13 amendments (FR-3.1, FR-3.6, NFR-6 and the ADR-0003
-and ADR-0013 clause notes). A later
+(2026-10-20: `docs/sdd/SDD-RUST.md` §2 and §4), and **R1.1 is done** (2026-10-20):
+`eph-schema` and the per-crate coverage floors, seeded from CI. **The next build step
+is R1.2, `eph-fs`**: atomic writes, the append-only log, the home and its seeding, and
+the home marker the Architect asked for after R1.1's review, so a TypeScript-era home
+is reported once. Two constraints carry forward. A new crate's first push is red at the
+coverage step until its floor is seeded from that push's CI runs (ENGINEERING-STANDARDS
+§1.1). And R1.4's retention of done tasks must keep any task another depends on
+(SDD-RUST §4.5). A later
 phase still starts only when he approves its package list, through AskUserQuestion.
 Silence is not a yes. The TypeScript tree is frozen as
 the behavioural reference and is deleted at R14 (parity). The rewrite is measured by
@@ -78,7 +82,7 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1.0 (the design) approved 2026-10-20; R1.1 next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1.0 (the design) approved and R1.1 (`eph-schema`, the coverage floors) done 2026-10-20; R1.2 next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 
@@ -391,8 +395,22 @@ and opens when #104 merges.
     by the Architect with its §4.13 amendments, the cursor's removal, and SDD-RUST as the
     Rust tree's SDD (DECISIONS-LOG 2026-10-20).
     [`2026-10-20-r1-0-home-design.md`](./implementations/2026-10-20-r1-0-home-design.md)
-  - [ ] **R1.1 `eph-schema`** — the models to the approved design, and the first Rust
+  - [x] **R1.1 `eph-schema`** — the models to the approved design, and the first Rust
     coverage floors.
+    *Evidence (2026-10-20):* `crates/eph-schema` types every format R1 needs, read
+    through one strict path that refuses a key written twice. The six formats whose
+    shape changed start at version 2. `cargo xtask coverage` is the gate's seventh step,
+    over production lines only. Before the mutation rounds, a design-fidelity review
+    found 17 findings: 15 were fixed, and 2 went to the Architect and were decided
+    (version 2 plus a home marker in R1.2; the ledger is consistent as a whole, which
+    constrains R1.4's retention). Mutation rounds with honest controls: `eph-schema`
+    ROUND OK on round 3 (270 of 270); `xtask` 483 of 484 on round 2, its one survivor
+    recorded with its reason. There were two refutation passes over the coverage check
+    and the ratchet. Linux in WSL matched Windows figure for figure and hash for hash.
+    The floors were seeded by `cargo xtask coverage ratchet` from CI run 39402429611's
+    three attempts on all three platforms: `eph-schema` 98.86% and `xtask` 98.26%, on
+    tree `fnv1a64:9c42f0f107e84a79`.
+    [`2026-10-20-r1-1-eph-schema.md`](./implementations/2026-10-20-r1-1-eph-schema.md)
   - [ ] **R1.2 `eph-fs`** — atomic writes, the append-only log, the home and its seeding.
   - [ ] **R1.3 `eph-git`** — the single committer and worktrees; hermetic git in every
     git-running test.
