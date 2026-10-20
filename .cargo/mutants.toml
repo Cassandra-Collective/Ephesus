@@ -22,6 +22,11 @@ exclude_re = [
   # performs one on every invocation; a test doing it would nest one coverage run
   # inside another, once per mutant (R1.1 xtask round 2, 2026-10-20).
   'CargoRunner>::coverage -> Option<i32> with Some\(1\)',
+  # eph-fs syncs a renamed file's directory on POSIX so the rename survives a
+  # power cut. Its only effect is durability across a power cut, which no test
+  # can observe: a process that reads the directory back sees the rename either
+  # way. On Windows the body does not run at all (R1.2 round 1, 2026-10-20).
+  'sync_dir -> io::Result<\(\)> with Ok\(\(\)\)',
 ]
 
 # Build without debug info ([profile.mutants] in Cargo.toml): a round relinks
