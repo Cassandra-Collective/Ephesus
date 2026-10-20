@@ -4,8 +4,9 @@
 //! at the first step that does not pass. A step whose tool is not installed
 //! fails with the command that installs it, because a refusal must teach the
 //! rule rather than only state it. This module writes nothing. Its side effects
-//! are the cargo processes the runner starts and the files xtask's own checks
-//! read.
+//! are the cargo processes the runner starts, the files xtask's own checks
+//! read, and the coverage step's lcov report, which cargo-llvm-cov writes under
+//! the target directory after the step deletes the previous one.
 
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
@@ -36,6 +37,9 @@ pub enum Action {
     Cargo(&'static [&'static str]),
     /// One of xtask's own checks, run in this process.
     Check(Check),
+    /// The coverage floors: the instrumented test suite, then the floors
+    /// check (`cargo xtask coverage`, RUST-PLAN §4 item 7).
+    Coverage,
 }
 
 /// One step of the chain: what it runs and what it needs.
@@ -93,6 +97,14 @@ pub const STEPS: &[Step] = &[
         action: Action::Check(Check::Deps),
         requires: None,
     },
+    Step {
+        name: "coverage",
+        action: Action::Coverage,
+        requires: Some(Tool {
+            probe: &["llvm-cov", "--version"],
+            install: crate::coverage::INSTALL,
+        }),
+    },
 ];
 
 /// How a step ended.
@@ -119,6 +131,9 @@ pub trait Runner {
     /// Runs one of xtask's own checks over the workspace at `root`, printing
     /// its findings. Returns its exit code.
     fn check(&mut self, root: &Path, check: Check) -> Option<i32>;
+    /// Runs the coverage step over the workspace at `root`, printing its
+    /// findings. Returns its exit code.
+    fn coverage(&mut self, root: &Path) -> Option<i32>;
 }
 
 /// Runs the chain in order and stops at the first step that does not pass.
@@ -146,6 +161,7 @@ fn run_step(runner: &mut dyn Runner, root: &Path, step: &Step) -> StepResult {
     let code = match step.action {
         Action::Cargo(args) => runner.cargo(root, args),
         Action::Check(check) => runner.check(root, check),
+        Action::Coverage => runner.coverage(root),
     };
     match code {
         Some(0) => StepResult::Passed,
@@ -165,7 +181,7 @@ pub fn render(report: &[(&'static str, StepResult)]) -> (String, bool) {
                 green = false;
                 let own_check = STEPS
                     .iter()
-                    .any(|step| step.name == *name && matches!(step.action, Action::Check(_)));
+                    .any(|step| step.name == *name && !matches!(step.action, Action::Cargo(_)));
                 if own_check {
                     format!("gate: {name} FAILED (its findings are above); the chain stops here\n")
                 } else {
@@ -252,6 +268,18 @@ impl Runner for CargoRunner {
     fn check(&mut self, root: &Path, check: Check) -> Option<i32> {
         Some(i32::from(crate::run_check(root, check)))
     }
+
+    fn coverage(&mut self, root: &Path) -> Option<i32> {
+        let (code, report) = crate::coverage::run(
+            &mut crate::coverage::Real {
+                cargo: self.cargo.clone(),
+            },
+            root,
+            std::env::consts::OS,
+        );
+        print!("{report}");
+        Some(i32::from(code))
+    }
 }
 
 /// The workspace root: xtask's own manifest directory's parent.
@@ -324,6 +352,14 @@ mod tests {
                 .find(|(step, _)| *step == name)
                 .map_or(Some(0), |(_, code)| *code)
         }
+
+        fn coverage(&mut self, _root: &Path) -> Option<i32> {
+            self.calls.push("coverage".to_string());
+            self.codes
+                .iter()
+                .find(|(step, _)| *step == "coverage")
+                .map_or(Some(0), |(_, code)| *code)
+        }
     }
 
     #[test]
@@ -331,7 +367,15 @@ mod tests {
         let names: Vec<&str> = STEPS.iter().map(|step| step.name).collect();
         assert_eq!(
             names,
-            ["fmt", "clippy", "test", "deny", "invariants", "deps"]
+            [
+                "fmt",
+                "clippy",
+                "test",
+                "deny",
+                "invariants",
+                "deps",
+                "coverage"
+            ]
         );
     }
 
@@ -339,7 +383,7 @@ mod tests {
     fn clippy_denies_warnings_and_every_build_step_is_locked() {
         let args = |name: &str| match STEPS.iter().find(|s| s.name == name).unwrap().action {
             Action::Cargo(args) => args,
-            Action::Check(_) => panic!("{name} is not a cargo step"),
+            Action::Check(_) | Action::Coverage => panic!("{name} is not a cargo step"),
         };
         assert!(args("clippy").ends_with(&["--", "-D", "warnings"]));
         for name in ["clippy", "test"] {
@@ -360,7 +404,9 @@ mod tests {
                 "probe:deny --version",
                 "deny",
                 "check:invariants",
-                "check:deps"
+                "check:deps",
+                "probe:llvm-cov --version",
+                "coverage"
             ]
         );
         let (text, green) = render(&report);
@@ -392,6 +438,30 @@ mod tests {
         let (text, green) = render(&report);
         assert!(!green);
         assert!(text.contains("gate: invariants FAILED (its findings are above)"));
+    }
+
+    #[test]
+    fn a_failing_coverage_step_is_red_and_points_at_its_findings() {
+        let mut runner = Scripted::new(vec![("coverage", Some(1))], Some(0));
+        let report = run(&mut runner, Path::new("."));
+        assert_eq!(report.last(), Some(&("coverage", StepResult::Failed(1))));
+        let (text, green) = render(&report);
+        assert!(!green);
+        assert!(
+            text.contains("gate: coverage FAILED (its findings are above)"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn coverage_needs_cargo_llvm_cov_and_names_its_install() {
+        let step = STEPS.iter().find(|s| s.name == "coverage").unwrap();
+        let tool = step.requires.unwrap();
+        assert_eq!(tool.probe, ["llvm-cov", "--version"]);
+        assert_eq!(
+            tool.install,
+            "cargo install cargo-llvm-cov --version 0.9.1 --locked"
+        );
     }
 
     #[test]

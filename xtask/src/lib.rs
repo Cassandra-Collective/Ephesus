@@ -1,11 +1,13 @@
 //! `cargo xtask` — the Ephesus workspace's own tooling (docs/RUST-PLAN.md §4).
 //!
 //! `cargo xtask gate` runs the gate chain in order and stops at the first red
-//! step. `invariants` and `deps` are two of its steps and run on their own too.
-//! `mutants <package>` runs a mutation round with its control. The binary is a
-//! thin shell over [`dispatch`], so the tests drive the same code the command
-//! line does, and every exit code is a plain number they can assert.
+//! step. `invariants`, `deps` and `coverage` are three of its steps and run on
+//! their own too. `mutants <package>` runs a mutation round with its control.
+//! The binary is a thin shell over [`dispatch`], so the tests drive the same
+//! code the command line does, and every exit code is a plain number they can
+//! assert.
 
+pub mod coverage;
 pub mod deps;
 pub mod gate;
 pub mod invariants;
@@ -21,10 +23,14 @@ pub const USAGE: &str = "\
 usage: cargo xtask <command>
 
 commands:
-  gate                run the gate chain (fmt, clippy, test, deny, invariants, deps)
-                      and stop at the first red step
+  gate                run the gate chain (fmt, clippy, test, deny, invariants, deps,
+                      coverage) and stop at the first red step
   invariants          check the invariant rules over the workspace (RUST-PLAN §4 item 5)
   deps                check every direct dependency is approved (invariant 10)
+  coverage            measure line coverage and check each crate's floor (item 7)
+  coverage emit       print the last measurement as JSON, for CI to upload
+  coverage ratchet <dir>
+                      print the floors file the CI measurements under <dir> justify
   mutants <package>   run a mutation round and its control (GYM-008's rules)
   help                print this message
 ";
@@ -38,6 +44,7 @@ pub fn dispatch(args: &[String]) -> u8 {
         Some("gate") => gate::main(),
         Some("invariants") => run_check(&gate::workspace_root(), Check::Invariants),
         Some("deps") => run_check(&gate::workspace_root(), Check::Deps),
+        Some("coverage") => coverage::main(&args[1..]),
         Some("mutants") => mutants::main(&args[1..]),
         Some("help" | "--help" | "-h") | None => {
             print!("{USAGE}");
@@ -143,6 +150,8 @@ mod tests {
         assert_eq!(dispatch(&args(&[])), 0);
         assert_eq!(dispatch(&args(&["bogus"])), 2);
         assert_eq!(dispatch(&args(&["mutants"])), 2);
+        assert_eq!(dispatch(&args(&["coverage", "bogus"])), 2);
+        assert_eq!(dispatch(&args(&["coverage", "ratchet"])), 2);
         assert_eq!(dispatch(&args(&["invariants"])), 0);
         assert_eq!(dispatch(&args(&["deps"])), 0);
     }

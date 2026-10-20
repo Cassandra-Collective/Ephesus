@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "about": [
+    "The Rust workspace's coverage record (RUST-PLAN §4 item 7; ENGINEERING-STANDARDS §1.1 and §6 item 7; Architect, 2026-10-20).",
+    "Checked by `cargo xtask coverage`, the gate's last step, against `cargo llvm-cov --workspace` on the platform it runs on.",
+    "crates.<name>.floor: the crate's production line coverage, the LOWEST of the corroborating CI runs across linux, macos and windows.",
+    "  Production lines are the lines of a crate's src/ outside items compiled only for tests (#[cfg(test)], read from the syntax tree).",
+    "crates.<name>.platforms: the lowest each platform measured. The gap between them is the platform-specific code; the lag rule compares a platform to its own figure.",
+    "Every crate has a row and every row a crate. A row is written only by `cargo xtask coverage ratchet <dir>` from CI artifacts, never by hand and never",
+    "  from one machine: it raises every crate that drifted up, refuses one that fell, and never writes a lower floor. A fall is a defect to fix, not a row to edit.",
+    "measuredFrom: the tree, the tool and the CI runs the floors came from. null until the first ratchet.",
+    "xtask writes no file: the ratchet prints this file, and you redirect it to a temporary file and move that into place, so the diff is the review."
+  ],
+  "tolerance": 0.00,
+  "toleranceReason": "Measured, not assumed: three `cargo llvm-cov --workspace` runs on win32 on 2026-10-20, one tree, n = 3, agreed line for line on all 24 measured files, a spread of 0.00. No crate yet has a timing-dependent path. A crate that brings one (eph-git's retry, eph-pty's process I/O) re-measures and records its spread here. A failure inside a spread nobody measured is a false positive to RE-MEASURE, never a floor to lower.",
+  "ratchetLag": 5.00,
+  "ratchetLagReason": "Carried from the TypeScript record (M8.0): a floor rises only when somebody ratchets it, so a platform measuring more than 5 points above its own recorded figure means the record has fallen behind by more than a package's typical gain, and the check fails until it is ratcheted. Otherwise coverage gained after a ratchet could be lost again without any failure.",
+  "corroboratingRuns": 3,
+  "corroboratingRunsReason": "Carried from the TypeScript record (RUST-PLAN §4 item 7): one run cannot claim that a suite reproduces a figure, and two runs taken back to back share a machine's mood. A raise takes the lowest of three CI runs per platform, all of one tree. The validator refuses fewer than 3.",
+  "measuredFrom": null,
+  "crates": {}
+}
