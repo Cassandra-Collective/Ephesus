@@ -1,9 +1,9 @@
 # Ephesus — Software Design Description for the Rust build (SDD-RUST)
 
-**Status:** PROPOSED by R1.0 (2026-10-19), for the Architect's approval. Nothing here is
-built until it is approved.
+**Status:** §2 and §4 APPROVED by the Architect on 2026-10-20 (R1.0; DECISIONS-LOG). The
+other sections are written, and approved, by the phases that build them.
 
-**Scope and precedence, proposed with this file.** This document governs the Rust
+**Scope and precedence (approved 2026-10-20).** This document governs the Rust
 workspace (`crates/`, `xtask/`). `docs/sdd/SDD.md` keeps governing the frozen
 TypeScript tree until R14 deletes it (ADR-0041). Within its scope the contract's order
 holds unchanged: **SDD-RUST > ADR > SRS > README** for *how*, and **SRS > SDD-RUST**
@@ -141,7 +141,7 @@ proposed*, in §4.13.
   human/inbox/  human/inbox/.done/
   agents/<id>/                identity.md  memory.md  memory-archive/
                               inbox/  inbox/.inflight/  inbox/.done/  inbox/.rejected/
-                              outbox/  outbox/.rejected/  cursor.json (§4.5, asked)
+                              outbox/  outbox/.rejected/
   odeon/  gymnasium/  stoa/
 ```
 
@@ -153,7 +153,7 @@ proposed*, in §4.13.
 | `PROTOCOL.md` is rendered at every boot | Same defect. A protocol change today never reaches a company that has already booted once |
 | `index/fts.sqlite` is rebuilt when damaged | SDD §10 promised it and the TypeScript build never did it (P9). Derived state needs no rescue (ADR-0027 §5) |
 | The Agora's `.gitignore` excludes `inbox/.inflight/` | A message in flight is a transient state the book of record already logs. Committing every move doubled commit traffic with no audit value. `.done/` and `.rejected/` stay committed: they are the record |
-| `cursor.json`: removed, or kept with a real reader, as the Architect chooses | It has no reader today (P7). FR-3.6, NFR-6, ADR-0003 and ADR-0013 name it, so either path is a contract question (§4.13) |
+| `cursor.json` removed (Architect, 2026-10-20) | It had no reader (P7). Idempotency comes from the state directories, as it already did. FR-3.6 and NFR-6 are amended and ADR-0003 and ADR-0013 get clause notes (§4.13) |
 
 Everything else in the tree keeps today's name and place.
 
@@ -250,7 +250,7 @@ from them.
 | `board.md`, `knowledge/` | Unchanged | Agent-facing text with one writer (P2, ADR-0005) | — |
 | `log.jsonl`, `log-archive/` | Every line is `{schemaVersion, seq, ts, kind, event, source?, refs?, data}`, with `ts` in rule 2's form. `kind` and `event` come from a closed vocabulary per kind, and the writer cannot emit an unknown pair. The reader keeps a line it does not know as an opaque, counted record. Rotation at 4 MiB is unchanged | Today 27 kinds carry free-string events with open fields (inventory §10, P1), so no reader could know what a line may say. A typed writer and a tolerant reader let the format grow without one release breaking an older log. **The writer assumes one harness per home** (ADR-0034 is a probe, not a lock), so readers keep today's position-based cursor rather than trusting `seq` to be unique | Absent: a new log. A torn last line is ignored and left on disk (unchanged) |
 | `agents/<id>/inbox/`, `.inflight/`, `.done/`, `.rejected/`, `outbox/`, `outbox/.rejected/`, `human/inbox/` | **Unchanged layout:** a rename between state directories is the atomic state machine, and invariant 4 and ADR-0003 give an agent exactly its own directory. `.inflight/` is no longer committed | Keeping the layout keeps one directory per agent as the whole of what its engine may write: one grant | An unparseable incoming file goes to `.rejected/` with a teaching reply (unchanged) |
-| `agents/<id>/cursor.json` | **Asked.** Removed, with FR-3.6 and NFR-6 amended and clause notes on ADR-0003 and ADR-0013: idempotency comes from the state directories, as it already does. Or kept, with a reader specified at R5 | No reader today (P7). The contract names it, so this is not a row to decide alone | — |
+| `agents/<id>/cursor.json` | **Removed** (Architect, 2026-10-20). Idempotency comes from the state directories: a message's file is in exactly one of `inbox/`, `.inflight/` and `.done/`, and consuming it moves it by rename | It had no reader (P7) | — |
 | The message | `{schemaVersion, id, conversation, in_reply_to, from, to, act, subject, body, hops, needs_human, created_at}` | `schemaVersion` is added (rule 1; agents write messages, so PROTOCOL.md tells them to write it, and the validator refuses one without it). `requires_reply` is removed: it was corrected on read to a function of `act` (FR-3.3), which made it two fields that cannot disagree (P7). The other names are FR-3.1's, kept | — |
 
 ### 4.6 Per-agent files and the agent-facing contract
@@ -312,7 +312,7 @@ not validate is refused with a teaching reply.
 | P4 `config.json` overwritten when damaged | Rule 6, with the file kept whole (ADR-0032) |
 | P5 the watchlist overwritten when damaged | Rule 6 |
 | P6 seeded files never refresh | Prompts as overrides, PROTOCOL.md rendered at boot, rule 8 |
-| P7 fields nobody reads | `startedAt`, `requires_reply`, `isOrchestrator`, `status`, `hookFidelity` and `lastSeen` removed; `armed` after verification; `cursor.json` asked; `hire` written |
+| P7 fields nobody reads | `startedAt`, `requires_reply`, `isOrchestrator`, `status`, `hookFidelity`, `lastSeen` and `cursor.json` removed; `armed` after verification; `hire` written |
 | P8 inconsistent refs | Rule 4 |
 | P9 doc drift | This section. SDD.md stays the frozen tree's |
 | P10 non-atomic writers | Rule 5, and `memory.md`'s new writing rule |
@@ -323,13 +323,14 @@ not validate is refused with a teaching reply.
 ### 4.13 Contract text this design requires amending
 
 The SRS is the *what*, and an accepted ADR is never edited. These are the only lines the
-design touches. Each is put to the Architect with the design, in the form RUST-PLAN §10
-used.
+design touches. **The Architect approved all of them on 2026-10-20, the cursor's removal
+included.** They are applied as dated amendments, and as ADR clause notes, in R1.1's
+first commit.
 
 | Where | Was | Proposed |
 |---|---|---|
 | SRS FR-3.1 | "Messages SHALL be single JSON files using the speech-act schema (SDD §5.3): `id, conversation, in_reply_to, from, to, act, subject, body, hops, requires_reply, needs_human, created_at`." | "…the speech-act schema (SDD-RUST §4.5): `schemaVersion, id, conversation, in_reply_to, from, to, act, subject, body, hops, needs_human, created_at`. Whether a message obligates a reply is a function of `act` (FR-3.3), not a field." |
-| SRS FR-3.6 (only if the cursor is removed) | "…and be idempotent via a per-agent cursor." | "…and be idempotent: a message's file is in exactly one of `inbox/`, `inbox/.inflight/` and `inbox/.done/`, and consuming one moves it by rename." |
-| SRS NFR-6 (only if the cursor is removed) | "…idempotent consumption (cursor)…" | "…idempotent consumption (state directories, FR-3.6)…" |
-| ADR-0003 line 26, ADR-0013 line 25 (only if the cursor is removed) | "per-agent cursor"; "via the cursor (ADR-0003)" | A clause note in `docs/adr/README.md`, the existing place for overtaken clauses: the cursor is replaced by the state directories (SDD-RUST §4.5) |
+| SRS FR-3.6 | "…and be idempotent via a per-agent cursor." | "…and be idempotent: a message's file is in exactly one of `inbox/`, `inbox/.inflight/` and `inbox/.done/`, and consuming one moves it by rename." |
+| SRS NFR-6 | "…idempotent consumption (cursor)…" | "…idempotent consumption (state directories, FR-3.6)…" |
+| ADR-0003 line 26, ADR-0013 line 25 | "per-agent cursor"; "via the cursor (ADR-0003)" | A clause note in `docs/adr/README.md`, the existing place for overtaken clauses: the cursor is replaced by the state directories (SDD-RUST §4.5) |
 | ADR-0018, ADR-0032, ADR-0040 | `config.json` holds the mode, the consent and the view | **Unchanged**: the design keeps them in `config.json` |

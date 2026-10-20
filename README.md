@@ -453,7 +453,7 @@ requirements and the thirteen invariants do not change. The order, phase by phas
 [`docs/RUST-PLAN.md`](./docs/RUST-PLAN.md). Phase R0 builds the gates first, so every
 later phase is checked from its first line.
 
-<!-- landed: R0.1 R0.2 R0.3
+<!-- landed: R1.0
      Checked by scripts/check-readme-current.cjs against the register (docs/PROGRESS.md
      and the milestones archived in docs/progress/): every package of the milestone or
      phase holding the most recent tick must be listed here, and listing one is a claim
@@ -462,7 +462,16 @@ later phase is checked from its first line.
      this section two milestones stale at M8.4 and three packages stale again by M8.9.
      It cannot catch someone editing this line without writing the sentence, and is not
      meant to. -->
-Landed so far:
+Landed so far in R1, the home and the book of record:
+
+- **R1.0, the design.** Every file the harness stores was redesigned from first
+  principles in [`docs/sdd/SDD-RUST.md`](./docs/sdd/SDD-RUST.md): one validated store
+  that never writes over a damaged file, a version on every message, log line and
+  database, a typed book of record, no stored copy of a running process's state, and
+  prompts that stay overrides so improvements reach existing homes. Every path the
+  requirements name keeps its name.
+
+**R0, the workspace and its gates, is done** (2026-10-19):
 
 - **R0.1, the workspace.** Rust's toolchain is pinned. The lints refuse an unwrap, a
   panic, an `unsafe` block, a discarded result, a direct file write or a process start
