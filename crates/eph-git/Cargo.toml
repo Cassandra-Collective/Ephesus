@@ -1,0 +1,15 @@
+[package]
+name = "eph-git"
+version = "0.0.0"
+description = "The one crate that runs git: the Agora's single committer and the agents' worktrees (ADR-0004, RUST-PLAN §3.2)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+eph-fs = { path = "../eph-fs" }
+
+[lints]
+workspace = true
