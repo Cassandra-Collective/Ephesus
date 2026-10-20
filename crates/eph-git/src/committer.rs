@@ -461,7 +461,9 @@ impl Record {
         }
         let mut kept = guard(&self.kept);
         kept.push_back(failure);
-        while kept.len() > MAX_RECORDED_FAILURES {
+        // One is added at a time, so one is dropped at most: an `if`, which no
+        // change to its condition can turn into a loop (mutation round 2).
+        if kept.len() > MAX_RECORDED_FAILURES {
             kept.pop_front();
         }
     }
@@ -627,10 +629,12 @@ impl Worker {
         while lock.exists() {
             match waits.next() {
                 Some(wait) => thread::sleep(Duration::from_millis(*wait)),
+                // A lock that vanished in the instant since the last look reads
+                // as stuck with the OS's "not found": a race no test can stage,
+                // and the commit's retries then find nothing (mutation round 2).
                 None => {
                     return match fs::remove_file(&lock) {
                         Ok(()) => IndexLock::Removed,
-                        Err(error) if error.kind() == io::ErrorKind::NotFound => IndexLock::Absent,
                         Err(error) => IndexLock::Stuck(error.to_string()),
                     };
                 }

@@ -120,10 +120,12 @@ const REPOSITORY_VARS: [&str; 9] = [
     "GIT_QUARANTINE_PATH",
 ];
 
-/// The machine's variables dropped when no machine configuration is read,
-/// beside every `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>`: the
+/// The machine's variables dropped when no machine configuration is read: the
 /// config-value variables, and what the environment would choose for a new
-/// repository or read attributes from.
+/// repository or read attributes from. `GIT_CONFIG_KEY_<n>` and
+/// `GIT_CONFIG_VALUE_<n>` are read only through `GIT_CONFIG_COUNT`, so
+/// dropping it drops them (mutation round 2 found dropping them as well
+/// changed nothing).
 const MACHINE_VARS: [&str; 8] = [
     "GIT_CONFIG",
     "GIT_CONFIG_SYSTEM",
@@ -263,7 +265,7 @@ impl Git {
         let stderr = child.stderr.take().map(drain);
         let deadline = Instant::now() + self.timeout;
         let exit = finish(&mut child, deadline);
-        let until = Instant::now().max(deadline) + DRAIN_GRACE;
+        let until = drain_until(deadline);
         let (stdout, stdout_arrived) = collect(stdout.as_ref(), until);
         let (mut stderr, stderr_arrived) = collect(stderr.as_ref(), until);
         let mut code = match exit {
@@ -335,10 +337,7 @@ impl Git {
         let name = name.to_string_lossy().to_ascii_uppercase();
         let name = name.as_str();
         REPOSITORY_VARS.contains(&name)
-            || (!self.machine_config
-                && (MACHINE_VARS.contains(&name)
-                    || name.starts_with("GIT_CONFIG_KEY_")
-                    || name.starts_with("GIT_CONFIG_VALUE_")))
+            || (!self.machine_config && MACHINE_VARS.contains(&name))
             || (self.identity && IDENTITY_DATES.contains(&name))
     }
 }
@@ -386,6 +385,12 @@ fn drain<R: Read + Send + 'static>(mut pipe: R) -> Receiver<Vec<u8>> {
             let _sent = sender.send(bytes);
         });
     receiver
+}
+
+/// When waiting for output stops: the deadline, or now if it has passed, and
+/// [`DRAIN_GRACE`] more.
+fn drain_until(deadline: Instant) -> Instant {
+    Instant::now().max(deadline) + DRAIN_GRACE
 }
 
 /// A drained pipe's text, waited for until `until`, and whether it arrived.
@@ -820,8 +825,70 @@ pub(crate) mod tests {
     #[test]
     fn a_deadline_beyond_what_an_instant_can_hold_is_clamped() {
         let dir = scratch("clamped");
-        let result = git().with_timeout(Duration::MAX).run(&dir, &["--version"]);
+        let clamped = git().with_timeout(Duration::MAX);
+        assert_eq!(clamped.timeout, MAX_TIMEOUT);
+        assert_eq!(MAX_TIMEOUT, Duration::from_secs(3600), "one hour");
+        let result = clamped.run(&dir, &["--version"]);
         assert!(result.ok(), "{result:?}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn output_lost_on_either_pipe_alone_is_a_failure() {
+        let dir = scratch("one-pipe");
+        // Each backgrounded sleep keeps one pipe open and sends the other to
+        // /dev/null, so exactly one stream never ends.
+        for (holds, alias) in [
+            ("stdout", "alias.linger=!(sleep 10 2>/dev/null &); echo hi"),
+            ("stderr", "alias.linger=!(sleep 10 >/dev/null &); echo hi"),
+        ] {
+            let result = git()
+                .with_timeout(Duration::from_secs(2))
+                .run(&dir, &["-c", alias, "linger"]);
+            assert_eq!(result.code, None, "{holds}: {result:?}");
+            assert!(
+                result
+                    .stderr
+                    .ends_with("\ngit's output did not arrive in time"),
+                "{holds}: {result:?}"
+            );
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_profile_drops_only_what_it_names_and_keeps_the_rest() {
+        let dir = scratch("keeps");
+        let host = host_with(&[
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("EPH_PLAIN", "kept"),
+            ("GIT_AUTHOR_DATE", "2001-01-01T00:00:00Z"),
+        ]);
+        let shown = |git: Git| {
+            git.with_environment(host.clone())
+                .run(
+                    &dir,
+                    &[
+                        "-c",
+                        "alias.eph-env=!echo \"[$EPH_PLAIN] [$GIT_AUTHOR_DATE]\"",
+                        "eph-env",
+                    ],
+                )
+                .stdout
+                .trim()
+                .to_string()
+        };
+        assert_eq!(
+            shown(Git::agora()),
+            "[kept] []",
+            "the Agora keeps an ordinary variable and drops the date"
+        );
+        assert_eq!(
+            shown(git()),
+            "[kept] [2001-01-01T00:00:00Z]",
+            "a target keeps both: it commits nothing of the Agora's"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
