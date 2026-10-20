@@ -33,9 +33,10 @@ approved [`RUST-PLAN.md`](./RUST-PLAN.md), crate Set A in
 (2026-10-20): `eph-fs`, the one write path, the append-only log, and a home marked
 `home.json` that leaves a TypeScript-era home untouched. **R1.3 is done** (2026-10-20):
 `eph-git`, the single committer with its own OS lock, hermetic Agora git, and worktrees
-that never delete work. **The next build step is R1.4, `eph-agora`**: the registry, the
-ledger, the board, the book of record and its readers, the degradation channel and the
-state stores. Four constraints carry forward. A new crate's first push is red at the coverage step until
+that never delete work. **The next build step is R1.4a, `eph-agora`'s stores**: `Store<T>`, the
+registry, the task ledger and its retention, the board, seeding the Agora and the boot
+order. R1.4b, the book of record and the degradation channel, follows (the Architect
+split R1.4 and moved `DIAGNOSIS.md` to R7, 2026-10-20). Four constraints carry forward. A new crate's first push is red at the coverage step until
 its floor is seeded from that push's CI runs (ENGINEERING-STANDARDS §1.1). R1.4's
 retention of done tasks must keep any task another depends on (SDD-RUST §4.5). And a
 `.tmp` file left by a crash before its rename is a recorded residual until the boot that
@@ -87,7 +88,7 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1.0 (the design) approved, and R1.1 (`eph-schema`, the coverage floors) R1.2 (`eph-fs`) and R1.3 (`eph-git`) done, 2026-10-20; R1.4 next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1.0 (the design) approved, and R1.1 (`eph-schema`, the coverage floors), R1.2 (`eph-fs`) and R1.3 (`eph-git`) done, 2026-10-20; R1.4a next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 
@@ -468,8 +469,11 @@ and opens when #104 merges.
     `eph-fs` raised to 97.24%. CI run 39471410815 on `15b77f6`, the final tree, is green on
     every job, including all seven gate steps on all three platforms.
     [`2026-10-20-r1-3-eph-git.md`](./implementations/2026-10-20-r1-3-eph-git.md)
-  - [ ] **R1.4 `eph-agora`** — registry, ledger, board, the book of record, degradations,
-    state stores, `DIAGNOSIS.md`.
+  - [ ] **R1.4a `eph-agora`, the stores** — `Store<T>`, the registry, the task ledger and
+    its retention, the board, seeding the Agora, the boot order (split from R1.4 by the
+    Architect, 2026-10-20).
+  - [ ] **R1.4b `eph-agora`, the book of record** — the log writer and readers, publish and
+    subscribe, the degradation channel, killed mid-append (`DIAGNOSIS.md` moved to R7).
 - [ ] **R2** The terminal plane and the engine seam
 - [ ] **R3** The event plane
 - [ ] **R4** The first window
