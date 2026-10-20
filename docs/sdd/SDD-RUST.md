@@ -168,7 +168,11 @@ from them.
    every JSONL line, and `PRAGMA user_version` in every SQLite file. A file has exactly
    one: the versions nested inside records are removed (inventory §11). An unknown
    version reads as DAMAGED. An older one is read only through a named migration (P4;
-   memory: *an enum rename is a schema migration*).
+   memory: *an enum rename is a schema migration*). **A format whose shape changed from
+   today's starts at version 2** (Architect, 2026-10-20), so a TypeScript-era file at the
+   unchanged home path reads as older, not as damage of an unknown kind. A format whose
+   shape did not change keeps today's version 1, because today's file is that format.
+   R1.2 marks the home itself, so a TypeScript-era home is reported once.
 2. **One time format.** Every new or redesigned timestamp is RFC 3339 in UTC with
    milliseconds (`2026-10-19T12:34:56.789Z`). The book of record's `ts` moves from epoch
    milliseconds to this form (§4.5). A filename that carries a time uses the same
@@ -245,8 +249,8 @@ from them.
 
 | Artifact | Designed | Departs because | Absent / Damaged |
 |---|---|---|---|
-| `registry.json` | `{schemaVersion, orchestratorId, agents: {id → {name, role, engine, capabilities, seat, envGrants, profile\|null, cwd, target\|null, budget\|null, hire{template, version}, spawnedAt, retiredAt\|null}}}` | Rule 7: `status`, `hookFidelity` and `lastSeen` describe a running process or an engine, so they are derived and shown, not stored. `retiredAt` is the one lifecycle fact routing needs, since mail to a retired agent bounces. `isOrchestrator` copied `orchestratorId` and goes (P7). `target` held a 4096-character cwd against a 256-character schema (P3), so `cwd` and `target` are now separate. `hire` is now written (P7) | Absent: an empty roster. Damaged: Refuse |
-| `tasks.json` | Today's fields; ids, times and refs per §4.0 (`source: {kind, ref}`) | Rules 3 and 4. Retention of done tasks is owed and named, for R1.4 to decide (P13) | Refuse |
+| `registry.json` | `{schemaVersion, orchestratorId\|null, agents: {id → {name, role, engine, capabilities, seat, envGrants, profile\|null, cwd, target\|null, budget\|null, hire{template, version}, spawnedAt, retiredAt\|null}}}` | Rule 7: `status`, `hookFidelity` and `lastSeen` describe a running process or an engine, so they are derived and shown, not stored. `retiredAt` is the one lifecycle fact routing needs, since mail to a retired agent bounces. `isOrchestrator` copied `orchestratorId` and goes (P7). `target` held a 4096-character cwd against a 256-character schema (P3), so `cwd` and `target` are now separate. `hire` is now written (P7) | Absent: an empty roster. Damaged: Refuse |
+| `tasks.json` | Today's fields; ids, times and refs per §4.0 (`source: {kind, ref}`). Validated as a whole ledger (Architect, 2026-10-20): unique ids, every dependency in the ledger and not the task itself, and no `done` task missing a required review artifact or blocked by a gate | Rules 3 and 4. Retention of done tasks is owed and named, for R1.4 to decide (P13). **It must keep any done task another task depends on, or prune that dependency with it**, because a dependency outside the ledger makes the ledger damaged | Refuse |
 | `board.md`, `knowledge/` | Unchanged | Agent-facing text with one writer (P2, ADR-0005) | — |
 | `log.jsonl`, `log-archive/` | Every line is `{schemaVersion, seq, ts, kind, event, source?, refs?, data}`, with `ts` in rule 2's form. `kind` and `event` come from a closed vocabulary per kind, and the writer cannot emit an unknown pair. The reader keeps a line it does not know as an opaque, counted record. Rotation at 4 MiB is unchanged | Today 27 kinds carry free-string events with open fields (inventory §10, P1), so no reader could know what a line may say. A typed writer and a tolerant reader let the format grow without one release breaking an older log. **The writer assumes one harness per home** (ADR-0034 is a probe, not a lock), so readers keep today's position-based cursor rather than trusting `seq` to be unique | Absent: a new log. A torn last line is ignored and left on disk (unchanged) |
 | `agents/<id>/inbox/`, `.inflight/`, `.done/`, `.rejected/`, `outbox/`, `outbox/.rejected/`, `human/inbox/` | **Unchanged layout:** a rename between state directories is the atomic state machine, and invariant 4 and ADR-0003 give an agent exactly its own directory. `.inflight/` is no longer committed | Keeping the layout keeps one directory per agent as the whole of what its engine may write: one grant | An unparseable incoming file goes to `.rejected/` with a teaching reply (unchanged) |
