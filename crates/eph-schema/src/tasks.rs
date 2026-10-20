@@ -205,6 +205,69 @@ impl Versioned for Tasks {
     }
 }
 
+/// One line of `tasks-archive.jsonl`: the done tasks one retention run moved out
+/// of the ledger (SDD-RUST §4.5; Architect, 2026-10-20). Append-only. One line
+/// per run, not per task: each line is one synced append, and 8,001 of them took
+/// 62 s on win32 (R1.4a, 2026-10-20).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ArchivedTasks {
+    /// [`ArchivedTasks::VERSION`].
+    pub schema_version: u32,
+    /// When they left the ledger.
+    pub archived_at: Timestamp,
+    /// The tasks as the ledger last held them, every one `done`.
+    pub tasks: Vec<Task>,
+}
+
+impl ArchivedTasks {
+    /// `tasks`, archived at `at`.
+    pub fn new(tasks: Vec<Task>, at: Timestamp) -> ArchivedTasks {
+        ArchivedTasks {
+            schema_version: Self::VERSION,
+            archived_at: at,
+            tasks,
+        }
+    }
+}
+
+impl Versioned for ArchivedTasks {
+    const FILE: &'static str = "tasks-archive.jsonl";
+    const VERSION: u32 = 1;
+
+    fn validate(&self) -> Result<(), SchemaError> {
+        expect_version(Self::FILE, Self::VERSION, self.schema_version)?;
+        if self.tasks.is_empty() {
+            return Err(SchemaError::invalid(
+                Self::FILE,
+                "tasks",
+                "an archive line holds at least one task",
+            ));
+        }
+        if self
+            .tasks
+            .iter()
+            .any(|task| task.status != TaskStatus::Done)
+        {
+            return Err(SchemaError::invalid(
+                Self::FILE,
+                "tasks",
+                "only a done task is archived",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// An archive line as one line of JSON, validated first.
+pub fn render_archived(line: &ArchivedTasks) -> Result<String, SchemaError> {
+    line.validate()?;
+    serde_json::to_string(line).map_err(|error| SchemaError::Shape {
+        file: ArchivedTasks::FILE,
+        detail: error.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +307,33 @@ mod tests {
             schema_version: 2,
             tasks,
         }
+    }
+
+    #[test]
+    fn an_archive_line_is_one_line_of_done_tasks() {
+        let mut one = task(1);
+        one.status = TaskStatus::Done;
+        let mut two = task(2);
+        two.status = TaskStatus::Done;
+        let at = Timestamp::from_millis(9_000).unwrap();
+        let line = ArchivedTasks::new(vec![one.clone(), two.clone()], at);
+        let text = render_archived(&line).unwrap();
+        assert!(!text.contains('\n'), "{text}");
+        assert!(
+            text.starts_with("{\"schemaVersion\":1,\"archivedAt\":"),
+            "{text}"
+        );
+        assert_eq!(parse::<ArchivedTasks>(&text).unwrap(), line);
+        let open = render_archived(&ArchivedTasks::new(vec![one, task(3)], at)).unwrap_err();
+        assert!(
+            open.to_string().contains("only a done task is archived"),
+            "{open}"
+        );
+        let empty = render_archived(&ArchivedTasks::new(Vec::new(), at)).unwrap_err();
+        assert!(empty.to_string().contains("at least one task"), "{empty}");
+        let mut wrong = ArchivedTasks::new(vec![two], at);
+        wrong.schema_version = 2;
+        assert!(render_archived(&wrong).is_err());
     }
 
     #[test]
