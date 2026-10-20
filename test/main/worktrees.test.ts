@@ -186,15 +186,23 @@ describe('removing a worktree — never destroying work', () => {
       runner: {
         run: async (cwd, args) => {
           const outcome = await real.run(cwd, args)
-          if (args[0] === 'worktree' && args[1] === 'remove' && outcome.ok) {
-            const left = args[2]
-            if (left !== undefined) fs.mkdirSync(left, { recursive: true })
-          }
+          const left = removedBy(args)
+          if (left !== undefined && outcome.ok) fs.mkdirSync(left, { recursive: true })
           return outcome
         }
       },
       forbiddenRoot: path.join(os.tmpdir(), 'no-agora-here')
     })
+  }
+
+  /**
+   * The path a `git worktree remove` call removes, or undefined for any other
+   * call. Found by the subcommand, not by position: `remove` puts a `-c`
+   * override in front of it.
+   */
+  function removedBy(args: readonly string[]): string | undefined {
+    const at = args.indexOf('worktree')
+    return at >= 0 && args[at + 1] === 'remove' ? args[at + 2] : undefined
   }
 
   it('sweeps the empty directory git unregistered and left behind', async () => {
@@ -222,12 +230,10 @@ describe('removing a worktree — never destroying work', () => {
       runner: {
         run: async (cwd, args) => {
           const real = await new ExecGitRunner().run(cwd, args)
-          if (args[0] === 'worktree' && args[1] === 'remove' && real.ok) {
-            const left = args[2]
-            if (left !== undefined) {
-              fs.mkdirSync(left, { recursive: true })
-              fs.writeFileSync(path.join(left, 'left-behind.md'), '# not mine to delete\n', 'utf8')
-            }
+          const left = removedBy(args)
+          if (left !== undefined && real.ok) {
+            fs.mkdirSync(left, { recursive: true })
+            fs.writeFileSync(path.join(left, 'left-behind.md'), '# not mine to delete\n', 'utf8')
           }
           return real
         }
@@ -255,10 +261,8 @@ describe('removing a worktree — never destroying work', () => {
       runner: {
         run: async (cwd, args) => {
           const real = await new ExecGitRunner().run(cwd, args)
-          if (args[0] === 'worktree' && args[1] === 'remove' && real.ok) {
-            const left = args[2]
-            if (left !== undefined) fs.writeFileSync(left, 'not a directory', 'utf8')
-          }
+          const left = removedBy(args)
+          if (left !== undefined && real.ok) fs.writeFileSync(left, 'not a directory', 'utf8')
           return real
         }
       },
@@ -284,6 +288,50 @@ describe('removing a worktree — never destroying work', () => {
       expect(outcome.reason).toContain('uncommitted change')
       expect(outcome.changes.join('\n')).toContain('unpushed.md')
     }
+    expect(fs.readFileSync(path.join(p.path, 'unpushed.md'), 'utf8')).toBe('# half a day of work\n')
+  })
+
+  it('REFUSES a dirty one even when the target repository hides untracked files', async () => {
+    // `status.showUntrackedFiles=no` in the target's own config hid the file
+    // from a bare `status --porcelain` and from git's own clean check, and
+    // `remove` deleted it (measured on git 2.53, 2026-10-20).
+    const r = rig()
+    const p = plan(r)
+    await r.worktrees.create(p)
+    execFileSync('git', ['config', 'status.showUntrackedFiles', 'no'], { cwd: r.repo })
+    fs.writeFileSync(path.join(p.path, 'unpushed.md'), '# half a day of work\n', 'utf8')
+
+    const state = await r.worktrees.state(p.path)
+    expect(state.clean).toBe(false)
+    expect(state.changes.join('\n')).toContain('unpushed.md')
+    const outcome = await r.worktrees.remove(r.repo, p.path)
+    expect(outcome.removed).toBe(false)
+    expect(fs.readFileSync(path.join(p.path, 'unpushed.md'), 'utf8')).toBe('# half a day of work\n')
+  })
+
+  it("keeps the work when git's own clean check is the last one left", async () => {
+    // The race the second override closes: a file written after `state()`
+    // looked. A runner that reports every `status` as clean stands in for it,
+    // so only `git worktree remove`'s own check stands between the file and
+    // its deletion, and that check reads the repository's config too.
+    const r = rig()
+    const p = plan(r)
+    await r.worktrees.create(p)
+    execFileSync('git', ['config', 'status.showUntrackedFiles', 'no'], { cwd: r.repo })
+    fs.writeFileSync(path.join(p.path, 'unpushed.md'), '# half a day of work\n', 'utf8')
+    const real = new ExecGitRunner()
+    const blind = new Worktrees({
+      runner: {
+        run: (cwd, args) =>
+          args[0] === 'status'
+            ? Promise.resolve({ ok: true, stdout: '', stderr: '', code: 0 })
+            : real.run(cwd, args)
+      },
+      forbiddenRoot: r.agora
+    })
+
+    const outcome = await blind.remove(r.repo, p.path)
+    expect(outcome.removed).toBe(false)
     expect(fs.readFileSync(path.join(p.path, 'unpushed.md'), 'utf8')).toBe('# half a day of work\n')
   })
 

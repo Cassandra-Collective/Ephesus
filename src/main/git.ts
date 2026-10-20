@@ -354,9 +354,21 @@ export class Worktrees {
     return at.ok ? `detached at ${at.stdout.trim()}` : 'detached'
   }
 
-  /** Contract: whether this worktree has uncommitted work. Never throws. */
+  /**
+   * Contract: whether this worktree has uncommitted work. Never throws.
+   *
+   * Every untracked file is asked for, whatever the repository says. A target
+   * whose own config sets `status.showUntrackedFiles=no` hid an agent's new
+   * files from a bare `status --porcelain`, so the worktree read as clean and
+   * `remove` deleted them (measured on git 2.53, 2026-10-20; DECISIONS-LOG,
+   * *R1.3 — Architect decisions, after review*).
+   */
   async state(worktreePath: string): Promise<WorktreeState> {
-    const status = await this.options.runner.run(worktreePath, ['status', '--porcelain'])
+    const status = await this.options.runner.run(worktreePath, [
+      'status',
+      '--porcelain',
+      '--untracked-files=all'
+    ])
     if (!status.ok) {
       // Unreadable is not clean. Refusing to remove something we cannot inspect
       // is the safe direction.
@@ -388,7 +400,16 @@ export class Worktrees {
         changes: state.changes
       }
     }
-    const removed = await this.options.runner.run(repo, ['worktree', 'remove', worktreePath])
+    // git's own clean check runs `status` under the repository's config too,
+    // so it gets the same override: a file written after `state()` looked is
+    // still refused, not deleted.
+    const removed = await this.options.runner.run(repo, [
+      '-c',
+      'status.showUntrackedFiles=all',
+      'worktree',
+      'remove',
+      worktreePath
+    ])
     if (!removed.ok) {
       return {
         removed: false,
