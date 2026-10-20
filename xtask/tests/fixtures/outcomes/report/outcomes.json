@@ -1,0 +1,1 @@
+{"outcomes":[{"scenario":"Baseline","summary":"Success"},{"scenario":{"Mutant":{"name":"x"}},"summary":"CaughtMutant"},{"scenario":{"Mutant":{"name":"y"}},"summary":"MissedMutant"}],"total_mutants":3,"missed":1,"caught":1,"timeout":0,"unviable":1,"success":0,"cargo_mutants_version":"27.1.0"}

@@ -12,5 +12,7 @@ disallowed-methods = [
   { path = "std::fs::write", reason = "invariant 3: a file another process reads is written through eph_fs::write_atomic (temp file + rename); a crate allowed a direct write says so with #[expect]" },
   { path = "std::fs::File::create", reason = "invariant 3: File::create truncates a live path in place; write through eph_fs::write_atomic, or append through eph_fs's append-only log" },
   { path = "std::fs::OpenOptions::truncate", reason = "invariants 3 and 5: a truncating open rewrites a live file in place; append-only files are opened for append only, everything else goes through eph_fs::write_atomic" },
+  { path = "std::fs::OpenOptions::open", reason = "invariant 3: an OpenOptions open can write a live file in place (write or append without truncate); write through eph_fs::write_atomic, or append through eph_fs's append-only log; reads use File::open" },
+  { path = "std::fs::copy", reason = "invariant 3: fs::copy writes its destination in place, not atomically; copy through eph_fs" },
   { path = "std::process::Command::new", reason = "invariant 4 and RUST-PLAN §3.2: only eph-git starts git, and only the crates allowlisted in RUST-PLAN §3.2 start any other process; such a crate says so with #[expect]" },
 ]

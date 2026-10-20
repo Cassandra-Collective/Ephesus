@@ -1,0 +1,8 @@
+[package]
+name = "eph-ui"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+left-pad = "1"
+outside = { path = "../../outside" }
