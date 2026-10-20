@@ -453,7 +453,7 @@ requirements and the thirteen invariants do not change. The order, phase by phas
 [`docs/RUST-PLAN.md`](./docs/RUST-PLAN.md). Phase R0 builds the gates first, so every
 later phase is checked from its first line.
 
-<!-- landed: R1.0 R1.1
+<!-- landed: R1.0 R1.1 R1.2
      Checked by scripts/check-readme-current.cjs against the register (docs/PROGRESS.md
      and the milestones archived in docs/progress/): every package of the milestone or
      phase holding the most recent tick must be listed here, and listing one is a claim
@@ -476,6 +476,12 @@ Landed so far in R1, the home and the book of record:
   old home is told it is old, not that it is damaged. Every Rust crate now holds a
   coverage floor measured on Linux, macOS and Windows. It counts production code only,
   rises only by measurement, and is never lowered.
+- **R1.2, the write path and the home.** One crate writes every file another process
+  reads, and it writes each one whole or not at all, waiting out a virus scanner's brief
+  hold on Windows. The book of record syncs every line to disk, so it survives a power
+  cut, and a line torn by a crash is left as it is. A new home is marked as this build's.
+  A directory it did not make, the TypeScript build's live home included, is reported
+  once and never written to.
 
 **R0, the workspace and its gates, is done** (2026-10-19):
 
