@@ -18,24 +18,28 @@
   "corroboratingRuns": 3,
   "corroboratingRunsReason": "Carried from the TypeScript record (RUST-PLAN §4 item 7): one run cannot claim that a suite reproduces a figure, and two runs taken back to back share a machine's mood. A raise takes the lowest of three CI runs per platform, all of one tree. The validator refuses fewer than 3.",
   "measuredFrom": {
-    "tree": "fnv1a64:9f6380dea039ffec",
+    "tree": "fnv1a64:26f0592f6e03d9d1",
     "tool": "cargo-llvm-cov 0.9.1",
     "runs": [
-      "linux 39418850906/1",
-      "linux 39418850906/2",
-      "linux 39418850906/3",
-      "macos 39418850906/1",
-      "macos 39418850906/2",
-      "macos 39418850906/3",
-      "windows 39418850906/1",
-      "windows 39418850906/2",
-      "windows 39418850906/3"
+      "linux 39465824068/1",
+      "linux 39465824068/2",
+      "linux 39465824068/3",
+      "macos 39465824068/1",
+      "macos 39465824068/2",
+      "macos 39465824068/3",
+      "windows 39465824068/1",
+      "windows 39465824068/2",
+      "windows 39465824068/3"
     ]
   },
   "crates": {
     "eph-fs": {
-      "floor": 97.07,
-      "platforms": { "linux": 97.66, "macos": 97.66, "windows": 97.07 }
+      "floor": 97.24,
+      "platforms": { "linux": 97.79, "macos": 97.79, "windows": 97.24 }
+    },
+    "eph-git": {
+      "floor": 98.92,
+      "platforms": { "linux": 98.92, "macos": 98.92, "windows": 99.05 }
     },
     "eph-schema": {
       "floor": 98.87,
