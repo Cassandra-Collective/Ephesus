@@ -134,7 +134,9 @@ proposed*, in §4.13.
   DIAGNOSIS.md
 
 <home>/agora/                 git, one committer (ADR-0004)
-  .gitignore                  NEW: excludes agents/*/inbox/.inflight/ (§4.5)
+  .git/ephesus-committer.lock NEW: the committer's OS lock, held while it runs (§4.5)
+  .git/EPHESUS_COMMIT_MSG     NEW: the batch message each commit reads with -F (§4.5)
+  .gitignore                  NEW: excludes agents/*/inbox/.inflight/ and .*.tmp (§4.5)
   PROTOCOL.md                 rendered from the bundled copy at every boot (§4.6)
   registry.json               who is hired (fields redesigned, §4.5)
   tasks.json  board.md  knowledge/
@@ -154,7 +156,9 @@ proposed*, in §4.13.
 | `PROTOCOL.md` is rendered at every boot | Same defect. A protocol change today never reaches a company that has already booted once |
 | `index/fts.sqlite` is rebuilt when damaged | SDD §10 promised it and the TypeScript build never did it (P9). Derived state needs no rescue (ADR-0027 §5) |
 | The Agora's `.gitignore` excludes `inbox/.inflight/` | A message in flight is a transient state the book of record already logs. Committing every move doubled commit traffic with no audit value. `.done/` and `.rejected/` stay committed: they are the record |
+| The Agora's `.gitignore` also excludes `.*.tmp` (R1.3 review, 2026-10-20) | `write_atomic` writes `.<name>.<8 hex>.tmp` beside its target, and a write killed before its rename leaves one (R1.2's residual). `add -A` would commit that residue, and a concurrent `add -A` could stage a half-written one. R1.4 seeds the file |
 | `home.json` marks a Rust home (Architect, 2026-10-20) | The TypeScript build keeps running from `~/.ephesus` until R14, and six of its files are formats this build cannot read. An existing directory without the marker is never written to: a TypeScript-era home is reported once, with the fix (`EPH_HOME`), and left exactly as it is. Only a path that does not exist, or an empty directory, becomes a new home, and the marker is its first file |
+| `.git/ephesus-committer.lock` holds the committer's lock (Architect, 2026-10-20) | Clearing a stale `index.lock` is safe only if nothing else commits to the Agora, and one harness per home (ADR-0034's probe) arrives in R7. The committer holds an OS lock on this file for its whole life, so a second committer is refused, and the OS releases it when the process dies, so it never goes stale. It holds no bytes and is never deleted. It sits in `.git` so no `add -A` sees it |
 | `cursor.json` removed (Architect, 2026-10-20) | It had no reader (P7). Idempotency comes from the state directories, as it already did. FR-3.6 and NFR-6 are amended and ADR-0003 and ADR-0013 get clause notes (§4.13) |
 
 Everything else in the tree keeps today's name and place.
@@ -257,6 +261,8 @@ from them.
 | `board.md`, `knowledge/` | Unchanged | Agent-facing text with one writer (P2, ADR-0005) | — |
 | `log.jsonl`, `log-archive/` | Every line is `{schemaVersion, seq, ts, kind, event, source?, refs?, data}`, with `ts` in rule 2's form. `kind` and `event` come from a closed vocabulary per kind, and the writer cannot emit an unknown pair. The reader keeps a line it does not know as an opaque, counted record. Rotation at 4 MiB is unchanged | Today 27 kinds carry free-string events with open fields (inventory §10, P1), so no reader could know what a line may say. A typed writer and a tolerant reader let the format grow without one release breaking an older log. **The writer assumes one harness per home** (ADR-0034 is a probe, not a lock), so readers keep today's position-based cursor rather than trusting `seq` to be unique | Absent: a new log. A torn last line is ignored and left on disk (unchanged) |
 | `agents/<id>/inbox/`, `.inflight/`, `.done/`, `.rejected/`, `outbox/`, `outbox/.rejected/`, `human/inbox/` | **Unchanged layout:** a rename between state directories is the atomic state machine, and invariant 4 and ADR-0003 give an agent exactly its own directory. `.inflight/` is no longer committed | Keeping the layout keeps one directory per agent as the whole of what its engine may write: one grant | An unparseable incoming file goes to `.rejected/` with a teaching reply (unchanged) |
+| `.git/ephesus-committer.lock` | NEW (R1.3; Architect, 2026-10-20): an empty file the committer holds an OS lock on (`File::try_lock`) from open until its last git has finished. Writer: the committer, through `eph_fs::lock`, which opens it in place, never truncates it, never deletes it, and on Windows denies delete sharing. Readers: none; the OS lock is the whole format, and any `Worktrees::create` treats a git directory holding it as the Agora | Clearing a stale `index.lock` is safe only if nothing else commits. ADR-0034's probe owns one harness per home in R7, and this owns one committer per Agora now, with no stale-lock policy because the OS releases it when the process dies | Absent: created at open. Damaged: it has no content to damage; a lock held elsewhere is a refusal (`OpenError::Held`) that names the fix |
+| `.git/EPHESUS_COMMIT_MSG` | NEW (R1.3): the batch message, written with `write_atomic` before each `git commit -F`. Writer: the committer. Reader: git | A message on the command line is capped by the OS (about 32,000 characters on Windows), so a large batch could never land | Absent: written before the commit that reads it. Damaged: not reachable, since it is rewritten whole before every read |
 | `agents/<id>/cursor.json` | **Removed** (Architect, 2026-10-20). Idempotency comes from the state directories: a message's file is in exactly one of `inbox/`, `.inflight/` and `.done/`, and consuming it moves it by rename | It had no reader (P7) | — |
 | The message | `{schemaVersion, id, conversation, in_reply_to, from, to, act, subject, body, hops, needs_human, created_at}` | `schemaVersion` is added (rule 1; agents write messages, so PROTOCOL.md tells them to write it, and the validator refuses one without it). `requires_reply` is removed: it was corrected on read to a function of `act` (FR-3.3), which made it two fields that cannot disagree (P7). The other names are FR-3.1's, kept | — |
 
@@ -306,7 +312,7 @@ not validate is refused with a teaching reply.
 | `engines/claude/<agent>/eph-settings.json` | Claude Code's settings schema, written by Ephesus in the engine's format | `test/fixtures/engine-output/`; memory *Claude Code engine ground truth* |
 | `engines/claude/<agent>/.claude.json` | The engine, which rewrites it wholesale. Onboarding and trust are merged in (ADR-0021, ADR-0025) | As above |
 | `engines/claude/<agent>/projects/<slug>/<session>.jsonl` | The engine's transcript, read for the cost ledger | `test/fixtures/claude-limit/` |
-| `worktrees/`, the Agora's `.git/` | git | RUST-PLAN §2 |
+| `worktrees/`, the Agora's `.git/` | git, except the two files Ephesus keeps inside `.git` (`ephesus-committer.lock` and `EPHESUS_COMMIT_MSG`, §4.5), which git never reads as its own | RUST-PLAN §2 |
 | `index/` (MemPalace's store) | MemPalace | Its CLI, version-probed (ADR-0016) |
 
 ### 4.12 Today's format problems, each closed or carried
