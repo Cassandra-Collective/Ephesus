@@ -409,7 +409,8 @@ and opens when #104 merges.
     and the ratchet. Linux in WSL matched Windows figure for figure and hash for hash.
     The floors were seeded by `cargo xtask coverage ratchet` from CI run 39402429611's
     three attempts on all three platforms: `eph-schema` 98.86% and `xtask` 98.26%, on
-    tree `fnv1a64:9c42f0f107e84a79`.
+    tree `fnv1a64:9c42f0f107e84a79`. CI run 39406446582 on the commit carrying the
+    floors is green on every job, including all seven gate steps on all three platforms.
     [`2026-10-20-r1-1-eph-schema.md`](./implementations/2026-10-20-r1-1-eph-schema.md)
   - [ ] **R1.2 `eph-fs`** — atomic writes, the append-only log, the home and its seeding.
   - [ ] **R1.3 `eph-git`** — the single committer and worktrees; hermetic git in every
