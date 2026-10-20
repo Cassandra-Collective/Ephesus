@@ -1370,9 +1370,13 @@ mod tests {
         let (dir, root) = agora("reconcile-live");
         let lock = root.join(".git").join("index.lock");
         write(&lock, "");
+        // The stand-in git finishes 30 ms in, far inside open's 375 ms wait. At
+        // 200 ms, a slow Windows runner let open's own delete race this one, and
+        // a file whose delete is still pending refuses a second with error 5
+        // (CI, 2026-10-20): `Stuck`, which is the honest answer to that race.
         let opened = thread::scope(|scope| {
             scope.spawn(|| {
-                thread::sleep(Duration::from_millis(200));
+                thread::sleep(Duration::from_millis(30));
                 fs::remove_file(&lock).unwrap();
             });
             Committer::open(&root, Hooks::none()).unwrap()
