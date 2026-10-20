@@ -108,6 +108,79 @@ impl Task {
         let memo_ok = !self.review.contains(&ReviewKind::Memo) || !self.artifacts.memos.is_empty();
         deck_ok && memo_ok && self.gates.is_empty()
     }
+
+    /// Every rule that holds for one task wherever it is kept, the ledger and
+    /// each archive line, so an archived task is held to the ledger's rules
+    /// (R1.4a review, 2026-10-20). `file` names the file in the refusal.
+    fn check(&self, file: &'static str) -> Result<(), SchemaError> {
+        let field = |name: &str| format!("tasks.{}.{name}", self.id);
+        check_len(file, &field("title"), &self.title, 1, 200)?;
+        check_len(file, &field("spec"), &self.spec, 0, 20_000)?;
+        check_len(file, &field("source.kind"), &self.source.kind, 1, 32)?;
+        if self.priority > 9 {
+            return Err(SchemaError::invalid(
+                file,
+                field("priority"),
+                "must be 0 to 9",
+            ));
+        }
+        if self.deps.len() > 64 || self.gates.len() > 32 || self.artifacts.memos.len() > 64 {
+            return Err(SchemaError::invalid(
+                file,
+                field("deps"),
+                "at most 64 dependencies, 32 gates and 64 memos",
+            ));
+        }
+        if self.deps.contains(&self.id) {
+            return Err(SchemaError::invalid(
+                file,
+                field("deps"),
+                "a task cannot depend on itself",
+            ));
+        }
+        if self.updated_at < self.created_at {
+            return Err(SchemaError::invalid(
+                file,
+                field("updatedAt"),
+                "must not be before createdAt",
+            ));
+        }
+        if self.status == TaskStatus::Done && !self.can_close() {
+            return Err(SchemaError::invalid(
+                file,
+                field("status"),
+                "is done while a required review artifact is missing or a gate still blocks it",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The most tasks a ledger, or one archive line, holds.
+pub const MAX_TASKS: usize = 10_000;
+
+/// The ids of `tasks`, refusing, in `file`'s name, more than [`MAX_TASKS`] or
+/// two tasks with one id.
+fn unique_ids<'a>(
+    file: &'static str,
+    tasks: &'a [Task],
+) -> Result<BTreeSet<&'a TaskId>, SchemaError> {
+    if tasks.len() > MAX_TASKS {
+        return Err(SchemaError::invalid(
+            file,
+            "tasks",
+            format!("must hold at most {MAX_TASKS} tasks"),
+        ));
+    }
+    let ids: BTreeSet<&TaskId> = tasks.iter().map(|t| &t.id).collect();
+    if ids.len() != tasks.len() {
+        return Err(SchemaError::invalid(
+            file,
+            "tasks",
+            "every task id must be unique",
+        ));
+    }
+    Ok(ids)
 }
 
 /// `tasks.json`.
@@ -136,68 +209,14 @@ impl Versioned for Tasks {
 
     fn validate(&self) -> Result<(), SchemaError> {
         expect_version(Self::FILE, Self::VERSION, self.schema_version)?;
-        if self.tasks.len() > 10_000 {
-            return Err(SchemaError::invalid(
-                Self::FILE,
-                "tasks",
-                "must hold at most 10000 tasks",
-            ));
-        }
-        let ids: BTreeSet<&TaskId> = self.tasks.iter().map(|t| &t.id).collect();
-        if ids.len() != self.tasks.len() {
-            return Err(SchemaError::invalid(
-                Self::FILE,
-                "tasks",
-                "every task id must be unique",
-            ));
-        }
+        let ids = unique_ids(Self::FILE, &self.tasks)?;
         for task in &self.tasks {
-            let field = |name: &str| format!("tasks.{}.{name}", task.id);
-            check_len(Self::FILE, &field("title"), &task.title, 1, 200)?;
-            check_len(Self::FILE, &field("spec"), &task.spec, 0, 20_000)?;
-            check_len(Self::FILE, &field("source.kind"), &task.source.kind, 1, 32)?;
-            if task.priority > 9 {
+            task.check(Self::FILE)?;
+            if let Some(dep) = task.deps.iter().find(|dep| !ids.contains(dep)) {
                 return Err(SchemaError::invalid(
                     Self::FILE,
-                    field("priority"),
-                    "must be 0 to 9",
-                ));
-            }
-            if task.deps.len() > 64 || task.gates.len() > 32 || task.artifacts.memos.len() > 64 {
-                return Err(SchemaError::invalid(
-                    Self::FILE,
-                    field("deps"),
-                    "at most 64 dependencies, 32 gates and 64 memos",
-                ));
-            }
-            for dep in &task.deps {
-                if dep == &task.id {
-                    return Err(SchemaError::invalid(
-                        Self::FILE,
-                        field("deps"),
-                        "a task cannot depend on itself",
-                    ));
-                }
-                if !ids.contains(dep) {
-                    return Err(SchemaError::invalid(
-                        Self::FILE,
-                        field("deps"),
-                        format!("names `{dep}`, which is not in the ledger"),
-                    ));
-                }
-            }
-            if task.updated_at < task.created_at {
-                return Err(SchemaError::invalid(
-                    Self::FILE,
-                    field("updatedAt"),
-                    "must not be before createdAt",
-                ));
-            }
-            if task.status == TaskStatus::Done && !task.can_close() {
-                return Err(SchemaError::invalid(
-                    Self::FILE,
-                    field("status"),
-                    "is done while a required review artifact is missing or a gate still blocks it",
+                    format!("tasks.{}.deps", task.id),
+                    format!("names `{dep}`, which is not in the ledger"),
                 ));
             }
         }
@@ -208,7 +227,9 @@ impl Versioned for Tasks {
 /// One line of `tasks-archive.jsonl`: the done tasks one retention run moved out
 /// of the ledger (SDD-RUST §4.5; Architect, 2026-10-20). Append-only. One line
 /// per run, not per task: each line is one synced append, and 8,001 of them took
-/// 62 s on win32 (R1.4a, 2026-10-20).
+/// 62 s on win32 (R1.4a, 2026-10-20). Each task is held to the ledger's own
+/// per-task rules, and ids are unique within the line. A dependency is not
+/// checked: it may name a task in the ledger or on an earlier line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ArchivedTasks {
@@ -233,7 +254,9 @@ impl ArchivedTasks {
 
 impl Versioned for ArchivedTasks {
     const FILE: &'static str = "tasks-archive.jsonl";
-    const VERSION: u32 = 1;
+    /// The ledger's: a line holds the ledger's [`Task`], so a change to a task's
+    /// shape is a new version of both files.
+    const VERSION: u32 = Tasks::VERSION;
 
     fn validate(&self) -> Result<(), SchemaError> {
         expect_version(Self::FILE, Self::VERSION, self.schema_version)?;
@@ -244,16 +267,16 @@ impl Versioned for ArchivedTasks {
                 "an archive line holds at least one task",
             ));
         }
-        if self
-            .tasks
-            .iter()
-            .any(|task| task.status != TaskStatus::Done)
-        {
-            return Err(SchemaError::invalid(
-                Self::FILE,
-                "tasks",
-                "only a done task is archived",
-            ));
+        unique_ids(Self::FILE, &self.tasks)?;
+        for task in &self.tasks {
+            task.check(Self::FILE)?;
+            if task.status != TaskStatus::Done {
+                return Err(SchemaError::invalid(
+                    Self::FILE,
+                    format!("tasks.{}.status", task.id),
+                    "only a done task is archived",
+                ));
+            }
         }
         Ok(())
     }
@@ -320,20 +343,72 @@ mod tests {
         let text = render_archived(&line).unwrap();
         assert!(!text.contains('\n'), "{text}");
         assert!(
-            text.starts_with("{\"schemaVersion\":1,\"archivedAt\":"),
-            "{text}"
+            text.starts_with("{\"schemaVersion\":2,\"archivedAt\":"),
+            "the ledger's version: {text}"
         );
         assert_eq!(parse::<ArchivedTasks>(&text).unwrap(), line);
         let open = render_archived(&ArchivedTasks::new(vec![one, task(3)], at)).unwrap_err();
         assert!(
-            open.to_string().contains("only a done task is archived"),
+            open.to_string().contains(&format!(
+                "tasks.{}.status: only a done task is archived",
+                id(3)
+            )),
             "{open}"
         );
         let empty = render_archived(&ArchivedTasks::new(Vec::new(), at)).unwrap_err();
         assert!(empty.to_string().contains("at least one task"), "{empty}");
         let mut wrong = ArchivedTasks::new(vec![two], at);
-        wrong.schema_version = 2;
+        wrong.schema_version = 1;
         assert!(render_archived(&wrong).is_err());
+    }
+
+    /// R1.4a review D1 (2026-10-20): an archived task was checked only for
+    /// being done, so a task the ledger would refuse could reach the archive.
+    #[test]
+    fn an_archive_line_holds_each_task_to_the_ledgers_rules() {
+        let at = Timestamp::from_millis(9_000).unwrap();
+        let done = |n: u8| Task {
+            status: TaskStatus::Done,
+            ..task(n)
+        };
+        let mut gated = done(1);
+        gated
+            .gates
+            .push(GateId::mint(Timestamp::from_millis(5).unwrap(), "abcdef01").unwrap());
+        let mut untitled = done(2);
+        untitled.title = String::new();
+        let mut self_dep = done(3);
+        self_dep.deps = vec![id(3)];
+        for (bad, says) in [
+            (gated, "gate still blocks"),
+            (untitled, ".title"),
+            (self_dep, "depend on itself"),
+        ] {
+            let error = render_archived(&ArchivedTasks::new(vec![bad], at)).unwrap_err();
+            assert!(
+                error.to_string().starts_with("tasks-archive.jsonl: "),
+                "{error}"
+            );
+            assert!(error.to_string().contains(says), "{says}: {error}");
+        }
+        let twice = render_archived(&ArchivedTasks::new(vec![done(4), done(4)], at)).unwrap_err();
+        assert!(twice.to_string().contains("unique"), "{twice}");
+        let mut huge: Vec<Task> = (0..=u32::try_from(MAX_TASKS).unwrap())
+            .map(|n| Task {
+                id: wide_id(n),
+                ..done(1)
+            })
+            .collect();
+        let error = render_archived(&ArchivedTasks::new(huge.clone(), at)).unwrap_err();
+        assert!(error.to_string().contains("at most 10000"), "{error}");
+        huge.pop();
+        assert!(render_archived(&ArchivedTasks::new(huge, at)).is_ok());
+        let mut elsewhere = done(5);
+        elsewhere.deps = vec![id(9)];
+        assert!(
+            render_archived(&ArchivedTasks::new(vec![elsewhere], at)).is_ok(),
+            "a dependency may be in the ledger or on an earlier line"
+        );
     }
 
     #[test]

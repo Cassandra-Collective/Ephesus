@@ -1,12 +1,12 @@
 //! `Store<T>`: the one store for structured records (SDD-RUST §4.0 rule 6, P5).
 //!
 //! Contract:
-//! - **Absent is not damaged.** [`Store::load`] answers [`Loaded::Absent`] for a
-//!   file that does not exist, [`Loaded::Present`] for one that parses at this
-//!   build's version and passes its validation, and [`Loaded::Damaged`] for
-//!   anything else: a file that cannot be read, is not strict JSON, holds a
-//!   version this build does not read, or fails its validation. A damaged file
-//!   is never read as absent.
+//! - **Absent is not damaged.** [`Store::load`] answers [`Loaded::Absent`] only
+//!   when nothing exists at the path, [`Loaded::Present`] for a file that parses
+//!   at this build's version and passes its validation, and [`Loaded::Damaged`]
+//!   for anything else: a file that cannot be read, a link to nothing, text
+//!   that is not strict JSON, a version this build does not read, or a record
+//!   that fails its validation. A damaged file is never read as absent.
 //! - **Nothing is written over damage.** [`Store::save`] validates the value
 //!   first and then refuses to write while the file on disk is damaged, which
 //!   leaves the evidence for the Architect. The one exception is a record whose
@@ -21,9 +21,11 @@
 //! - [`OnDamaged::Block`]: the same, and the caller also refuses the action that
 //!   depends on the record. The store behaves as for Refuse; the policy travels
 //!   with the [`Damage`] so the caller can tell.
-//! - [`OnDamaged::Rebuild`]: the record is derived. A damaged file is deleted
-//!   when it is read, the damage is still returned so the caller reports it,
-//!   and the caller rebuilds it.
+//! - [`OnDamaged::Rebuild`]: the record is derived, and the caller rebuilds it.
+//!   A file whose text is not a valid record is deleted when it is read. One
+//!   that cannot be read at all is left in place, because what it holds is
+//!   unknown, and a rebuild writes over it. Either way the damage is returned,
+//!   saying which, so the caller reports it (R1.4a review, 2026-10-20).
 
 use std::fmt;
 use std::fs;
@@ -56,6 +58,9 @@ pub struct Damage {
     pub reason: String,
     /// The record's policy.
     pub policy: OnDamaged,
+    /// Whether the read deleted the file: only under Rebuild, and only when
+    /// its text was read and is not a valid record.
+    pub deleted: bool,
 }
 
 impl Damage {
@@ -80,7 +85,8 @@ impl Damage {
             OnDamaged::Block => {
                 "it is left as evidence, nothing is written to it, and what depends on it is refused until it is repaired"
             }
-            OnDamaged::Rebuild => "it is derived, so it was deleted and is rebuilt",
+            OnDamaged::Rebuild if self.deleted => "it is derived, so it was deleted and is rebuilt",
+            OnDamaged::Rebuild => "it is derived, so it is rebuilt over, and it was not deleted",
         };
         format!(
             "{} is damaged ({}); {consequence}",
@@ -152,14 +158,19 @@ impl<T: Versioned> Store<T> {
 
     /// Reads the record. See the module contract.
     pub fn load(&self) -> Loaded<T> {
-        let text = match fs::read_to_string(&self.path) {
-            Ok(text) => text,
+        // The link itself, not its target: a link to nothing exists, and
+        // reading it as absent would seed over it (R1.4a review, 2026-10-20).
+        let read = match fs::symlink_metadata(&self.path) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Loaded::Absent,
-            Err(error) => return self.damaged(format!("it cannot be read: {error}")),
+            Err(error) => Err(error),
+            Ok(_) => fs::read_to_string(&self.path),
         };
-        match parse::<T>(&text) {
-            Ok(record) => Loaded::Present(record),
-            Err(error) => self.damaged(error.to_string()),
+        match read {
+            Err(error) => self.damaged(format!("it cannot be read: {error}"), false),
+            Ok(text) => match parse::<T>(&text) {
+                Ok(record) => Loaded::Present(record),
+                Err(error) => self.damaged(error.to_string(), true),
+            },
         }
     }
 
@@ -172,7 +183,7 @@ impl<T: Versioned> Store<T> {
     }
 
     /// `Ok` when a write may happen: the file is absent, valid, or damaged
-    /// under Rebuild (which [`Store::load`] has just deleted).
+    /// under Rebuild, which a rebuild may replace.
     pub fn writable(&self) -> Result<(), StoreError> {
         match self.load() {
             Loaded::Damaged(damage) if damage.policy != OnDamaged::Rebuild => {
@@ -182,20 +193,25 @@ impl<T: Versioned> Store<T> {
         }
     }
 
-    fn damaged(&self, reason: String) -> Loaded<T> {
-        let reason = if self.policy == OnDamaged::Rebuild {
-            match fs::remove_file(&self.path) {
-                Ok(()) => reason,
-                Err(error) => format!("{reason}; and it could not be deleted: {error}"),
-            }
-        } else {
-            reason
-        };
-        Loaded::Damaged(Damage {
+    /// The damage, after deleting the file when the policy is Rebuild and
+    /// `deletable` (its text was read, so what is lost is known to be invalid).
+    fn damaged(&self, reason: String, deletable: bool) -> Loaded<T> {
+        let mut damage = Damage {
             file: self.path.clone(),
             reason,
             policy: self.policy,
-        })
+            deleted: false,
+        };
+        if deletable && self.policy == OnDamaged::Rebuild {
+            match fs::remove_file(&self.path) {
+                Ok(()) => damage.deleted = true,
+                Err(error) => {
+                    damage.reason =
+                        format!("{}; and it could not be deleted: {error}", damage.reason)
+                }
+            }
+        }
+        Loaded::Damaged(damage)
     }
 }
 
@@ -297,7 +313,50 @@ mod tests {
             matches!(store.load(), Loaded::Damaged(_)),
             "bytes that are not UTF-8"
         );
+        // A path the OS refuses to look up is an error other than "not found".
+        let refused = Store::<Note>::at(&dir.join("a b"), OnDamaged::Refuse);
+        assert!(matches!(refused.load(), Loaded::Damaged(_)));
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_saved_with_a_byte_order_mark_is_damaged_and_says_how_to_fix_it() {
+        let dir = scratch("bom");
+        let store = Store::<Note>::at(&dir, OnDamaged::Refuse);
+        plant(&store, "﻿{\"schemaVersion\":1,\"text\":\"x\"}");
+        let Loaded::Damaged(damage) = store.load() else {
+            panic!("a file with a byte-order mark read as something else");
+        };
+        assert!(
+            damage.reason.contains(eph_schema::document::BOM),
+            "{}",
+            damage.reason
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_nothing_is_damaged_not_absent_and_is_never_deleted() {
+        for policy in [OnDamaged::Refuse, OnDamaged::Rebuild] {
+            let dir = scratch("dangling");
+            let store = Store::<Note>::at(&dir, policy);
+            std::os::unix::fs::symlink(dir.join("gone.json"), store.path()).unwrap();
+            let Loaded::Damaged(damage) = store.load() else {
+                panic!("{policy:?}: a link to nothing read as absent or present");
+            };
+            assert!(
+                damage.reason.starts_with("it cannot be read: "),
+                "{}",
+                damage.reason
+            );
+            assert!(!damage.deleted);
+            assert!(
+                fs::symlink_metadata(store.path()).is_ok(),
+                "{policy:?}: left in place"
+            );
+            fs::remove_dir_all(&dir).unwrap();
+        }
     }
 
     #[test]
@@ -331,6 +390,8 @@ mod tests {
             panic!("a damaged derived record read as something else");
         };
         assert_eq!(damage.policy, OnDamaged::Rebuild);
+        assert!(damage.deleted);
+        assert!(damage.detail().ends_with("it was deleted and is rebuilt"));
         assert!(!store.path().exists(), "deleted when read");
         assert_eq!(store.load(), Loaded::Absent);
         plant(&store, "{ stale again");
@@ -339,19 +400,67 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// R1.4a review (2026-10-20): a file that could not be read was deleted
+    /// under Rebuild, though what it held was unknown.
     #[test]
-    fn a_derived_record_that_cannot_be_deleted_says_so() {
-        let dir = scratch("rebuild-stuck");
+    fn a_derived_record_that_cannot_be_read_is_left_in_place_and_written_over() {
+        let dir = scratch("rebuild-unreadable");
         let store = Store::<Note>::at(&dir, OnDamaged::Rebuild);
-        fs::create_dir_all(store.path().join("inside")).unwrap();
+        write_atomic(store.path(), &[0xff, 0xfe, 0x00]).unwrap();
         let Loaded::Damaged(damage) = store.load() else {
-            panic!("a directory read as a record");
+            panic!("bytes that are not UTF-8 read as a record");
         };
         assert!(
-            damage.reason.contains("and it could not be deleted: "),
+            damage.reason.starts_with("it cannot be read: "),
             "{}",
             damage.reason
         );
+        assert!(!damage.deleted);
+        assert!(
+            damage
+                .detail()
+                .ends_with("it is rebuilt over, and it was not deleted"),
+            "{}",
+            damage.detail()
+        );
+        assert!(store.path().exists(), "left in place");
+        store.save(&note("rebuilt")).unwrap();
+        assert_eq!(store.load(), Loaded::Present(note("rebuilt")));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A directory without write permission refuses the delete on unix. A
+    /// privileged user ignores the permission, so there the test says so and
+    /// stops; the three CI platforms run unprivileged.
+    #[cfg(unix)]
+    #[test]
+    fn a_derived_record_that_cannot_be_deleted_says_so() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("rebuild-stuck");
+        let inner = dir.join("inner");
+        fs::create_dir_all(&inner).unwrap();
+        let store = Store::<Note>::at(&inner, OnDamaged::Rebuild);
+        plant(&store, "{ stale");
+        fs::set_permissions(&inner, fs::Permissions::from_mode(0o555)).unwrap();
+        let privileged = write_atomic(&inner.join("probe"), b"").is_ok();
+        let loaded = store.load();
+        fs::set_permissions(&inner, fs::Permissions::from_mode(0o755)).unwrap();
+        if privileged {
+            eprintln!("skipped: this user ignores directory permissions");
+            fs::remove_dir_all(&dir).unwrap();
+            return;
+        }
+        let Loaded::Damaged(damage) = loaded else {
+            panic!("a damaged derived record read as something else");
+        };
+        assert!(
+            damage.reason.contains("; and it could not be deleted: "),
+            "{}",
+            damage.reason
+        );
+        assert!(!damage.deleted);
+        assert!(damage.detail().ends_with("and it was not deleted"));
+        assert!(store.path().exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -390,6 +499,7 @@ mod tests {
             file: PathBuf::from("agora").join("registry.json"),
             reason: "not JSON".to_string(),
             policy,
+            deleted: policy == OnDamaged::Rebuild,
         };
         assert_eq!(
             damage(OnDamaged::Refuse).cause().to_string(),
