@@ -27,6 +27,14 @@ exclude_re = [
   # can observe: a process that reads the directory back sees the rename either
   # way. On Windows the body does not run at all (R1.2 round 1, 2026-10-20).
   'sync_dir -> io::Result<\(\)> with Ok\(\(\)\)',
+  # eph-git waits for a git's output until its deadline plus half a second, so a
+  # grandchild that holds the pipes a moment past git's exit does not fail the
+  # call. Subtracting the grace instead changes only when, inside that half
+  # second, the wait gives up. A test that could see it would have to time a
+  # pipe's close to within the grace on a loaded machine, which flakes; the
+  # cases either side of the window (output that arrives, output that never
+  # does) are tested (R1.3 eph-git round 2, 2026-10-20).
+  'replace \+ with - in drain_until',
 ]
 
 # Build without debug info ([profile.mutants] in Cargo.toml): a round relinks
