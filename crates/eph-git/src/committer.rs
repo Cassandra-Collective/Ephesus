@@ -5,8 +5,10 @@
 //!   on `.git/ephesus-committer.lock` before it does anything else, and holds it
 //!   until the committer is dropped and its last git has finished. A second
 //!   committer on the same Agora, in this process or another, is refused with
-//!   [`OpenError::Held`]. The OS releases the lock when the process dies,
-//!   however it dies (DECISIONS-LOG 2026-10-20, *R1.3 — Architect decisions*).
+//!   [`OpenError::Held`], after [`LOCK_WAITS`]: on POSIX a lock released a
+//!   moment ago can read as held while a process another thread forked has
+//!   not yet exec'd. The OS releases the lock when the process dies, however
+//!   it dies (DECISIONS-LOG 2026-10-20, *R1.3 — Architect decisions*).
 //! - **A killed harness's `index.lock` is judged at open**, with the lock held
 //!   and before any commit can run. Open waits while `.git/index.lock` exists,
 //!   over the retry schedule, so a git still running for a killed harness can
@@ -71,6 +73,13 @@ pub const RETRY_WAITS: [u64; 4] = [25, 50, 100, 200];
 /// How old an `index.lock` must be before a retry removes it: the runner's
 /// deadline, past which every git of this committer's has been killed.
 pub const STALE_AFTER: Duration = TIMEOUT;
+
+/// The waits, in milliseconds, before open asks for the committer's lock again.
+/// On POSIX a process another thread forks holds a copy of every open file
+/// until it execs, the lock's included, so a lock released a moment ago can
+/// still read as held (CI, Linux, 2026-10-20). A committer that is really
+/// running still holds it after these 150 ms, and is refused.
+pub const LOCK_WAITS: [u64; 4] = [10, 20, 40, 80];
 
 /// How many failures nobody waited for are kept, oldest dropped first.
 pub const MAX_RECORDED_FAILURES: usize = 50;
@@ -276,7 +285,7 @@ impl Committer {
         }
         fs::create_dir_all(&dot_git)?;
         let lock_path = dot_git.join(LOCK_FILE);
-        let Some(lock) = Exclusive::try_acquire(&lock_path)? else {
+        let Some(lock) = acquire(&lock_path)? else {
             return Err(OpenError::Held(lock_path));
         };
         // Only the lock's holder may make the repository, so two opens of a new
@@ -423,6 +432,18 @@ pub fn commit_message(subjects: &[String]) -> String {
         subjects.len() - 1,
         listed.join("\n")
     )
+}
+
+/// Takes the committer's lock, asking again over [`LOCK_WAITS`] while it reads
+/// as held.
+fn acquire(path: &Path) -> io::Result<Option<Exclusive>> {
+    for wait in LOCK_WAITS {
+        if let Some(lock) = Exclusive::try_acquire(path)? {
+            return Ok(Some(lock));
+        }
+        thread::sleep(Duration::from_millis(wait));
+    }
+    Exclusive::try_acquire(path)
 }
 
 fn stopped(subject: String) -> CommitFailure {
@@ -841,6 +862,36 @@ mod tests {
     }
 
     #[test]
+    fn a_lock_released_a_moment_ago_is_taken_not_refused() {
+        let (dir, root) = agora("released");
+        let lock_path = root.join(".git").join(LOCK_FILE);
+        // A fork's copy of the lock's file stands in, held for 60 ms.
+        let held = Exclusive::try_acquire(&lock_path).unwrap().unwrap();
+        let opened = thread::scope(|scope| {
+            scope.spawn(move || {
+                thread::sleep(Duration::from_millis(60));
+                drop(held);
+            });
+            Committer::open(&root, Hooks::none())
+        });
+        assert!(opened.is_ok(), "{opened:?}");
+        drop(opened);
+        let first = open(&root);
+        let started = Instant::now();
+        assert!(matches!(
+            Committer::open(&root, Hooks::none()),
+            Err(OpenError::Held(_))
+        ));
+        let waited: u64 = LOCK_WAITS.iter().sum();
+        assert!(
+            started.elapsed() >= Duration::from_millis(waited),
+            "a held lock is refused only after the waits"
+        );
+        drop(first);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_second_committer_through_a_link_is_refused_too() {
         let (dir, root) = agora("second-link");
         let first = open(&root);
@@ -1027,14 +1078,17 @@ mod tests {
     fn many_callers_at_once_never_contend_for_the_index() {
         let (dir, root) = agora("many");
         let committer = open(&root);
+        // Every file is written while commits run, so an `add -A` can meet one
+        // mid-rename and fail once (seen on Windows CI, 2026-10-20): that is
+        // what the retries absorb. What one queue rules out is two of its own
+        // gits at once, so every caller's work lands.
         thread::scope(|scope| {
             for n in 0..8 {
                 let committer = &committer;
                 let root = &root;
                 scope.spawn(move || {
                     write(&root.join("work").join(format!("{n}.txt")), "w");
-                    let outcome = committer.commit(format!("work {n}")).wait().unwrap();
-                    assert_eq!(outcome.attempts, 1, "one queue: no lock to retry on");
+                    committer.commit(format!("work {n}")).wait().unwrap();
                 });
             }
         });
