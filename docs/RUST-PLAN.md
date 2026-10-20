@@ -264,7 +264,10 @@ survive with their gate (ADR-0030).
 ### R11 — The Gymnasium, the Stoa and company modes
 
 *Exit:* FR-12.1 to FR-12.6, FR-13.1 to FR-13.7, FR-14.1 to FR-14.5. SRS §6 criteria 8
-and 9 by their scenario suites.
+and 9 by their scenario suites. The Stoa seed decisions of 2026-10-11 (DECISIONS-LOG,
+carried from closed PR #76) are requirements: the seed validates every row it parses
+and reports each one it refuses, pattern intake needs a license on the MIT-compatible
+list, and curation refuses to write over a watchlist it cannot read.
 
 ### R12 — The Herald
 
