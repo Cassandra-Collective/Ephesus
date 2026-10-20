@@ -15,6 +15,13 @@ exclude_re = [
   # There is no duplicate to delete: serde calls `visit_unit` for `null`, and the
   # trait's default refuses it (R1.1 round 1, 2026-10-20).
   'StrictVisitor>::visit_unit -> Result<Value, E> with Ok\(Default::default\(\)\)',
+  # xtask's gate runner returns the coverage step's exit code. A test through the
+  # real runner, with the xtask binary standing in for cargo, kills the None,
+  # Some(0) and Some(-1) mutants. Telling Some(1) apart needs a step that returns
+  # 0, which is a real instrumented run of a whole workspace. `cargo xtask gate`
+  # performs one on every invocation; a test doing it would nest one coverage run
+  # inside another, once per mutant (R1.1 xtask round 2, 2026-10-20).
+  'CargoRunner>::coverage -> Option<i32> with Some\(1\)',
 ]
 
 # Build without debug info ([profile.mutants] in Cargo.toml): a round relinks

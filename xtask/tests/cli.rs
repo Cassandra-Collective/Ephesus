@@ -186,7 +186,8 @@ fn the_real_gate_runner_reports_a_coverage_step_without_its_tool_red() {
     // exits 1. A green coverage step needs a real instrumented run of a whole
     // workspace, which `cargo xtask gate` performs on every invocation; a
     // test of it here would nest one coverage run inside another (xtask
-    // mutation round 1 triage, 2026-10-20).
+    // mutation round 1 triage, 2026-10-20). The Some(1) mutant is excluded in
+    // .cargo/mutants.toml with that reason.
     let mut runner = CargoRunner {
         cargo: OsString::from(XTASK),
     };
