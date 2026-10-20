@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
 
 /// A held exclusive lock. Dropping it releases the lock.
+#[must_use = "the lock is released as soon as this is dropped"]
 #[derive(Debug)]
 pub struct Exclusive {
     _file: File,
