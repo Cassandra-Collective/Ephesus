@@ -53,6 +53,13 @@ ADR-0040 was written first because its decision was taken first (2026-10-03).
 **Clause notes** (an accepted ADR is never edited; a clause overtaken by a
 recorded decision is listed here so its sentence is not read as current):
 
+- ADR-0003 Decision, "is a no-op (per-agent cursor)", and ADR-0013 Decision,
+  "Idempotent inbox consumption via the cursor (ADR-0003)": the cursor is replaced by
+  the inbox's state directories. A message's file is in exactly one of `inbox/`,
+  `inbox/.inflight/` and `inbox/.done/`, and consuming it moves it by rename (SDD-RUST
+  §4.5; SRS FR-3.6 and NFR-6 as amended 2026-10-20). The rest of both ADRs stands. The
+  TypeScript build wrote `cursor.json` and never read it, so nothing that worked
+  depended on it. *(Architect, 2026-10-20.)*
 - ADR-0034 Consequences, "`DIAGNOSIS.md`'s *book of record* row reads
   `WAITING FOR YOU` on a busy home" — overtaken the next day (2026-09-09) by the
   Architect's decision that **a blocked instance writes nothing into a home it

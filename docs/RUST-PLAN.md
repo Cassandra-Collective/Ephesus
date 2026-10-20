@@ -168,9 +168,13 @@ fails a planted violation by file and line.
   every persisted schema, each redesigned from first principles with today's used only
   as a checklist of what must be covered, and each departure stated with its reason.
   It goes to the Architect for one approval before R1.1 starts. No code.
-- **R1.1** `eph-schema`: the persisted models, built to R1.0's approved design, and the
-  Rust coverage floors (`cargo-llvm-cov`, measured on all three CI platforms) starting
-  with this first crate.
+- **R1.1** `eph-schema`: the persisted models R1 needs, built to R1.0's approved design.
+  That means the primitives (versions, time, ids, refs), the home's settings and policy
+  files, `triggers.json` and `breaker-stops.json`, the registry, the task ledger, the
+  message, the log line and its degradation rows. Every other model is typed by the
+  phase that builds its subsystem, against SDD-RUST §4 (Architect, 2026-10-20). It also
+  starts the Rust coverage floors (`cargo-llvm-cov`): one floor per crate, the lowest of
+  the three CI platforms, ratcheted only from CI artifacts and never lowered.
 - **R1.2** `eph-fs`: `write_atomic`, the append-only JSONL writer (seq recovery, torn-tail
   tolerance), the home layout and first-boot seeding (`gate-policy.json`,
   `authority.json`: only when absent, reported).
