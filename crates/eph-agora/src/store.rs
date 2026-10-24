@@ -314,7 +314,7 @@ mod tests {
             "bytes that are not UTF-8"
         );
         // A path the OS refuses to look up is an error other than "not found".
-        let refused = Store::<Note>::at(&dir.join("a b"), OnDamaged::Refuse);
+        let refused = Store::<Note>::at(&dir.join("a\0b"), OnDamaged::Refuse);
         assert!(matches!(refused.load(), Loaded::Damaged(_)));
         fs::remove_dir_all(&dir).unwrap();
     }
