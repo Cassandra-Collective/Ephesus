@@ -92,7 +92,10 @@ fewer than one package's worth of code is folded into its neighbour until it gro
   module it must not use), and on nothing else of ours.
 - Only `eph-git` constructs a `git` command. Only `eph-pty`, `eph-engines` (version
   probes), `eph-library` (MemPalace) and `eph-harbor` (`gh`) may construct any other
-  process, each named in `clippy.toml`'s allowlist with its reason.
+  process, each named in `clippy.toml`'s allowlist with its reason. `eph-git` and
+  `eph-agora` also claim `process:`, in their tests only: kill tests that run the test
+  binary again as the harness they kill, and in `eph-git` a Windows junction made with
+  `mklink /J` (GYM-014, Architect, 2026-10-25).
 - Only `eph-fs` may write a file another process reads.
 
 ### 3.3 Process model

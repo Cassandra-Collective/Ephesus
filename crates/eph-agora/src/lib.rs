@@ -9,10 +9,20 @@
 //!   changed. It holds the registry, the task ledger with its retention, and
 //!   the board.
 //!
-//! R1.4b adds the book of record and the degradation channel to the same
-//! crate. It writes only through `eph-fs` and runs git only through `eph-git`'s
-//! committer, so it claims no exemption of its own (RUST-PLAN §3.2).
+//! - [`book::Book`] is the book of record: one writer that syncs then
+//!   publishes, and readers that page by byte offset across rotation (R1.4b).
+//! - [`degradations::Degradations`] is the degradation channel, carrying what
+//!   the boot found, every commit nobody waited for that failed, and what an
+//!   agent's own ignore file hides from history (R1.4b).
+//! - [`archive`] reads back the done tasks the ledger's retention moved out.
+//!
+//! It writes only through `eph-fs` and runs git only through `eph-git`'s
+//! committer. Its one exemption, `process:`, is for its kill tests, which run
+//! the test binary again as the harness they kill (GYM-014).
 
 pub mod agora;
+pub mod archive;
+pub mod book;
+pub mod degradations;
 pub mod retention;
 pub mod store;

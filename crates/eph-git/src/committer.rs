@@ -41,6 +41,17 @@
 //!   [`Committer::commit_soon`] or a dropped [`Ticket`], is reported through
 //!   [`Hooks::reporting_to`] and kept ([`Committer::failures`], the latest
 //!   [`MAX_RECORDED_FAILURES`]) (invariant 7).
+//! - **A landing is reported too**, through [`Hooks::on_landing`], before any
+//!   ticket of its batch is answered, so a caller that waited sees what the
+//!   report did. Nothing else sees a [`Committer::commit_soon`] land, and the
+//!   degradation channel clears `agora/commit` on it (DECISIONS-LOG 2026-10-25,
+//!   *R1.4b — Architect decisions, second round*, item 4).
+//! - **Each landing lists what git ignored**, from the status the batch already
+//!   runs after staging (`--ignored=matching`), so the check costs no second
+//!   walk of the tree (item 1 of the same entry). A directory an ignore pattern
+//!   matched is listed as the directory, ending in `/`, not its files.
+//!   [`Committer::ignored`] asks the same of a tree no batch has looked at. What
+//!   the harness's own patterns ignore is the caller's to tell apart.
 //! - **Dropping the committer lands its queue first**, then releases the lock.
 //!   That can take as long as the queued gits do, each bounded by its deadline.
 //!
@@ -111,15 +122,19 @@ pub enum FaultPoint {
 
 type FaultHook = dyn Fn(FaultPoint) -> Result<(), String> + Send + Sync;
 type ReportHook = dyn Fn(&CommitFailure) + Send + Sync;
+type LandingHook = dyn Fn(&Landing) + Send + Sync;
 
-/// What a caller hangs on the committer. Production passes a reporter, for the
-/// degradation channel (R1.4); tests add faults. The fault seam is in the
-/// production path on purpose, because a seam that exists only under a mock
-/// proves nothing about the real order of the steps (TEST-STRATEGY §3).
+/// What a caller hangs on the committer. Production passes a reporter and a
+/// landing report, for the degradation channel (R1.4b); tests add faults. The
+/// fault seam is in the production path on purpose, because a seam that exists
+/// only under a mock proves nothing about the real order of the steps
+/// (TEST-STRATEGY §3). Reporters add up: each one hung on is called, in the
+/// order they were hung on, so a caller's reporter survives the Agora's.
 #[derive(Clone)]
 pub struct Hooks {
     faults: Option<Arc<FaultHook>>,
-    report: Option<Arc<ReportHook>>,
+    report: Vec<Arc<ReportHook>>,
+    landing: Vec<Arc<LandingHook>>,
 }
 
 impl Hooks {
@@ -127,7 +142,8 @@ impl Hooks {
     pub fn none() -> Hooks {
         Hooks {
             faults: None,
-            report: None,
+            report: Vec::new(),
+            landing: Vec::new(),
         }
     }
 
@@ -141,11 +157,20 @@ impl Hooks {
         self
     }
 
-    /// The same hooks reporting every failure nobody waited for to `hook`, on
-    /// the committer's thread. Contract: `hook` must not queue a commit. The
+    /// The same hooks also reporting every failure nobody waited for to `hook`,
+    /// on the committer's thread. Contract: `hook` must not queue a commit. The
     /// failing path is git itself, and a reporter that commits would recurse.
     pub fn reporting_to(mut self, hook: impl Fn(&CommitFailure) + Send + Sync + 'static) -> Hooks {
-        self.report = Some(Arc::new(hook));
+        self.report.push(Arc::new(hook));
+        self
+    }
+
+    /// The same hooks also telling `hook` of every batch that lands, on the
+    /// committer's thread, before the batch's tickets are answered. Contract:
+    /// `hook` must not queue a commit or wait on the committer, which is busy
+    /// calling it.
+    pub fn on_landing(mut self, hook: impl Fn(&Landing) + Send + Sync + 'static) -> Hooks {
+        self.landing.push(Arc::new(hook));
         self
     }
 
@@ -167,6 +192,16 @@ pub struct CommitOutcome {
     pub sha: Option<String>,
     /// How many attempts it took.
     pub attempts: u32,
+}
+
+/// A batch that landed, as [`Hooks::on_landing`] hears of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Landing {
+    /// What its tickets are answered with.
+    pub outcome: CommitOutcome,
+    /// What git ignored when it landed (see the module contract), or why the
+    /// batch's status could not say.
+    pub ignored: Result<Vec<String>, String>,
 }
 
 /// A subject whose batch did not land.
@@ -385,6 +420,15 @@ impl Committer {
         self.ask(Query::Dirty, || false)
     }
 
+    /// What git ignores in the working tree now, as a landing lists it (see the
+    /// module contract), without staging or committing anything: for a boot
+    /// that commits nothing.
+    pub fn ignored(&self) -> Result<Vec<String>, String> {
+        self.ask(Query::Ignored, || {
+            Err("the committer stopped before it answered".to_string())
+        })
+    }
+
     /// The failures nobody waited for, oldest first.
     pub fn failures(&self) -> Vec<CommitFailure> {
         guard(&self.record.kept).iter().cloned().collect()
@@ -514,24 +558,24 @@ fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// The failures nobody waited for, and who hears of them.
 struct Record {
     kept: Mutex<VecDeque<CommitFailure>>,
-    report: Option<Arc<ReportHook>>,
+    report: Vec<Arc<ReportHook>>,
 }
 
 impl fmt::Debug for Record {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Record")
             .field("kept", &guard(&self.kept).len())
-            .field("reported", &self.report.is_some())
+            .field("reporters", &self.report.len())
             .finish()
     }
 }
 
 impl Record {
-    /// Reports `failure`, then keeps it, dropping the oldest past
-    /// [`MAX_RECORDED_FAILURES`]. The reporter runs before the lock is taken,
-    /// so it may read [`Committer::failures`].
+    /// Reports `failure` to every reporter, then keeps it, dropping the oldest
+    /// past [`MAX_RECORDED_FAILURES`]. The reporters run before the lock is
+    /// taken, so they may read [`Committer::failures`].
     fn keep(&self, failure: CommitFailure) {
-        if let Some(report) = &self.report {
+        for report in &self.report {
             report(&failure);
         }
         let mut kept = guard(&self.kept);
@@ -558,13 +602,59 @@ enum Query {
     Drained(Sender<()>),
     Head(Sender<Option<String>>),
     Dirty(Sender<bool>),
+    Ignored(Sender<Result<Vec<String>, String>>),
 }
 
-/// How one attempt ended.
+/// How one attempt ended. A landing carries what the batch's status ignored.
 enum Attempt {
-    Landed,
+    Landed(Result<Vec<String>, String>),
     Failed(String),
     Aborted(String),
+}
+
+/// The status a batch reads after staging, and [`Committer::ignored`] reads:
+/// NUL-separated, so no path is quoted, and the ignored entries listed as the
+/// patterns matched them. The untracked mode is named so a repository setting
+/// (`status.showUntrackedFiles=no`) cannot hide them.
+const STATUS: [&str; 5] = [
+    "status",
+    "--porcelain",
+    "-z",
+    "--ignored=matching",
+    "--untracked-files=normal",
+];
+
+/// What one status said.
+#[derive(Debug, PartialEq, Eq)]
+struct StatusRead {
+    /// Whether it listed anything other than ignored entries: something staged
+    /// that a commit would take, or a change made since the staging.
+    changed: bool,
+    /// The ignored entries, or why the status could not say.
+    ignored: Result<Vec<String>, String>,
+}
+
+/// Reads porcelain v1 status with `-z`. An entry is `XY path`, and a rename or
+/// a copy is followed by one more field, its source path, which is not an
+/// entry of its own: the Agora's mail moves between state directories, which a
+/// status after `add -A` shows as renames.
+fn read_status(stdout: &str) -> (bool, Vec<String>) {
+    let mut changed = false;
+    let mut ignored = Vec::new();
+    let mut fields = stdout.split('\0').filter(|field| !field.is_empty());
+    while let Some(field) = fields.next() {
+        let code = field.get(..2).unwrap_or(field);
+        let path = field.get(3..).unwrap_or_default();
+        if code == "!!" {
+            ignored.push(path.to_string());
+            continue;
+        }
+        changed = true;
+        if code.contains(['R', 'C']) {
+            let _source = fields.next();
+        }
+    }
+    (changed, ignored)
 }
 
 /// The thread that owns the Agora's git and the committer's lock.
@@ -604,6 +694,9 @@ impl Worker {
             Query::Dirty(reply) => {
                 let _sent = reply.send(self.is_dirty());
             }
+            Query::Ignored(reply) => {
+                let _sent = reply.send(self.status().ignored);
+            }
         }
     }
 
@@ -615,7 +708,13 @@ impl Worker {
             .iter()
             .map(|pending| pending.subject.clone())
             .collect();
-        let landed = self.run_commit(subjects);
+        let landed = self.run_commit(subjects).map(|(outcome, ignored)| {
+            let landing = Landing { outcome, ignored };
+            for hook in &self.hooks.landing {
+                hook(&landing);
+            }
+            landing.outcome
+        });
         for pending in batch {
             let result = landed.clone().map_err(|reason| CommitFailure {
                 subject: pending.subject,
@@ -633,7 +732,10 @@ impl Worker {
         }
     }
 
-    fn run_commit(&self, subjects: Vec<String>) -> Result<CommitOutcome, String> {
+    fn run_commit(
+        &self,
+        subjects: Vec<String>,
+    ) -> Result<(CommitOutcome, Result<Vec<String>, String>), String> {
         let message = commit_message(&subjects);
         let mut last = String::new();
         let waits = iter::once(None).chain(RETRY_WAITS.map(Some));
@@ -643,12 +745,13 @@ impl Worker {
                 self.clear_stale_index_lock();
             }
             match self.attempt(&message) {
-                Attempt::Landed => {
-                    return Ok(CommitOutcome {
+                Attempt::Landed(ignored) => {
+                    let outcome = CommitOutcome {
                         subjects,
                         sha: self.head(),
                         attempts: attempt,
-                    });
+                    };
+                    return Ok((outcome, ignored));
                 }
                 Attempt::Failed(reason) => last = reason,
                 Attempt::Aborted(reason) => return Err(reason),
@@ -672,11 +775,11 @@ impl Worker {
         if let Err(reason) = self.hooks.check(FaultPoint::AfterStage) {
             return Attempt::Aborted(reason);
         }
-        // Nothing staged is a landing; a status that fails is not, and the
-        // commit after it decides.
-        let status = self.git(&["status", "--porcelain"]);
-        if status.ok() && status.stdout.trim().is_empty() {
-            return Attempt::Landed;
+        // Nothing staged is a landing, whatever git ignores; a status that
+        // fails is not, and the commit after it decides.
+        let status = self.status();
+        if !status.changed {
+            return Attempt::Landed(status.ignored);
         }
         if let Err(reason) = self.hooks.check(FaultPoint::BeforeCommit) {
             return Attempt::Aborted(reason);
@@ -693,7 +796,29 @@ impl Worker {
         if let Err(reason) = self.hooks.check(FaultPoint::AfterCommit) {
             return Attempt::Aborted(reason);
         }
-        Attempt::Landed
+        // What was ignored before the commit still is: a commit takes only
+        // what was staged.
+        Attempt::Landed(status.ignored)
+    }
+
+    /// The working tree's [`STATUS`]. A status that fails changes nothing, so
+    /// its `changed` is `true`: the commit after it decides.
+    fn status(&self) -> StatusRead {
+        let status = self.git(&STATUS);
+        if !status.ok() {
+            return StatusRead {
+                changed: true,
+                ignored: Err(format!(
+                    "git status failed, so what git ignores is unknown: {}",
+                    status.stderr.trim()
+                )),
+            };
+        }
+        let (changed, ignored) = read_status(&status.stdout);
+        StatusRead {
+            changed,
+            ignored: Ok(ignored),
+        }
     }
 
     /// Waits while `index.lock` exists, over the retry schedule, so a git left
@@ -868,6 +993,11 @@ mod tests {
         assert_eq!(
             agora_git(&root, &["branch", "--show-current"]).trim(),
             "main"
+        );
+        assert_eq!(
+            agora_git(&root, &["rev-parse", "--show-object-format"]).trim(),
+            "sha1",
+            "the empty tree the Agora reads attributes from is SHA-1's (runner::EMPTY_TREE)"
         );
         drop(committer);
         let again = Committer::open(&root, Hooks::none()).unwrap();
@@ -1648,9 +1778,9 @@ mod tests {
             worker: None,
             record: Arc::new(Record {
                 kept: Mutex::new(VecDeque::new()),
-                report: Some(Arc::new(move |failure: &CommitFailure| {
+                report: vec![Arc::new(move |failure: &CommitFailure| {
                     guard(&heard).push(failure.subject.clone());
-                })),
+                })],
             }),
         };
         assert_eq!(
@@ -1663,11 +1793,228 @@ mod tests {
         );
         assert_eq!(gone.head(), None);
         assert!(!gone.is_dirty());
+        assert_eq!(
+            gone.ignored().unwrap_err(),
+            "the committer stopped before it answered"
+        );
         gone.drained();
         gone.commit_soon("dropped");
         assert_eq!(gone.failures(), [stopped("dropped".to_string())]);
         assert_eq!(*guard(&reported), ["dropped"]);
         assert!(format!("{gone:?}").contains("kept: 1"), "{gone:?}");
+    }
+
+    /// Hooks recording every landing's subjects and ignored entries.
+    fn hearing_landings() -> (Hooks, Arc<Mutex<Vec<Landing>>>) {
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let into = Arc::clone(&heard);
+        let hooks = Hooks::none().on_landing(move |landing| guard(&into).push(landing.clone()));
+        (hooks, heard)
+    }
+
+    #[test]
+    fn every_landing_is_reported_before_its_tickets_are_answered() {
+        let (dir, root) = agora("landing");
+        let (hooks, heard) = hearing_landings();
+        let committer = Committer::open(&root, hooks).unwrap().committer;
+        write(&root.join("a.json"), "{}\n");
+        committer.commit_soon("soon");
+        committer.drained();
+        assert_eq!(
+            guard(&heard).len(),
+            1,
+            "a commit nobody waits for is heard landing"
+        );
+        assert_eq!(guard(&heard)[0].outcome.subjects, ["soon"]);
+        write(&root.join("b.json"), "{}\n");
+        let outcome = committer.commit("waited").wait().unwrap();
+        let landings = guard(&heard).clone();
+        assert_eq!(
+            landings.last().map(|landing| &landing.outcome),
+            Some(&outcome),
+            "the report is made before the ticket is answered"
+        );
+        let nothing = committer.commit("nothing to commit").wait().unwrap();
+        assert_eq!(
+            guard(&heard).len(),
+            3,
+            "a batch that finds nothing to commit lands too"
+        );
+        assert_eq!(nothing.sha, outcome.sha);
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_batch_that_gives_up_is_not_a_landing_and_reporters_add_up() {
+        let (dir, root) = agora("reporters");
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let (first, second, third, fourth) = (
+            Arc::clone(&heard),
+            Arc::clone(&heard),
+            Arc::clone(&heard),
+            Arc::clone(&heard),
+        );
+        let armed = Arc::new(AtomicBool::new(true));
+        let hooks = armed_at(FaultPoint::BeforeStage, "cannot commit", &armed)
+            .reporting_to(move |failure| guard(&first).push(format!("1:{}", failure.subject)))
+            .reporting_to(move |failure| guard(&second).push(format!("2:{}", failure.subject)))
+            .on_landing(move |landing| {
+                guard(&third).push(format!("3:{}", landing.outcome.subjects.join(",")));
+            })
+            .on_landing(move |landing| {
+                guard(&fourth).push(format!("4:{}", landing.outcome.subjects.join(",")));
+            });
+        let committer = Committer::open(&root, hooks).unwrap().committer;
+        committer.commit_soon("lost");
+        committer.drained();
+        assert_eq!(
+            *guard(&heard),
+            ["1:lost", "2:lost"],
+            "both reporters hear, in order, and a failure is not a landing"
+        );
+        armed.store(false, Ordering::SeqCst);
+        committer.commit("found").wait().unwrap();
+        assert_eq!(
+            *guard(&heard),
+            ["1:lost", "2:lost", "3:found", "4:found"],
+            "both landing reports hear, in order"
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_landing_lists_what_git_ignores_and_a_batch_of_only_that_commits_nothing() {
+        let (dir, root) = agora("ignored");
+        write(&root.join(".gitignore"), "kept-out/\n*.log\n");
+        let (hooks, heard) = hearing_landings();
+        let committer = Committer::open(&root, hooks).unwrap().committer;
+        committer.commit("ignore rules").wait().unwrap();
+        let head = committer.head();
+        write(&root.join("kept-out").join("x.json"), "{}\n");
+        write(&root.join("a.log"), "log\n");
+        write(
+            &root.join("agents").join("a1").join(".gitignore"),
+            "secret/\n",
+        );
+        write(
+            &root
+                .join("agents")
+                .join("a1")
+                .join("secret")
+                .join("plan.md"),
+            "hidden\n",
+        );
+        let outcome = committer
+            .commit("an agent's own ignore file")
+            .wait()
+            .unwrap();
+        assert_ne!(
+            outcome.sha, head,
+            "the agent's .gitignore itself is committed"
+        );
+        assert!(tracked(&root, "agents/a1/.gitignore"));
+        let mut ignored = guard(&heard).last().unwrap().ignored.clone().unwrap();
+        ignored.sort();
+        assert_eq!(
+            ignored,
+            ["a.log", "agents/a1/secret/", "kept-out/"],
+            "a directory a pattern matched is listed as the directory"
+        );
+        write(&root.join("b.log"), "more\n");
+        let quiet = committer
+            .commit("only ignored files changed")
+            .wait()
+            .unwrap();
+        assert_eq!(
+            quiet.sha, outcome.sha,
+            "nothing to commit is still a landing"
+        );
+        assert!(
+            guard(&heard)
+                .last()
+                .unwrap()
+                .ignored
+                .as_ref()
+                .unwrap()
+                .contains(&"b.log".to_string())
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_rename_s_source_path_is_not_read_as_an_entry() {
+        let (dir, root) = agora("rename");
+        // A source path that reads as an ignored entry if the parser takes it
+        // for one: `!! trap.json`.
+        write(&root.join("!! trap.json"), "{\"a\":1}\n");
+        let (hooks, heard) = hearing_landings();
+        let committer = Committer::open(&root, hooks).unwrap().committer;
+        committer.commit("the trap").wait().unwrap();
+        fs::rename(root.join("!! trap.json"), root.join("moved.json")).unwrap();
+        committer.commit("a move").wait().unwrap();
+        assert!(tracked(&root, "moved.json"));
+        assert_eq!(
+            guard(&heard).last().unwrap().ignored,
+            Ok(Vec::new()),
+            "a rename's source is one field of the entry, not an entry"
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn status_fields_are_read_whole() {
+        assert_eq!(read_status(""), (false, Vec::new()));
+        assert_eq!(
+            read_status("!! a.log\0!! dir/\0"),
+            (false, vec!["a.log".to_string(), "dir/".to_string()]),
+            "ignored entries alone change nothing"
+        );
+        assert_eq!(
+            read_status("R  new.json\0!! old.json\0!! a.log\0"),
+            (true, vec!["a.log".to_string()]),
+            "a rename's source is skipped"
+        );
+        assert_eq!(
+            read_status("C  copy.json\0!! orig.json\0"),
+            (true, Vec::new()),
+            "so is a copy's"
+        );
+        assert_eq!(
+            read_status("M  m.json\0!! x.log\0"),
+            (true, vec!["x.log".to_string()]),
+            "no other entry has a source"
+        );
+        assert_eq!(read_status("?? new.json\0"), (true, Vec::new()));
+    }
+
+    #[test]
+    fn what_git_ignores_can_be_asked_without_staging_and_a_failed_status_says_so() {
+        let (dir, root) = agora("ask-ignored");
+        write(&root.join(".gitignore"), "*.log\n");
+        let committer = open(&root);
+        committer.commit("ignore rules").wait().unwrap();
+        let head = committer.head();
+        write(&root.join("a.log"), "log\n");
+        write(&root.join("new.json"), "{}\n");
+        assert_eq!(committer.ignored(), Ok(vec!["a.log".to_string()]));
+        assert_eq!(committer.head(), head, "nothing was committed");
+        assert!(!tracked(&root, "new.json"));
+        write(&root.join(".git").join("index"), "not an index");
+        let unknown = committer.ignored().unwrap_err();
+        assert!(
+            unknown.starts_with("git status failed, so what git ignores is unknown:"),
+            "{unknown}"
+        );
+        assert!(
+            committer.commit("over a broken index").wait().is_err(),
+            "a status that fails is not a landing"
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     // The kill tests. Each starts this test binary again, as a harness running

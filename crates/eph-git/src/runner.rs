@@ -42,13 +42,20 @@
 //!   - none of git's default user files either (the XDG `git/ignore` and
 //!     `git/attributes`, the system attributes);
 //!   - nothing the environment would choose for a new repository (a template
-//!     directory, a hash, a ref format).
+//!     directory, a hash, a ref format);
+//!   - no attributes from the tree either (`--attr-source` at the empty tree,
+//!     [`EMPTY_TREE`]), so an agent's own `.gitattributes` is committed as a
+//!     file and changes nothing: one holding `working-tree-encoding` failed
+//!     every `add -A`, and `text` rewrote line endings in history (measured,
+//!     git 2.53; DECISIONS-LOG 2026-10-25, *R1.4b — Architect decisions,
+//!     second round*). It needs git 2.40 or newer, and an older git's refusal
+//!     says so.
 //!
 //!   It commits as `Ephesus <harness@ephesus.local>` through the identity
 //!   variables, which outrank configuration from any source. So no host
-//!   setting can hide an Agora file from `add -A`, rewrite its line endings,
-//!   run its code through a planted `core.fsmonitor`, or rename its committer.
-//!   It is the committer's alone, so it is not public.
+//!   setting and no file an agent writes can hide an Agora file from `add -A`,
+//!   rewrite its line endings, run its code through a planted `core.fsmonitor`,
+//!   or rename its committer. It is the committer's alone, so it is not public.
 //! - [`Git::target`] reads the user's configuration (`core.longpaths`,
 //!   `url.insteadOf`), for worktrees and remotes of a target repository.
 //!   [`Git::without_machine_config`] gives it the Agora's isolation, which is
@@ -157,6 +164,17 @@ const NO_MACHINE_OVERRIDES: [&str; 6] = [
     "core.fsmonitor=false",
 ];
 
+/// git's empty tree. In a SHA-1 repository git knows it without storing it, so
+/// attributes read from it are none; a SHA-256 repository refuses it on every
+/// call ("bad --attr-source"), loudly (measured, git 2.53).
+pub const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// What a git older than 2.40 prints for `--attr-source`.
+const OLD_GIT: &str = "unknown option: --attr-source";
+
+/// The sentence a refusal of `--attr-source` gains, so it names the fix.
+const OLD_GIT_FIX: &str = "the Agora's git reads no attributes from the tree (--attr-source), which needs git 2.40 or newer: install a newer git";
+
 /// The Agora's identity, as the variables that outrank any configuration.
 const IDENTITY: [(&str, &str); 4] = [
     ("GIT_AUTHOR_NAME", AGORA_NAME),
@@ -198,27 +216,32 @@ impl GitResult {
 #[derive(Debug, Clone)]
 pub struct Git {
     machine_config: bool,
+    tree_attributes: bool,
     identity: bool,
     timeout: Duration,
     environment: Option<Vec<(OsString, OsString)>>,
 }
 
 impl Git {
-    /// The Agora's runner: no machine configuration, the Agora's identity. The
-    /// committer's alone: any other git on the Agora would bypass its queue.
+    /// The Agora's runner: no machine configuration, no attributes from the
+    /// tree, the Agora's identity. The committer's alone: any other git on the
+    /// Agora would bypass its queue.
     pub(crate) fn agora() -> Git {
         Git {
             machine_config: false,
+            tree_attributes: false,
             identity: true,
             timeout: TIMEOUT,
             environment: None,
         }
     }
 
-    /// A target repository's runner: the user's configuration, no identity.
+    /// A target repository's runner: the user's configuration and the
+    /// repository's own attributes, no identity.
     pub fn target() -> Git {
         Git {
             machine_config: true,
+            tree_attributes: true,
             identity: false,
             timeout: TIMEOUT,
             environment: None,
@@ -286,6 +309,7 @@ impl Git {
             stderr.push_str("\ngit's output did not arrive in time");
             code = None;
         }
+        teach_old_git(&mut stderr);
         GitResult {
             stdout,
             stderr,
@@ -314,6 +338,9 @@ impl Git {
         if !self.machine_config {
             command.envs(NO_MACHINE_CONFIG).args(NO_MACHINE_OVERRIDES);
         }
+        if !self.tree_attributes {
+            command.arg(format!("--attr-source={EMPTY_TREE}"));
+        }
         if self.identity {
             command.envs(IDENTITY);
         }
@@ -339,6 +366,15 @@ impl Git {
         REPOSITORY_VARS.contains(&name)
             || (!self.machine_config && MACHINE_VARS.contains(&name))
             || (self.identity && IDENTITY_DATES.contains(&name))
+    }
+}
+
+/// Adds [`OLD_GIT_FIX`] to a git's `stderr` that refused `--attr-source`, so
+/// the refusal says what to install, not only what git did not know.
+fn teach_old_git(stderr: &mut String) {
+    if stderr.contains(OLD_GIT) {
+        stderr.push('\n');
+        stderr.push_str(OLD_GIT_FIX);
     }
 }
 
@@ -992,6 +1028,64 @@ pub(crate) mod tests {
                 .unwrap_or_default();
             assert_eq!(exclude.contains("*.txt"), planted, "{name}: {exclude}");
         }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// DECISIONS-LOG 2026-10-25, *R1.4b — Architect decisions, second round*,
+    /// item 2: measured on git 2.53, one agent's `.gitattributes` failed every
+    /// `add -A`, and `text` rewrote line endings in history.
+    #[test]
+    fn the_agora_reads_no_attributes_from_the_tree() {
+        let dir = scratch("tree-attributes");
+        for (git, name, reads) in [(git(), "target", true), (Git::agora(), "agora", false)] {
+            let repo = dir.join(name);
+            fs::create_dir_all(&repo).unwrap();
+            assert!(git.run(&repo, &["init", "-b", "main"]).ok(), "{name}");
+            write(&repo.join(".gitattributes"), "*.txt text\n");
+            write(&repo.join("crlf.txt"), "a\r\nb\r\n");
+            let staged = git.run(&repo, &["add", "-A"]);
+            assert!(staged.ok(), "{name}: {staged:?}");
+            let blob = git.run(&repo, &["cat-file", "-p", ":crlf.txt"]).stdout;
+            assert_eq!(
+                blob == "a\nb\n",
+                reads,
+                "{name}: `text` normalises only where the tree's attributes are read: {blob:?}"
+            );
+            write(
+                &repo.join("agents").join("a1").join(".gitattributes"),
+                "* working-tree-encoding=UTF-16\n",
+            );
+            let staged = git.run(&repo, &["add", "-A"]);
+            assert_eq!(
+                staged.ok(),
+                !reads,
+                "{name}: an agent's encoding attribute fails `add -A` only where it is read: {staged:?}"
+            );
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_git_too_old_for_attr_source_says_which_git_to_install() {
+        let dir = scratch("old-git");
+        let said = |alias: &str| {
+            git().run(
+                &dir,
+                &[
+                    "-c",
+                    &format!("alias.said=!echo '{alias}' >&2; exit 129"),
+                    "said",
+                ],
+            )
+        };
+        let old = said("unknown option: --attr-source=4b825dc642cb6eb9a060e54bf8d69288fbee4904");
+        assert_eq!(old.code, Some(129), "{old:?}");
+        assert!(
+            old.stderr.ends_with(OLD_GIT_FIX) && OLD_GIT_FIX.contains("git 2.40 or newer"),
+            "the refusal names the fix: {old:?}"
+        );
+        let other = said("unknown option: --colour");
+        assert!(!other.stderr.contains(OLD_GIT_FIX), "{other:?}");
         fs::remove_dir_all(&dir).unwrap();
     }
 
