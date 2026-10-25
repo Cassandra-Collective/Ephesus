@@ -43,11 +43,12 @@ the committer's naming of what an agent's ignore file or nested repository keeps
 history. Its reviews found two more R1.3 defects (a nested repository stopped every
 commit, or hid its work as a gitlink) and an R1.4a one (the `.gitignore` hid a directory
 named like a temporary file), each fixed on the Architect's answer. **R1 is DONE**
-(verdict below, 2026-10-25). **The next step is R2, the terminal plane and the engine
-seam**, which starts only once the Architect approves its package list (RUST-PLAN §5:
-R2.1 `eph-pty`, R2.2 `eph-engines`, R2.3 the agent manager), with RUST-PLAN §9's R2
-question asked alongside: whether `portable-pty`'s process-tree kill suffices on Windows
-or a job object is needed, which also closes R1.3's deadline-kill residual. Three
+(verdict below, 2026-10-25). **The next step is R2.1, `eph-pty`**, on
+`feature/r2-1-eph-pty` cut from R1.4b's tip: the Architect approved R2's package list
+(R2.1 `eph-pty`, R2.2 `eph-engines`, R2.3 the agent manager) on 2026-10-25, and R2.1
+opens with a probe of `portable-pty`'s kill over a real process tree, which decides
+RUST-PLAN §9's tree-kill question (and R1.3's deadline-kill residual). Its open choices
+are asked before its code. Three
 constraints carry forward. A new crate's
 first push is red at the coverage step until its floor is seeded from that push's CI
 runs (ENGINEERING-STANDARDS §1.1). A `.tmp` file left by a crash before its rename is a
@@ -586,7 +587,15 @@ and opens when #104 merges.
   - the old worktree's cleanup.
 
   R2 starts only once he approves its package list.
-- [ ] **R2** The terminal plane and the engine seam
+- [ ] **R2** The terminal plane and the engine seam (package list approved 2026-10-25)
+  - [ ] **R2.1 `eph-pty`** — spawn, write, resize, interrupt, kill; PATH resolution; the
+    redaction filter. Opens with a probe of `portable-pty`'s kill over a real process tree
+    on win32 and Linux, which decides RUST-PLAN §9's tree-kill question (Architect,
+    2026-10-25).
+  - [ ] **R2.2 `eph-engines`** — the adapter trait, the `claude` adapter, `codex` and
+    `gemini` as conformance subjects.
+  - [ ] **R2.3 The agent manager** — spawn ordering, the install offer, the exit unwind,
+    the command queue, the respawn ladder and crew survival.
 - [ ] **R3** The event plane
 - [ ] **R4** The first window
 - [ ] **R5** Hermes

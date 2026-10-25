@@ -362,7 +362,8 @@ re-read for TypeScript-specific mechanisms before its first package.
   package list.
 - R1: each redesigned schema (new SDD §4), field by field, where it departs from today's.
 - R2: whether `portable-pty`'s process-tree kill suffices on Windows or a job object (an
-  FFI boundary crate) is needed.
+  FFI boundary crate) is needed. *Asked 2026-10-25:* measured first, by a probe that opens
+  R2.1; the question returns with the figure (DECISIONS-LOG 2026-10-25, R2).
 - R6: the OS keychain crate, a separate memo (`keyring` is the candidate).
 - R10 and R12: the HTTP, WebSocket and audio crates, a separate memo each.
 - R12: whether the Herald is wired into the app this time (M6.9).
