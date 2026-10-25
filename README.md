@@ -462,7 +462,7 @@ later phase is checked from its first line.
      this section two milestones stale at M8.4 and three packages stale again by M8.9.
      It cannot catch someone editing this line without writing the sentence, and is not
      meant to. -->
-Landed so far in R1, the home and the book of record:
+**R1, the home and the book of record, is done** (2026-10-25):
 
 - **R1.0, the design.** Every file the harness stores was redesigned from first
   principles in [`docs/sdd/SDD-RUST.md`](./docs/sdd/SDD-RUST.md): one validated store

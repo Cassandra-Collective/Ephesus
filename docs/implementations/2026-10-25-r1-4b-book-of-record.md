@@ -60,9 +60,13 @@ attributes could fail every `add -A` or rewrite line endings in history.
 | `xtask/src/invariants.rs` | `eph-agora` may claim `process:` (GYM-014), with a test that its neighbours still may not. |
 | `Cargo.lock` | `eph-agora` depends on `serde_json`. No new crate. |
 | `docs/sdd/SDD-RUST.md` | §4.5's rows for the book, the archive, the `.gitignore`, `.git/info/exclude` and attributes; §10's new invariants. Approved by the Architect, 2026-10-25. |
+| `.cargo/mutants.toml` | One exclusion, `replace > with >= in Book::since`, with its reason (the Architect's answer). |
 | `docs/RUST-PLAN.md` | §3.2: `eph-git` and `eph-agora` claim `process:` in their tests. |
-| `docs/gymnasium/` | GYM-014 and its ledger row. |
-| `docs/DECISIONS-LOG.md` | Four Architect entries and the implementation entry. |
+| `docs/gymnasium/` | GYM-014 and its ledger row, landed with metrics 1 and 2 measured. |
+| `docs/DECISIONS-LOG.md` | Six Architect entries (four rounds, the exclusion, the push) and the implementation entry. |
+| `docs/PROGRESS.md` | R1.4b ticked with its evidence; the Resume here block names R1's close next. |
+| `README.md` | The `landed` marker gains R1.4b, with its paragraph. |
+| `docs/RUST-GOAL.md` | The state table: #104 merged, R1.4b done. |
 
 ## 3. Implementation approach
 

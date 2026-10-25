@@ -42,9 +42,13 @@ degradation channel, a kill mid-append proved by plant and by real kill (GYM-014
 the committer's naming of what an agent's ignore file or nested repository keeps out of
 history. Its reviews found two more R1.3 defects (a nested repository stopped every
 commit, or hid its work as a gitlink) and an R1.4a one (the `.gitignore` hid a directory
-named like a temporary file), each fixed on the Architect's answer. **The next step is
-R1's close, `/milestone-review`** against RUST-PLAN §5's exit; then R2 starts only once
-the Architect approves its package list. Three constraints carry forward. A new crate's
+named like a temporary file), each fixed on the Architect's answer. **R1 is DONE**
+(verdict below, 2026-10-25). **The next step is R2, the terminal plane and the engine
+seam**, which starts only once the Architect approves its package list (RUST-PLAN §5:
+R2.1 `eph-pty`, R2.2 `eph-engines`, R2.3 the agent manager), with RUST-PLAN §9's R2
+question asked alongside: whether `portable-pty`'s process-tree kill suffices on Windows
+or a job object is needed, which also closes R1.3's deadline-kill residual. Three
+constraints carry forward. A new crate's
 first push is red at the coverage step until its floor is seeded from that push's CI
 runs (ENGINEERING-STANDARDS §1.1). A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
@@ -402,7 +406,8 @@ and opens when #104 merges.
 
 ### R1 to R14
 
-- [ ] **R1** The home and the book of record (package list approved 2026-10-19)
+- [x] **R1** The home and the book of record (package list approved 2026-10-19; closed
+  2026-10-25, verdict below)
   - [x] **R1.0 The design** — the new SDD section for the home and every persisted
     schema, redesigned from first principles; one Architect approval before R1.1.
     *Evidence (2026-10-20):* `docs/sdd/SDD-RUST.md` §2 and §4, built from an inventory of
@@ -550,6 +555,37 @@ and opens when #104 merges.
     `237aa31` is green on every job, all seven gate steps on ubuntu, macOS and Windows, its
     coverage the local figures exactly. No floor moved: no new crate, and no raise.
     [`2026-10-25-r1-4b-book-of-record.md`](./implementations/2026-10-25-r1-4b-book-of-record.md)
+
+  **R1 verdict (2026-10-25): DONE.** RUST-PLAN §5's exit criteria, verified by execution
+  on win32 at `512cf21` (whose code is `5bab4ec`'s), with CI run 40206703962 on `237aa31`
+  and 40207561007 on `512cf21` green on every job. Each FR is wider than R1 builds; the
+  last column says what a later phase owes, so this verdict is not read as the whole
+  requirement.
+
+  | Criterion | What R1 proves, and the tests that prove it | Tier | Later phases |
+  |---|---|---|---|
+  | FR-4.1: committed only by the main process, with retry/backoff and stale-lock cleanup | One committer per Agora, held by an OS lock; only `eph-git`'s runner starts git (`cargo xtask invariants`). Retries run over a fixed schedule. A stale `index.lock` is cleared and a young one waited on. A killed `git init` is finished, and a nested repository cannot stop a batch. Tests: `a_second_committer_is_refused_until_the_first_is_gone`, `a_second_committer_through_a_link_is_refused_too`, `a_lock_older_than_the_deadline_is_cleared_by_the_retry`, `a_young_lock_is_someone_elses_and_is_never_removed`, `open_removes_a_lock_that_outlived_the_schedule_and_reconcile_commits_the_rest`, `a_nested_repository_with_no_commit_is_kept_out_and_the_rest_lands` | A, B | — |
+  | FR-4.2: `registry.json`, `board.md`, `tasks.json`, `log.jsonl`, per-agent homes | The four files, seeded or rendered at boot, the records through one validated store, the board written whole. Tests: `a_first_boot_makes_seeds_and_commits_the_agora_once`, `the_board_reads_empty_when_absent_and_is_written_whole`, `appends_are_stamped_in_order_and_read_back_from_a_cursor`, `a_ledger_past_its_threshold_archives_the_old_done_first_then_trims` | A, B | Per-agent homes, `agents/<id>/`, with hiring (R2.3) and Hermes (R5) |
+  | FR-4.4: every delivery, verdict and lifecycle event appends to `log.jsonl`; the activity view and briefings derive from it | The book: one writer that syncs then publishes in file order, and readers that page across rotation. Only `degradation` lines can be written until each phase defines its events. Tests: `every_live_subscriber_gets_every_line_in_file_order_and_a_dropped_one_leaves`, `a_cursor_taken_before_a_rotation_points_at_the_same_line_after_it`, `a_rotation_during_reads_changes_nothing_a_reader_sees`, `the_channel_is_the_one_writer_of_degradation_lines_and_publishes_them` | A, B | Each event's vocabulary (R2.3, R5, R6, R9); the activity view (R4); briefings (R9) |
+  | NFR-7: append-only once written; the Agora's history never rewritten | `log.jsonl` and `tasks-archive.jsonl` only grow: a torn tail is left, and a rotation is a rename. The committer runs only `init`, `add`, `status`, `commit -F`, `rev-parse` and `rm --cached`: no `reset`, `rebase`, `push` or `--amend` (grep of its production code). Tests: `eph-fs`'s `a_torn_last_line_is_left_alone_and_the_next_append_starts_fresh`, `a_full_live_file_is_sealed_by_its_first_seq_before_the_next_append`, `a_line_with_no_seq_is_appended_whole_after_a_torn_tail` | A, C | The cost ledger (R6); memos, decks and minutes (R9) |
+  | Killed mid-append and mid-commit, nothing lost or torn on reopen | Mid-commit: `a_harness_killed_at_each_point_of_a_commit_loses_nothing`, `a_harness_killed_at_random_during_commits_loses_nothing` (R1.3). Mid-append: `every_prefix_a_killed_append_can_leave_loses_and_tears_nothing_before_it`, `a_writer_killed_at_each_point_of_an_append_loses_nothing_acknowledged`, `a_writer_killed_at_random_loses_nothing_it_acknowledged` (R1.4b). Each ran 10 plain and 10 instrumented times on win32 and WSL2 | A, B | — |
+  | A mutation round with a control | Every R1 package's crate. This session: `eph-agora` ROUND OK (292, 219 caught), `eph-git` (218, 162), `xtask` (517, 484), each control missing every viable mutant | A (R1.4b), C (R1.1–R1.4a records) | — |
+  | Every test that runs git does so hermetically | git starts only in `eph-git`'s runner, apart from the two kill tests' reruns of the test binary. Every test git runs as `Git::agora()`, `.without_machine_config()`, or under a host the test builds itself. Test: `the_agora_profile_reads_no_machine_configuration` | A | — |
+
+  Debt sweep: no R1 package is unchecked, and the Rust tree holds no `TODO`, `FIXME`,
+  `todo!` or `unimplemented!`. SDD-RUST §10's cited tests all exist (checked by name).
+  `/doc-sync` was not run in full. Not proven, carried:
+  - `BOOT_CHECKED`'s fourteen causes are matched as text, and only `agora/index-lock` and
+    `agora/log-torn` are proved to clear end to end;
+  - macOS rests on CI's single pass per run (B);
+  - the residuals in R1.4b's record §5.
+
+  Open for the Architect, none blocking:
+  - R0.3's PR is next in the stack;
+  - the TypeScript fix PR;
+  - the old worktree's cleanup.
+
+  R2 starts only once he approves its package list.
 - [ ] **R2** The terminal plane and the engine seam
 - [ ] **R3** The event plane
 - [ ] **R4** The first window
