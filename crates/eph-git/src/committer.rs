@@ -2571,6 +2571,70 @@ mod tests {
     }
 
     #[test]
+    fn a_list_with_nothing_to_prune_is_not_rewritten() {
+        let (dir, root) = agora("nested-unchanged");
+        nested_repo(&root, "a1", false);
+        let committer = open(&root);
+        committer.commit("kept out").wait().unwrap();
+        let exclude = root.join(".git").join(EXCLUDE_FILE);
+        let written = fs::metadata(&exclude).unwrap().modified().unwrap();
+        thread::sleep(Duration::from_millis(50));
+        write(&root.join("agents/a2/m.json"), "{}\n");
+        committer.commit("another").wait().unwrap();
+        assert_eq!(
+            fs::metadata(&exclude).unwrap().modified().unwrap(),
+            written,
+            "a list whose every repository still has its .git is left alone"
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_add_that_fails_for_another_reason_says_only_why() {
+        let (dir, root) = agora("add-fails");
+        let committer = open(&root);
+        // A young lock is someone else's, so it is waited on, never removed.
+        write(&root.join(".git").join("index.lock"), "");
+        write(&root.join("m.json"), "{}\n");
+        let failure = committer.commit("blocked").wait().unwrap_err();
+        assert!(failure.reason.contains("index.lock"), "{}", failure.reason);
+        assert!(
+            !failure.reason.contains("kept out"),
+            "no nested repository was found, so none is said to be kept out: {}",
+            failure.reason
+        );
+        fs::remove_file(root.join(".git").join("index.lock")).unwrap();
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The written pattern, read by git itself: a `[` in the path is a
+    /// wildcard unless escaped (`*` and `?` cannot be in a Windows file name).
+    #[test]
+    fn a_nested_repository_whose_path_holds_a_wildcard_is_kept_out_by_git_itself() {
+        let (dir, root) = agora("nested-wildcard");
+        nested_repo(&root, "a[1]", false);
+        write(&root.join("agents/a1/work/m.json"), "{}\n");
+        let committer = open(&root);
+        let outcome = committer.commit("a batch").wait().unwrap();
+        assert_eq!(outcome.attempts, 2);
+        assert!(
+            tracked(&root, "agents/a1/work/m.json"),
+            "a path the unescaped pattern would have matched is committed"
+        );
+        assert!(!tracked(&root, "agents/a[1]/work/plan.md"));
+        write(&root.join("agents/a2/m.json"), "{}\n");
+        assert_eq!(
+            committer.commit("again").wait().unwrap().attempts,
+            1,
+            "git reads the escaped pattern as the path it names"
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_list_that_cannot_be_kept_or_pruned_fails_the_batch_and_says_why() {
         // A gitlink to keep out, with nowhere to write the list.
         let (dir, root) = agora("nested-keep-blocked");
