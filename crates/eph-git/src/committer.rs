@@ -2335,7 +2335,11 @@ mod tests {
                 "# the Architect's own\n*.secret\n{NESTED_BEGIN}\n/agents/a1/work/\n/agents/a\\*2/\n{NESTED_END}\n"
             )
         );
-        assert_eq!(read_exclude(&text), (kept.clone(), nested));
+        assert_eq!(read_exclude(&text), (kept.clone(), nested.clone()));
+        // A line written after the block, by hand, is not the committer's.
+        let (after, listed) = read_exclude(&format!("{text}*.after\n"));
+        assert_eq!(listed, nested);
+        assert_eq!(after, ["# the Architect's own", "*.secret", "*.after"]);
         assert_eq!(
             exclude_text(&kept, &[]),
             "# the Architect's own\n*.secret\n",
