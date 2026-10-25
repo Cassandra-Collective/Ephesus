@@ -5,27 +5,42 @@
 //! holds the Agora, or `git init` failed. Every later step that goes wrong
 //! becomes a [`Condition`] in the degradation grammar, and the boot goes on
 //! (invariant 7). The order:
-//! 1. **The committer** (`eph-git`): its lock, `git init` when there is no
+//! 1. **The book, read** (R1.4b): the degradation channel replays the book's
+//!    last [`REPLAY_LINES`] lines, as carried, and the boot notes a live file
+//!    that ends mid-line (`agora/log-torn`) or a book it cannot read or open
+//!    for writing. Nothing is written yet.
+//! 2. **The committer** (`eph-git`): its lock, `git init` when there is no
 //!    repository (after the lock files a killed `git init` left, which are
 //!    reported), and an `index.lock` a killed git left. A repository made over
 //!    a directory that already held files is reported, since whatever history
-//!    it had is gone.
-//! 2. **`.gitignore`, rendered** before anything is committed, so the reconcile
+//!    it had is gone. The committer's hooks carry the caller's, the Agora's
+//!    reporter (`agora/commit`) and its landing report (every `agora/commit`
+//!    cause cleared, and what git ignores judged).
+//! 3. **`.gitignore`, rendered** before anything is committed, so the reconcile
 //!    never sweeps a message in flight or a killed write's temporary file into
 //!    history.
-//! 3. **The reconcile**: whatever a killed harness left is committed under its
+//! 4. **The reconcile**: whatever a killed harness left is committed under its
 //!    own subject, so the history never calls crash leftovers a seed. A
 //!    repository this boot made over an empty directory has nothing to
 //!    reconcile.
-//! 4. **`PROTOCOL.md`, rendered** from the home's override or the bundled copy
+//! 5. **What the boot found so far, onto the degradation channel.** Only now,
+//!    so no line this boot writes enters the reconcile, which is the last
+//!    run's, and before the boot's own commit, whose landing clears
+//!    `agora/commit:reconcile`.
+//! 6. **`PROTOCOL.md`, rendered** from the home's override or the bundled copy
 //!    (SDD-RUST §4.4, §4.6), so an improvement reaches every company that has
 //!    already booted.
-//! 5. **The seeds, only when absent**: an empty roster, an empty ledger, and
+//! 7. **The seeds, only when absent**: an empty roster, an empty ledger, and
 //!    the board (the home's override or the bundled text). A damaged roster or
 //!    ledger is reported and left as evidence.
-//! 6. **One commit, when this boot wrote anything**, under [`SEED_SUBJECT`], or
-//!    under [`RECONCILE_AND_SEED_SUBJECT`] when the reconcile failed, since the
+//! 8. **One commit, when this boot wrote anything**, the book included, named
+//!    for what it holds: [`SEED_SUBJECT`] when it wrote files,
+//!    [`RECORD_SUBJECT`] when it wrote only the book, each prefixed by the
+//!    reconcile's ([`RECONCILE_AND_SEED_SUBJECT`],
+//!    [`RECONCILE_AND_RECORD_SUBJECT`]) when the reconcile failed, since the
 //!    leftovers are then in it. A boot that writes nothing commits nothing.
+//! 9. **What git ignores, once more** when no batch landed during the boot
+//!    ([`Committer::ignored`]); a landing already judged it.
 //!
 //! A file the harness owns is rewritten only when it is not a regular file
 //! holding exactly the right bytes. The roster and the ledger go through
@@ -50,21 +65,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
-use eph_fs::append::{Rotation, append_line};
+use eph_fs::append::append_line;
 use eph_fs::atomic::write_atomic;
 use eph_fs::home::{Condition, prompt};
-use eph_git::committer::{Committer, Hooks, IndexLock, OpenError, STALE_AFTER};
+use eph_git::committer::{Committer, Hooks, Ignored, IndexLock, OpenError, STALE_AFTER};
 use eph_schema::degradation::{Cause, Source};
 use eph_schema::document::Versioned;
+use eph_schema::error::SchemaError;
 use eph_schema::id::TaskId;
-use eph_schema::log::LogLine;
+use eph_schema::log::{LogKind, LogLine};
 use eph_schema::registry::Registry;
 use eph_schema::tasks::{ArchivedTasks, Task, Tasks, render_archived};
 use eph_schema::time::Timestamp;
 
 use crate::archive::{self, ArchiveError, Archived};
 use crate::book::{AppendError, Appended, Book, Cursor, Draft, Read as BookRead};
-use crate::degradations::{Degradations, REPLAY_LINES, agora as cause, rotation_detail};
+use crate::degradations::{Degradations, REPLAY_LINES, agora as cause};
 use crate::retention;
 use crate::store::{Loaded, OnDamaged, Store, StoreError};
 
@@ -120,9 +136,34 @@ pub const RECORD_SUBJECT: &str = "record what the boot found";
 pub const RECONCILE_AND_RECORD_SUBJECT: &str =
     "reconcile uncommitted work after restart, and record what the boot found";
 
-/// A whole read of the book that takes this long or more is reported, with its
-/// size (today's figure, `src/main/agora.ts`'s `DEFAULT_SLOW_READ_MS`).
+/// A read of the book from a cursor that takes this long or more is reported
+/// as `agora/log-size`, with the bytes it parsed and its record count (today's
+/// figure and cause, `src/main/agora.ts`'s `DEFAULT_SLOW_READ_MS`;
+/// DECISIONS-LOG 2026-10-25, *R1.4b — Architect decisions, fourth round*,
+/// item 4).
 pub const SLOW_READ: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// The causes every boot checks again, so one that a boot does not find is
+/// cleared, and its clear committed with the boot (DECISIONS-LOG 2026-10-25,
+/// *R1.4b — Architect decisions, fourth round*, item 3). A cause the boot
+/// checks only sometimes, such as the board's prompt override, read only when
+/// the board is seeded, is not among them.
+pub const BOOT_CHECKED: [&str; 14] = [
+    "agora/log-torn",
+    "agora/log-unreadable",
+    "agora/log-unwritable",
+    "agora/index-lock",
+    "agora/init-lock",
+    "agora/history-lost",
+    "agora/render:.gitignore",
+    "agora/render:PROTOCOL.md",
+    "agora/seed:registry.json",
+    "agora/seed:tasks.json",
+    "agora/seed:board.md",
+    "agora/damaged:registry.json",
+    "agora/damaged:tasks.json",
+    "home/prompt-unreadable:agora/PROTOCOL.md",
+];
 
 /// What a failed render leaves.
 const RENDER_LATER: &str = "what is on disk, if anything, stays until a later boot renders it";
@@ -138,7 +179,8 @@ pub struct Booted {
     pub agora: Agora,
     /// Whether this boot made the repository.
     pub initialized: bool,
-    /// What the boot found wrong, for the degradation channel.
+    /// What the boot found wrong. Each is already on the degradation channel,
+    /// so a caller reports none of them again.
     pub conditions: Vec<Condition>,
 }
 
@@ -237,6 +279,20 @@ impl Agora {
         let rendered = agora.render(PROTOCOL_FILE, &protocol.text, &mut conditions);
         let seeded = agora.seed(prompts, &mut conditions);
         reported = agora.report_from(&conditions, reported);
+        // What an earlier boot found and this one checked again and did not
+        // find no longer holds; its clear rides in the boot's commit.
+        let found: Vec<&Cause> = conditions
+            .iter()
+            .map(|condition| &condition.cause)
+            .collect();
+        let resolved: Vec<Cause> = BOOT_CHECKED
+            .iter()
+            .filter_map(|text| text.parse::<Cause>().ok())
+            .filter(|checked| !found.contains(&checked))
+            .collect();
+        agora
+            .degradations
+            .clear_where(|held| resolved.contains(held));
         // A `.gitignore` the reconcile already committed costs one commit that
         // lands with nothing staged. A boot that wrote only degradation lines
         // commits them too (SDD-RUST §10: one commit when anything was written).
@@ -281,14 +337,20 @@ impl Agora {
     }
 
     /// Appends `draft` to the book of record. A rotation the book had to skip
-    /// is reported on the channel (invariant 7); the line still lands.
+    /// is reported on the channel (invariant 7); the line still lands. A
+    /// degradation line is refused: the channel is the one writer of that kind
+    /// (DECISIONS-LOG 2026-10-25, *R1.4b — Architect decisions, fourth round*,
+    /// item 5). Until a later phase defines another kind's events, no line can
+    /// be written here.
     pub fn append(&self, draft: Draft) -> Result<Appended, AppendError> {
-        let appended = self.book.append(draft)?;
-        if let Rotation::Skipped(why) = &appended.rotation {
-            self.degradations
-                .report(cause("log-rotation"), &rotation_detail(why));
+        if draft.kind == LogKind::Degradation {
+            return Err(AppendError::Invalid(SchemaError::invalid(
+                LogLine::FILE,
+                "kind",
+                "a degradation line is the degradation channel's to write (Agora::degradations), so its ring and its ladder see every one",
+            )));
         }
-        Ok(appended)
+        self.degradations.append(draft)
     }
 
     /// A channel that receives every line appended from now on, in file
@@ -305,14 +367,11 @@ impl Agora {
         let read = self.book.since(cursor)?;
         let took = started.elapsed();
         if took >= self.slow_read {
-            let bytes = self.book.size_bytes().map_or_else(
-                |error| format!("an unknown size ({error})"),
-                |b| format!("{b} bytes"),
-            );
+            let bytes = read.cursor.offset().saturating_sub(cursor.offset());
             self.degradations.report(
-                cause("slow-read"),
+                cause("log-size"),
                 &format!(
-                    "reading the book of record took {} ms for {} records over {bytes}",
+                    "reading the book of record took {} ms for {} records over {bytes} bytes",
                     took.as_millis(),
                     read.entries.len()
                 ),
@@ -469,8 +528,9 @@ impl Agora {
 /// Replays what was true when the last run stopped, and returns what the book
 /// itself says about that run: a torn live file (DECISIONS-LOG 2026-10-25,
 /// *R1.4b — Architect decisions, second round*, item 5), a book that cannot be
-/// read or written. Writes nothing.
-fn book_conditions(book: &Book, degradations: &Degradations) -> Vec<Condition> {
+/// read or written. Writes nothing. The kill tests ask it what a reopen after
+/// a real kill reports (GYM-014).
+pub(crate) fn book_conditions(book: &Book, degradations: &Degradations) -> Vec<Condition> {
     let mut conditions = Vec::new();
     match book.tail(REPLAY_LINES) {
         Ok(tail) => degradations.replay(&tail.entries),
@@ -482,6 +542,8 @@ fn book_conditions(book: &Book, degradations: &Degradations) -> Vec<Condition> {
             ),
         )),
     }
+    // A live file that cannot be read for its last byte cannot be read by the
+    // replay either, so that failure is already `agora/log-unreadable`.
     if book.ends_mid_line().unwrap_or(false) {
         conditions.push(condition(
             "log-torn",
@@ -534,11 +596,11 @@ fn channel_hooks(
 /// Names what git ignores that the harness did not make, as `agora/hidden-work`,
 /// and clears it once nothing is; a listing git could not make is
 /// `agora/ignore-check`.
-fn judge_ignored(degradations: &Degradations, ignored: &Result<Vec<String>, String>) {
+fn judge_ignored(degradations: &Degradations, ignored: &Result<Ignored, String>) {
     let check = cause("ignore-check");
     let hidden = cause("hidden-work");
-    let entries = match ignored {
-        Ok(entries) => entries,
+    let ignored = match ignored {
+        Ok(ignored) => ignored,
         Err(reason) => {
             degradations.report(
                 check,
@@ -550,15 +612,26 @@ fn judge_ignored(degradations: &Degradations, ignored: &Result<Vec<String>, Stri
         }
     };
     degradations.clear(&check);
-    let theirs: Vec<&str> = entries
+    // A nested repository is listed by git as an ignored directory too, since
+    // the committer keeps it out through the exclude file: name it once, as a
+    // repository.
+    let nested: Vec<&str> = ignored.nested.iter().map(String::as_str).collect();
+    let theirs: Vec<&str> = ignored
+        .entries
         .iter()
         .map(String::as_str)
         .filter(|entry| !harness_ignores(entry))
+        .filter(|entry| {
+            !ignored
+                .nested
+                .iter()
+                .any(|path| entry.strip_suffix('/') == Some(path))
+        })
         .collect();
-    if theirs.is_empty() {
+    if theirs.is_empty() && nested.is_empty() {
         degradations.clear(&hidden);
     } else {
-        degradations.report(hidden, &hidden_detail(&theirs));
+        degradations.report(hidden, &hidden_detail(&theirs, &nested));
     }
 }
 
@@ -593,12 +666,32 @@ fn is_temporary(name: &str) -> bool {
 
 /// The detail of `agora/hidden-work`, naming the paths and as many of them as
 /// fit.
-fn hidden_detail(paths: &[&str]) -> String {
-    const ROOM: usize = 1_400;
+fn hidden_detail(paths: &[&str], nested: &[&str]) -> String {
+    let mut parts = Vec::new();
+    if !paths.is_empty() {
+        parts.push(format!(
+            "git ignores {} path(s) the harness did not make, so they are missing from the Agora's history: {}. An ignore file an agent wrote hides them (a .gitignore under the Agora, or .git/info/exclude); remove it, and the next commit takes them",
+            paths.len(),
+            named(paths, 900)
+        ));
+    }
+    if !nested.is_empty() {
+        parts.push(format!(
+            "{} git repository(ies) nested in the Agora are kept out of its history, so the rest of its work can land: {}. Remove each one's .git, or move it out of the Agora, and the next commit takes its files",
+            nested.len(),
+            named(nested, 500)
+        ));
+    }
+    parts.join(". ")
+}
+
+/// `paths` joined, as many as fit in `room` characters, the rest counted.
+/// One path is always named.
+fn named(paths: &[&str], room: usize) -> String {
     let mut named = Vec::new();
     let mut used = 0;
     for path in paths {
-        if used + path.len() > ROOM && !named.is_empty() {
+        if used + path.len() > room && !named.is_empty() {
             break;
         }
         used += path.len() + 2;
@@ -609,10 +702,7 @@ fn hidden_detail(paths: &[&str]) -> String {
     if more > 0 {
         list.push_str(&format!(", and {more} more"));
     }
-    format!(
-        "git ignores {} path(s) the harness did not make, so they are missing from the Agora's history: {list}. An ignore file an agent wrote hides them (a .gitignore under the Agora, or .git/info/exclude); remove it, and the next commit takes them",
-        paths.len()
-    )
+    list
 }
 
 /// Writes `empty` when the record is absent, reports it when it is damaged,
@@ -1566,7 +1656,98 @@ mod tests {
             "a book that ends whole is not torn: {:?}",
             again.conditions
         );
+        // DECISIONS-LOG 2026-10-25, fourth round, item 3: checked again and
+        // not found, so cleared rather than carried, and the clear committed.
+        assert!(
+            !has(&again.agora, "agora/log-torn"),
+            "{:?}",
+            held(&again.agora)
+        );
+        let cleared = rows(&again.agora).pop().unwrap();
+        assert_eq!(cleared.cause.to_string(), "agora/log-torn");
+        assert_eq!(cleared.event(), DegradationEvent::Cleared);
+        assert_eq!(subjects(&root)[0], RECORD_SUBJECT);
+        assert!(!again.agora.committer().is_dirty());
         drop(again);
+        let third = open(&root);
+        assert_eq!(
+            subjects(&root)[0],
+            RECORD_SUBJECT,
+            "nothing left to clear: the third boot commits nothing"
+        );
+        assert_eq!(subjects(&root).len(), 4);
+        drop(third);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_boot_clears_only_the_boot_causes_it_checked_again_and_did_not_find() {
+        let dir = scratch("boot-clears");
+        let root = dir.join("agora");
+        drop(open(&root));
+        write(&root.join(".git").join("index.lock"), "");
+        let booted = open(&root);
+        assert_eq!(causes(&booted), ["agora/index-lock"]);
+        booted
+            .agora
+            .degradations()
+            .report("hermes/stranded:m1".parse().unwrap(), "not a boot cause");
+        drop(booted);
+        let again = open(&root);
+        let still: Vec<String> = held(&again.agora);
+        assert_eq!(
+            still,
+            ["hermes/stranded:m1"],
+            "the index lock is gone and cleared; a cause no boot checks stays carried"
+        );
+        assert_eq!(
+            entry(&again.agora, "hermes/stranded:m1").freshness,
+            Freshness::Carried
+        );
+        for text in BOOT_CHECKED {
+            assert!(text.parse::<Cause>().is_ok(), "{text}");
+        }
+        drop(again);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_boot_replays_only_the_books_last_four_hundred_lines() {
+        let dir = scratch("replay-bound");
+        let root = dir.join("agora");
+        let booted = open(&root);
+        let channel = booted.agora.degradations();
+        channel.report("hermes/stranded:old".parse().unwrap(), "out of reach");
+        // Exactly the replay's 400 lines after it: a raise and a clear each.
+        let churn: Cause = "hermes/stranded:churn".parse().unwrap();
+        for _ in 0..REPLAY_LINES / 2 {
+            channel.report(churn.clone(), "up");
+            channel.clear(&churn);
+        }
+        drop(booted);
+        let again = open(&root);
+        assert!(
+            !has(&again.agora, "hermes/stranded:old"),
+            "older than the last 400 lines: {:?}",
+            held(&again.agora)
+        );
+        drop(again);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_boot_commit_that_fails_clears_at_the_next_commit_that_lands() {
+        let dir = scratch("seed-clears");
+        let root = dir.join("agora");
+        let gate = Arc::new(AtomicBool::new(true));
+        let booted = Agora::open(&root, &prompts(&root), armed(&gate)).unwrap();
+        assert_eq!(causes(&booted), ["agora/commit:seed"]);
+        assert!(has(&booted.agora, "agora/commit:seed"));
+        gate.store(false, Ordering::SeqCst);
+        booted.agora.committer().commit("later").wait().unwrap();
+        assert!(!has(&booted.agora, "agora/commit:seed"), "late, not lost");
+        assert!(tracked(&root, "registry.json"));
+        drop(booted);
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1643,7 +1824,12 @@ mod tests {
         let root = dir.join("agora");
         drop(open(&root));
         write(&root.join("agents/mason/outbox/m1.json"), "{}\n");
-        let booted = Agora::open(&root, &prompts(&root), failing_once()).unwrap();
+        // A slow landing report of the caller's runs before the Agora's: were
+        // the reports made after the ticket is answered, the clear below would
+        // be missed every time, not only when a thread loses a race.
+        let slow = failing_once()
+            .on_landing(|_| std::thread::sleep(std::time::Duration::from_millis(200)));
+        let booted = Agora::open(&root, &prompts(&root), slow).unwrap();
         assert_eq!(causes(&booted), ["agora/commit:reconcile"]);
         assert_eq!(
             subjects(&root),
@@ -1830,22 +2016,78 @@ mod tests {
             .map(|n| format!("agents/mason/secret-{n:03}/"))
             .collect();
         let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
-        let detail = hidden_detail(&refs);
+        let nested: Vec<String> = (0..100).map(|n| format!("agents/a{n:03}/work")).collect();
+        let nested: Vec<&str> = nested.iter().map(String::as_str).collect();
+        let detail = hidden_detail(&refs, &nested);
         assert!(detail.starts_with("git ignores 300 path(s)"), "{detail}");
         assert!(detail.contains("agents/mason/secret-000/"));
         assert!(!detail.contains("agents/mason/secret-299/"));
         assert!(detail.contains("more."), "{detail}");
+        assert!(
+            detail.contains(". 100 git repository(ies) nested in the Agora are kept out"),
+            "{detail}"
+        );
+        assert!(detail.contains("agents/a000/work"));
+        assert!(!detail.contains("agents/a099/work"));
         assert!(detail.chars().count() <= crate::degradations::MAX_DETAIL);
-        let one = hidden_detail(&["agents/mason/x/"]);
+        let one = hidden_detail(&["agents/mason/x/"], &[]);
         assert!(
             one.contains("missing from the Agora's history: agents/mason/x/. An"),
             "{one}"
         );
+        assert!(!one.contains("nested"), "{one}");
+        let only = hidden_detail(&[], &["agents/a1/work"]);
+        assert!(
+            only.starts_with("1 git repository(ies) nested in the Agora"),
+            "{only}"
+        );
+        assert!(only.ends_with("the next commit takes its files"), "{only}");
         let huge = "y".repeat(3_000);
         assert!(
-            hidden_detail(&[&huge]).contains(&huge),
+            hidden_detail(&[&huge], &[]).contains(&huge),
             "one path is always named"
         );
+    }
+
+    /// DECISIONS-LOG 2026-10-25, *R1.4b — Architect decisions, fourth round*,
+    /// item 1.
+    #[test]
+    fn a_repository_nested_in_the_agora_is_named_once_and_its_neighbours_land() {
+        let dir = scratch("nested");
+        let root = dir.join("agora");
+        let booted = open(&root);
+        let work = root.join("agents/mason/work");
+        write(&work.join("plan.md"), "the plan\n");
+        let made = Git::target()
+            .without_machine_config()
+            .run(&work, &["init", "-q", "-b", "main"]);
+        assert!(made.ok(), "{made:?}");
+        write(&root.join("agents/ada/outbox/m1.json"), "{}\n");
+        booted.agora.committer().commit("work").wait().unwrap();
+        assert!(
+            tracked(&root, "agents/ada/outbox/m1.json"),
+            "the rest of the company's work landed"
+        );
+        assert!(!tracked(&root, "agents/mason/work/plan.md"));
+        let hidden = entry(&booted.agora, "agora/hidden-work");
+        assert!(
+            hidden.detail.starts_with(
+                "1 git repository(ies) nested in the Agora are kept out of its history"
+            ),
+            "named as a repository, not as an ignored directory: {}",
+            hidden.detail
+        );
+        assert!(
+            hidden.detail.contains("agents/mason/work"),
+            "{}",
+            hidden.detail
+        );
+        fs::remove_dir_all(work.join(".git")).unwrap();
+        booted.agora.committer().commit("unnested").wait().unwrap();
+        assert!(tracked(&root, "agents/mason/work/plan.md"));
+        assert!(!has(&booted.agora, "agora/hidden-work"));
+        drop(booted);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -1879,16 +2121,34 @@ mod tests {
     }
 
     #[test]
-    fn a_line_appended_through_the_agora_is_published_after_it_is_on_disk() {
+    fn the_channel_is_the_one_writer_of_degradation_lines_and_publishes_them() {
         let dir = scratch("publish");
         let root = dir.join("agora");
         let booted = open(&root);
         let heard = booted.agora.subscribe();
-        let appended = booted.agora.append(draft(1)).unwrap();
+        let refused = booted.agora.append(draft(1)).unwrap_err();
+        assert!(
+            refused
+                .to_string()
+                .contains("the degradation channel's to write"),
+            "{refused}"
+        );
+        let mut gym = draft(1);
+        gym.kind = LogKind::Gym;
+        let undefined = booted.agora.append(gym).unwrap_err();
+        assert!(
+            undefined.to_string().contains("not defined yet"),
+            "{undefined}"
+        );
+        assert!(heard.try_recv().is_err(), "nothing was written");
+        booted
+            .agora
+            .degradations()
+            .report("hermes/stranded:m1".parse().unwrap(), "a message waits");
         let line = heard
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap();
-        assert_eq!(line, appended.line);
+        assert_eq!(line.kind, LogKind::Degradation);
         let tail = booted.agora.tail(1).unwrap();
         assert_eq!(tail.entries, [line]);
         drop(booted);
@@ -1896,30 +2156,42 @@ mod tests {
     }
 
     #[test]
-    fn a_slow_read_of_the_book_is_reported_with_its_size() {
+    fn a_slow_read_of_the_book_is_reported_as_log_size_with_what_it_read() {
         let dir = scratch("slow-read");
         let root = dir.join("agora");
         let mut booted = open(&root);
-        booted.agora.append(draft(1)).unwrap();
+        booted
+            .agora
+            .degradations()
+            .report("hermes/stranded:m1".parse().unwrap(), "a message waits");
         booted.agora.since(Cursor::START).unwrap();
         assert!(
-            !has(&booted.agora, "agora/slow-read"),
+            !has(&booted.agora, "agora/log-size"),
             "a quick read is not news"
         );
+        let len = fs::metadata(root.join(LOG_FILE)).unwrap().len();
         booted.agora.slow_read = std::time::Duration::ZERO;
         booted.agora.since(Cursor::START).unwrap();
-        let slow = entry(&booted.agora, "agora/slow-read");
+        let slow = entry(&booted.agora, "agora/log-size");
         assert!(
             slow.detail.starts_with("reading the book of record took "),
             "{}",
             slow.detail
         );
         assert!(
-            slow.detail.contains(" ms for 1 records over "),
-            "{}",
+            slow.detail
+                .ends_with(&format!(" ms for 1 records over {len} bytes")),
+            "the bytes that read parsed: {}",
             slow.detail
         );
-        assert!(slow.detail.ends_with(" bytes"), "{}", slow.detail);
+        let end = booted.agora.since(Cursor::START).unwrap().cursor;
+        booted.agora.since(end).unwrap();
+        assert!(
+            entry(&booted.agora, "agora/log-size")
+                .detail
+                .ends_with(" ms for 0 records over 0 bytes"),
+            "a read from the end parsed nothing"
+        );
         assert_eq!(SLOW_READ, std::time::Duration::from_millis(50));
         drop(booted);
         fs::remove_dir_all(&dir).unwrap();
@@ -1930,7 +2202,10 @@ mod tests {
         let dir = scratch("rotation");
         let root = dir.join("agora");
         let booted = open(&root);
-        booted.agora.append(draft(1)).unwrap();
+        booted
+            .agora
+            .degradations()
+            .report("hermes/stranded:m1".parse().unwrap(), "a message waits");
         drop(booted);
         // Past four mebibytes, with its segment's name already taken.
         let mut bytes = fs::read(root.join(LOG_FILE)).unwrap();
@@ -1944,16 +2219,18 @@ mod tests {
             "history\n",
         );
         let booted = open(&root);
-        let appended = booted.agora.append(draft(2)).unwrap();
-        assert!(
-            matches!(appended.rotation, Rotation::Skipped(_)),
-            "{:?}",
-            appended.rotation
-        );
+        booted
+            .agora
+            .degradations()
+            .report("hermes/stranded:m2".parse().unwrap(), "another waits");
         assert!(
             entry(&booted.agora, "agora/log-rotation")
                 .detail
                 .contains("would rewrite history")
+        );
+        assert!(
+            fs::metadata(root.join(LOG_FILE)).unwrap().len() > 4 * 1024 * 1024,
+            "the line landed in the live file all the same"
         );
         drop(booted);
         fs::remove_dir_all(&dir).unwrap();

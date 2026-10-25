@@ -495,7 +495,7 @@ fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::io::Read as _;
+    use std::io::{BufRead, BufReader};
     use std::process::{Child, Command, Stdio};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -505,6 +505,8 @@ pub(crate) mod tests {
     use eph_schema::degradation::{Cause, Degradation};
 
     use super::*;
+    use crate::agora::book_conditions;
+    use crate::degradations::Degradations;
 
     pub(crate) fn scratch(name: &str) -> PathBuf {
         let dir =
@@ -597,37 +599,88 @@ pub(crate) mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// Two appenders at once, one live subscriber and one that left. That a
+    /// line is published only after it is on disk is the AfterWrite fault
+    /// test's: a line stopped there is on disk and never published.
     #[test]
-    fn a_line_is_published_after_it_is_on_disk_to_every_live_subscriber_in_order() {
+    fn every_live_subscriber_gets_every_line_in_file_order_and_a_dropped_one_leaves() {
         let dir = scratch("publish");
         let book = Arc::new(Book::open(&dir));
-        let first = book.subscribe();
-        let second = book.subscribe();
-        let reader = Arc::clone(&book);
-        let watcher = thread::spawn(move || {
-            let mut seen = Vec::new();
-            for line in first.iter().take(3) {
-                // What a subscriber was told about is already on disk.
-                let read = reader.since(Cursor::START).unwrap();
-                assert!(read.entries.iter().any(|entry| entry.seq == line.seq));
-                seen.push(line.seq);
-            }
-            seen
-        });
-        for n in 1..=3 {
-            book.append(draft(n)).unwrap();
+        let kept = book.subscribe();
+        let gone = book.subscribe();
+        drop(gone);
+        let appenders: Vec<_> = (0..2)
+            .map(|_| {
+                let book = Arc::clone(&book);
+                thread::spawn(move || {
+                    for n in 1..=50 {
+                        book.append(draft(n)).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for appender in appenders {
+            appender.join().unwrap();
         }
-        assert_eq!(watcher.join().unwrap(), [1, 2, 3], "file order");
+        let heard: Vec<u64> = kept.try_iter().map(|line| line.seq).collect();
+        let on_disk: Vec<u64> = book
+            .since(Cursor::START)
+            .unwrap()
+            .entries
+            .iter()
+            .map(|line| line.seq)
+            .collect();
         assert_eq!(
-            second.try_iter().map(|line| line.seq).collect::<Vec<_>>(),
-            [1, 2, 3]
+            heard,
+            (1..=100).collect::<Vec<_>>(),
+            "no seq repeated or skipped"
         );
-        drop(second);
-        book.append(draft(4)).unwrap();
+        assert_eq!(heard, on_disk, "the order heard is the file's order");
         assert_eq!(
             guard(&book.writer).subscribers.len(),
-            0,
-            "both dropped receivers unsubscribed themselves at the next append"
+            1,
+            "the dropped receiver unsubscribed itself; the live one stayed"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_rotation_during_reads_changes_nothing_a_reader_sees() {
+        let dir = scratch("rotate-reading");
+        let one = bytes_of(1, 1).len() as u64;
+        let book = Arc::new(Book::open_rotating_at(&dir, one * 3));
+        let writer = {
+            let book = Arc::clone(&book);
+            thread::spawn(move || {
+                for n in 1..=200 {
+                    book.append(draft(n)).unwrap();
+                }
+            })
+        };
+        let mut cursor = Cursor::START;
+        let mut seen = Vec::new();
+        let mut damaged = 0;
+        loop {
+            let done = writer.is_finished();
+            let read = book.since(cursor).unwrap();
+            damaged += read.damaged;
+            seen.extend(read.entries.iter().map(|line| line.seq));
+            cursor = read.cursor;
+            if done {
+                break;
+            }
+        }
+        writer.join().unwrap();
+        assert_eq!(
+            seen,
+            (1..=200).collect::<Vec<_>>(),
+            "no line lost, repeated or reordered"
+        );
+        assert_eq!(damaged, 0);
+        assert_eq!(cursor.offset(), book.size_bytes().unwrap());
+        assert!(
+            fs::read_dir(dir.join(ARCHIVE_DIR)).unwrap().count() > 10,
+            "the reads crossed many rotations"
         );
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -955,18 +1008,22 @@ pub(crate) mod tests {
             .unwrap()
     }
 
-    /// The `seq`s a child printed as acknowledged, read on a thread so a full
-    /// pipe never stalls it.
-    fn acknowledged(child: &mut Child) -> thread::JoinHandle<Vec<u64>> {
-        let mut stdout = child.stdout.take().unwrap();
-        thread::spawn(move || {
-            let mut text = String::new();
-            let _read = stdout.read_to_string(&mut text);
-            text.lines()
-                .filter_map(|line| line.strip_prefix("ack:"))
-                .filter_map(|seq| seq.trim().parse().ok())
-                .collect()
-        })
+    /// Each `seq` a child prints as acknowledged, as it arrives, read on a
+    /// thread so a full pipe never stalls the child.
+    fn acknowledged(child: &mut Child) -> (mpsc::Receiver<u64>, thread::JoinHandle<()>) {
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let (sender, receiver) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            for line in stdout.lines().map_while(Result::ok) {
+                if let Some(seq) = line
+                    .strip_prefix("ack:")
+                    .and_then(|seq| seq.trim().parse().ok())
+                {
+                    let _sent = sender.send(seq);
+                }
+            }
+        });
+        (receiver, reader)
     }
 
     /// Waits for `child` to exit, killing it if it outlives [`CHILD_PATIENCE`].
@@ -1011,10 +1068,22 @@ pub(crate) mod tests {
     }
 
     /// After a kill: every acknowledged line reads back, nothing before the
-    /// last line is torn, and the next append is whole.
+    /// last line is torn, the reopen raises `agora/log-torn` exactly when the
+    /// live file ends mid-line (GYM-014), and the next append is whole.
     fn assert_nothing_lost(dir: &Path, acked: &[u64], what: &str) {
-        let book = Book::open(dir);
+        let book = Arc::new(Book::open(dir));
+        let channel = Degradations::new(Arc::clone(&book));
+        let conditions: Vec<String> = book_conditions(&book, &channel)
+            .iter()
+            .map(|condition| condition.cause.to_string())
+            .collect();
         let read = book.since(Cursor::START).unwrap();
+        let torn = if read.torn_tail {
+            vec!["agora/log-torn".to_string()]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(conditions, torn, "{what}: the reopen's own report");
         let seqs: Vec<u64> = read.entries.iter().map(|line| line.seq).collect();
         for seq in acked {
             assert!(
@@ -1042,13 +1111,14 @@ pub(crate) mod tests {
         for (mode, on_disk) in [("before-write", 0), ("after-write", 1)] {
             let dir = scratch(&format!("killed-{mode}"));
             let mut child = spawn_child(&dir, mode);
-            let acks = acknowledged(&mut child);
+            let (acks, reader) = acknowledged(&mut child);
             assert_eq!(
                 exit_of(&mut child),
                 Some(DIED),
                 "{mode}: the child died at its point"
             );
-            let acked = acks.join().unwrap();
+            reader.join().unwrap();
+            let acked: Vec<u64> = acks.try_iter().collect();
             assert!(
                 acked.is_empty(),
                 "{mode}: it died before its first acknowledgement"
@@ -1066,19 +1136,26 @@ pub(crate) mod tests {
 
     #[test]
     fn a_writer_killed_at_random_loses_nothing_it_acknowledged() {
-        let mut total = 0;
-        for after in [40, 90, 160, 250] {
+        for after in [0, 40, 90, 160, 250] {
             let dir = scratch(&format!("killed-random-{after}"));
             let mut child = spawn_child(&dir, "churn");
-            let acks = acknowledged(&mut child);
+            let (acks, reader) = acknowledged(&mut child);
+            // The delay starts at the first acknowledgement, so a child slow
+            // to start (an instrumented build, a scanner) is still killed
+            // while it writes.
+            let first = acks.recv_timeout(CHILD_PATIENCE);
             thread::sleep(Duration::from_millis(after));
             child.kill().unwrap();
             let _reaped = child.wait().unwrap();
-            let acked = acks.join().unwrap();
-            total += acked.len();
-            assert_nothing_lost(&dir, &acked, &format!("killed after {after} ms"));
+            reader.join().unwrap();
+            let first = first.expect("the child acknowledged a line before its kill");
+            let acked: Vec<u64> = std::iter::once(first).chain(acks.try_iter()).collect();
+            assert_nothing_lost(
+                &dir,
+                &acked,
+                &format!("killed {after} ms after its first line"),
+            );
             fs::remove_dir_all(&dir).unwrap();
         }
-        assert!(total > 0, "the children acknowledged lines to lose");
     }
 }

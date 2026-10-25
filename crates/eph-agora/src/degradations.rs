@@ -32,7 +32,7 @@ use eph_schema::degradation::{Cause, Degradation, DegradationEvent, Source, earn
 use eph_schema::log::{LogKind, LogLine};
 use eph_schema::time::{Duration, Timestamp};
 
-use crate::book::{Book, Draft};
+use crate::book::{AppendError, Appended, Book, Draft};
 
 /// How many causes the ring keeps (today's figure).
 pub const LIMIT: usize = 50;
@@ -233,43 +233,64 @@ impl Degradations {
         self.write(ring, &row, now);
     }
 
-    /// Appends `row`'s line. A failure is noted, a skipped rotation reported.
+    /// Appends any other kind of line to the book, reporting a rotation the
+    /// book had to skip: `Agora::append`'s one path.
+    pub(crate) fn append(&self, draft: Draft) -> Result<Appended, AppendError> {
+        let mut ring = guard(&self.ring);
+        let now = (self.clock)();
+        self.append_held(&mut ring, draft, false, now)
+    }
+
+    /// Appends `row`'s line. A failure is noted.
     fn write(&self, ring: &mut Vec<Entry>, row: &Degradation, now: Timestamp) {
         let appended = row
             .to_line(1, now)
             .map_err(|error| error.to_string())
             .and_then(|line| {
-                self.book
-                    .append(Draft {
-                        kind: line.kind,
-                        event: line.event,
-                        source: line.source,
-                        refs: line.refs,
-                        data: line.data,
-                    })
+                let draft = Draft {
+                    kind: line.kind,
+                    event: line.event,
+                    source: line.source,
+                    refs: line.refs,
+                    data: line.data,
+                };
+                let rotation_row = row.cause == agora("log-rotation");
+                self.append_held(ring, draft, rotation_row, now)
                     .map_err(|error| error.to_string())
             });
-        match appended {
-            Ok(appended) => {
-                if let Rotation::Skipped(why) = appended.rotation {
-                    let rotation = agora("log-rotation");
-                    let detail = rotation_detail(&why);
-                    if row.cause == rotation {
-                        note(ring, rotation, &detail, now);
-                    } else {
-                        self.raise(ring, rotation, &detail);
-                    }
-                }
-            }
-            Err(why) => note(
+        if let Err(why) = appended {
+            note(
                 ring,
                 agora("log-unwritable"),
                 &format!(
                     "a degradation line could not be written to the book of record ({why}); the channel still holds it"
                 ),
                 now,
-            ),
+            );
         }
+    }
+
+    /// Appends `draft` with the ring held. A rotation the book skipped is
+    /// raised, or only counted when the line is that rotation's own report, so
+    /// it cannot recurse.
+    fn append_held(
+        &self,
+        ring: &mut Vec<Entry>,
+        draft: Draft,
+        rotation_row: bool,
+        now: Timestamp,
+    ) -> Result<Appended, AppendError> {
+        let appended = self.book.append(draft)?;
+        if let Rotation::Skipped(why) = &appended.rotation {
+            let rotation = agora("log-rotation");
+            let detail = rotation_detail(why);
+            if rotation_row {
+                note(ring, rotation, &detail, now);
+            } else {
+                self.raise(ring, rotation, &detail);
+            }
+        }
+        Ok(appended)
     }
 }
 
@@ -284,12 +305,13 @@ fn row_of(entry: &Entry) -> Degradation {
     }
 }
 
-/// Records `cause` in the ring without writing a line.
+/// Records `cause` in the ring without writing a line. An entry already held
+/// keeps its wording, which may be the boot's fuller account of the same
+/// cause (`agora/log-unwritable`); only its count moves.
 fn note(ring: &mut Vec<Entry>, cause: Cause, detail: &str, now: Timestamp) {
     let detail = fit(detail);
     if let Some(entry) = ring.iter_mut().find(|entry| entry.cause == cause) {
         entry.count += 1;
-        entry.detail = detail;
         entry.last_seen = now;
         entry.freshness = Freshness::Live;
         return;
@@ -328,7 +350,7 @@ fn fit(detail: &str) -> String {
 }
 
 /// The detail of `agora/log-rotation`.
-pub(crate) fn rotation_detail(why: &str) -> String {
+fn rotation_detail(why: &str) -> String {
     format!(
         "the book of record was due to rotate and could not ({why}); its lines still land in log.jsonl, which keeps growing"
     )
@@ -673,6 +695,21 @@ mod tests {
         let written = rows(&channel);
         assert_eq!(written.len(), 2, "both rows validated and were written");
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `MAX_DETAIL` repeats `eph-schema`'s rule for a row; this holds them to
+    /// one number.
+    #[test]
+    fn the_channels_detail_limit_is_the_rows_own() {
+        let row = |chars: usize| Degradation {
+            cause: cause("agora/limit"),
+            detail: "d".repeat(chars),
+            count: 1,
+            since: Timestamp::from_millis(1).unwrap(),
+            cleared_after: None,
+        };
+        assert!(row(MAX_DETAIL).validate().is_ok());
+        assert!(row(MAX_DETAIL + 1).validate().is_err());
     }
 
     #[test]

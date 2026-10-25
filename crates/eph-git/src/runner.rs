@@ -53,9 +53,17 @@
 //!
 //!   It commits as `Ephesus <harness@ephesus.local>` through the identity
 //!   variables, which outrank configuration from any source. So no host
-//!   setting and no file an agent writes can hide an Agora file from `add -A`,
-//!   rewrite its line endings, run its code through a planted `core.fsmonitor`,
-//!   or rename its committer. It is the committer's alone, so it is not public.
+//!   setting and no file in the Agora's tree can hide an Agora file from
+//!   `add -A`, rewrite its line endings, run its code through a planted
+//!   `core.fsmonitor`, or rename its committer. It is the committer's alone, so
+//!   it is not public.
+//!
+//!   **`.git/` is the line.** The repository's own `.git/config` and
+//!   `.git/info/attributes` are read on every call, and no git option turns the
+//!   second off; either can rewrite or wedge a commit. They are outside an
+//!   agent's grant, which is its own `agents/<id>/` (DECISIONS-LOG 2026-10-25,
+//!   *R1.4b — Architect decisions, fourth round*, item 2); R2.3, which builds
+//!   the grants and the shell, keeps an agent out of them.
 //! - [`Git::target`] reads the user's configuration (`core.longpaths`,
 //!   `url.insteadOf`), for worktrees and remotes of a target repository.
 //!   [`Git::without_machine_config`] gives it the Agora's isolation, which is
@@ -169,7 +177,9 @@ const NO_MACHINE_OVERRIDES: [&str; 6] = [
 /// call ("bad --attr-source"), loudly (measured, git 2.53).
 pub const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
-/// What a git older than 2.40 prints for `--attr-source`.
+/// What a git older than 2.40 prints for `--attr-source`: git's own wording for
+/// an option it does not know (2.53's, measured with `--not-an-option`). No
+/// git that old was at hand to print it for this option itself.
 const OLD_GIT: &str = "unknown option: --attr-source";
 
 /// The sentence a refusal of `--attr-source` gains, so it names the fix.
