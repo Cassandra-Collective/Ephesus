@@ -17,8 +17,9 @@ test it, then move to the next part, and when everything built so far runs in Ru
 continue with the plans that follow. It replaces nothing. The standing prompt for any
 session, `docs/GOAL.md`, is on the pushed and unmerged branch `docs/standing-goal-prompt`.
 
-*Written 2026-10-20 at R1.4a's pause; rewritten 2026-10-25 when R1.4a closed, and again
-the same day when R1 closed.*
+*Written 2026-10-20 at R1.4a's pause; rewritten 2026-10-25 when R1.4a closed, again the
+same day when R1 closed, and updated when the Architect approved R2's list and paused
+the session before R2.1's probe.*
 
 ---
 
@@ -31,6 +32,7 @@ the same day when R1 closed.*
 | R0.3, R1.0, R1.1, R1.2, R1.3, R1.4a | Done, pushed, stacked on R0.2; each gets its PR as the one below it merges, R0.3's next | `feature/r0-3-standards-learn-rust` … `feature/r1-4a-agora-store` @ `3fe7490` |
 | R1.4b `eph-agora`, the book of record | **Done and ticked**, pushed. CI run 40206703962 on `237aa31` and 40207561007 on `512cf21` are green on every job | `feature/r1-4b-book-of-record`, cut from `3fe7490` |
 | **R1** the home and the book of record | **DONE** (2026-10-25), its verdict in PROGRESS | the same branch |
+| R2 the terminal plane and the engine seam | Package list **approved** (2026-10-25); R2.1 not started | — |
 
 R1.4b's close is recorded in PROGRESS (its tick, its evidence and R1's verdict), in
 [`2026-10-25-r1-4b-book-of-record.md`](./implementations/2026-10-25-r1-4b-book-of-record.md),
@@ -44,17 +46,38 @@ each on the Architect's answer:
 
 ## Next: R2, the terminal plane and the engine seam
 
-1. **Ask before any R2 code, through AskUserQuestion.** R2 starts only once the Architect
-   approves its package list. RUST-PLAN §5 lists R2.1 `eph-pty` (spawn, write, resize,
-   interrupt, kill; PATH resolution; the redaction filter), R2.2 `eph-engines` (the
-   adapter trait, the `claude` adapter, `codex` and `gemini` as conformance subjects) and
-   R2.3 the agent manager. RUST-PLAN §9 owes one R2 question, asked with it: whether
-   `portable-pty`'s process-tree kill suffices on Windows or a job object (an FFI boundary
-   crate, Set B, its own memo) is needed, which also closes R1.3's deadline-kill residual.
-   Then each package's own open choices, before its code.
-2. **R2.1's branch** is `feature/r2-1-eph-pty`, cut from `feature/r1-4b-book-of-record`'s
-   tip. A new crate's first push is red at the coverage step until its floor is seeded
-   from three CI attempts with `cargo xtask coverage ratchet`.
+1. **Already answered (DECISIONS-LOG 2026-10-25, *R2 — Architect decisions*), cite it:**
+   R2's package list is approved as RUST-PLAN §5 lists it: R2.1 `eph-pty` (spawn, write,
+   resize, interrupt, kill; PATH resolution; the redaction filter), R2.2 `eph-engines`
+   (the adapter trait, the `claude` adapter, `codex` and `gemini` as conformance
+   subjects), R2.3 the agent manager. RUST-PLAN §9's tree-kill question is **measured
+   first**. R2.1 has not started: no branch and no code exist yet (the session paused on
+   2026-10-25 at the start of the probe).
+2. **R2.1's first step is the probe.** It is a scratch project outside the repository,
+   with its own target directory, on `portable-pty` 0.9.0 (Set A). A parent runs in a
+   PTY and starts a grandchild, as `claude` starts its tools: `node` on win32 (v24 is
+   installed), `sh -c 'sleep 120 & echo $! > pid; sleep 120'` in WSL2, which has no node.
+   It records the grandchild's pid, and checks whether the grandchild is still alive
+   after `Child::kill()`, and again after the PTY's master is dropped.
+   - The expected mechanism, to measure rather than assume: POSIX sends SIGHUP to the
+     session when the session leader dies; ConPTY's close sends console processes
+     CTRL_CLOSE_EVENT.
+   - Then put the question back to the Architect with the figures and their condition:
+     `portable-pty`'s kill alone, or memos for `windows-sys` (job objects) and `libc`
+     (process groups) in a named FFI boundary crate. The answer also settles R1.3's
+     deadline-kill residual for git.
+3. **Then R2.1's open choices, before its code**, read against the TypeScript reference:
+   - `src/main/pty.ts`: one PTY per id, the plan's env as the whole environment;
+   - `src/main/pty-stream.ts`: the redacted outbound edge, the 4 KiB "last words";
+   - `src/main/which.ts`: PATH and PATHEXT, and npm's `.cmd` shim unwrapped past
+     `cmd.exe`'s 8,191-character cap;
+   - `src/shared/redaction.ts`: a held tail across chunks, the visible mask
+     `•••eph-masked•••`, values under 4 characters never masked.
+
+   Then consult the advisor on the approach. R2.1's branch is `feature/r2-1-eph-pty`, cut
+   from `feature/r1-4b-book-of-record`'s tip. A new crate's first push is red at the
+   coverage step until its floor is seeded from three CI attempts with `cargo xtask
+   coverage ratchet`.
 3. **Carried into R2:** GYM-014's metric 3 is measured at R2's close (no `process:`
    exemption in `eph-agora` outside test-only code); `.git/` is outside an agent's grant
    and R2.3's grants keep an agent out of it; a symbolic link is committed as the link,
