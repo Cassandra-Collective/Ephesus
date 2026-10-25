@@ -453,7 +453,7 @@ requirements and the thirteen invariants do not change. The order, phase by phas
 [`docs/RUST-PLAN.md`](./docs/RUST-PLAN.md). Phase R0 builds the gates first, so every
 later phase is checked from its first line.
 
-<!-- landed: R1.0 R1.1 R1.2 R1.3
+<!-- landed: R1.0 R1.1 R1.2 R1.3 R1.4a
      Checked by scripts/check-readme-current.cjs against the register (docs/PROGRESS.md
      and the milestones archived in docs/progress/): every package of the milestone or
      phase holding the most recent tick must be listed here, and listing one is a claim
@@ -489,6 +489,13 @@ Landed so far in R1, the home and the book of record:
   work from history. A harness killed mid-commit loses nothing: the next boot commits what
   it left. An agent's checkout is never deleted while it holds uncommitted work, or a
   commit no branch keeps.
+- **R1.4a, the Agora's records and its boot.** The roster and the task ledger go through
+  one store that tells a missing file from a damaged one, checks a record before writing
+  it, and never writes over damage, so the evidence is still there to repair. The Agora
+  boots in an order that keeps a crash's leftovers out of history, finishes a repository
+  a crash left half made, and reports every failure short of the committer instead of
+  stopping. The ledger stays bounded: past 9,000 tasks, the oldest finished ones move to
+  an append-only archive, and never one a kept task depends on.
 
 **R0, the workspace and its gates, is done** (2026-10-19):
 

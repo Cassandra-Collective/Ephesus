@@ -21,7 +21,7 @@ recorded.
 
 ## Resume here
 
-*As of 2026-10-20: R0.1 is merged as #102 and R0.2 is PR #104. R0.3 (`feature/r0-3-standards-learn-rust`), R1.0 (`feature/r1-0-home-design`), R1.1 (`feature/r1-1-eph-schema`), R1.2 (`feature/r1-2-eph-fs`) and R1.3 (`feature/r1-3-eph-git`) are stacked on it, pushed, and get their PRs as the one below each merges. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
+*As of 2026-10-25: R0.1 is merged as #102 and R0.2 is PR #104. R0.3 (`feature/r0-3-standards-learn-rust`), R1.0 (`feature/r1-0-home-design`), R1.1 (`feature/r1-1-eph-schema`), R1.2 (`feature/r1-2-eph-fs`), R1.3 (`feature/r1-3-eph-git`) and R1.4a (`feature/r1-4a-agora-store`) are stacked on it, pushed, and get their PRs as the one below each merges. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
 
 **Ephesus is being rewritten in Rust (ADR-0041, the Architect's direction of
 2026-10-19), and the rewrite comes before everything below.** The Architect
@@ -33,15 +33,22 @@ approved [`RUST-PLAN.md`](./RUST-PLAN.md), crate Set A in
 (2026-10-20): `eph-fs`, the one write path, the append-only log, and a home marked
 `home.json` that leaves a TypeScript-era home untouched. **R1.3 is done** (2026-10-20):
 `eph-git`, the single committer with its own OS lock, hermetic Agora git, and worktrees
-that never delete work. **The next build step is R1.4a, `eph-agora`'s stores**: `Store<T>`, the
-registry, the task ledger and its retention, the board, seeding the Agora and the boot
-order. R1.4b, the book of record and the degradation channel, follows (the Architect
-split R1.4 and moved `DIAGNOSIS.md` to R7, 2026-10-20). Four constraints carry forward. A new crate's first push is red at the coverage step until
-its floor is seeded from that push's CI runs (ENGINEERING-STANDARDS §1.1). R1.4's
-retention of done tasks must keep any task another depends on (SDD-RUST §4.5). And a
-`.tmp` file left by a crash before its rename is a recorded residual until the boot that
-runs ADR-0034's probe (R7), and R1.4 seeds the Agora's `.gitignore` with `.*.tmp` so a
-commit never sweeps one into history (SDD-RUST §2). A later
+that never delete work. **R1.4a is done** (2026-10-25): `eph-agora`'s one store for
+records, the roster, the task ledger and its retention, the board, and the Agora's boot
+order. On the way, the Linux run found an R1.3 defect, a killed `git init`'s lock that
+refused every later boot, and the Architect had it fixed. **The next build step is
+R1.4b, `eph-agora`'s book of record**: the log writer, its readers across rotation,
+publish and subscribe, the degradation channel (which then carries `Booted::conditions`
+and the committer's unwaited failures as `agora/commit` rows), the reader half of killed
+mid-append, and the committer's detection of work an agent's own ignore file hides
+(Architect, 2026-10-25). Its open choices are asked first (the Architect split R1.4 and
+moved `DIAGNOSIS.md` to R7, 2026-10-20). Three constraints carry forward. A new crate's
+first push is red at the coverage step until its floor is seeded from that push's CI
+runs (ENGINEERING-STANDARDS §1.1). A `.tmp` file left by a crash before its rename is a
+recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
+`.gitignore`, rendered at every boot, keeps `write_atomic`'s temporaries out of history
+(SDD-RUST §2). And `tasks-archive.jsonl` has no reader yet: the phase that builds one
+dedupes by id and lets the ledger win (SDD-RUST §4.5). A later
 phase still starts only when he approves its package list, through AskUserQuestion.
 Silence is not a yes. The TypeScript tree is frozen as
 the behavioural reference and is deleted at R14 (parity). The rewrite is measured by
@@ -88,7 +95,7 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1.0 (the design) approved, and R1.1 (`eph-schema`, the coverage floors), R1.2 (`eph-fs`) and R1.3 (`eph-git`) done, 2026-10-20; R1.4a next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1.0 (the design) approved, and R1.1 (`eph-schema`, the coverage floors), R1.2 (`eph-fs`) and R1.3 (`eph-git`) done, 2026-10-20; R1.4a (`eph-agora`'s stores) done, 2026-10-25; R1.4b next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 
@@ -469,9 +476,40 @@ and opens when #104 merges.
     `eph-fs` raised to 97.24%. CI run 39471410815 on `15b77f6`, the final tree, is green on
     every job, including all seven gate steps on all three platforms.
     [`2026-10-20-r1-3-eph-git.md`](./implementations/2026-10-20-r1-3-eph-git.md)
-  - [ ] **R1.4a `eph-agora`, the stores** — `Store<T>`, the registry, the task ledger and
+  - [x] **R1.4a `eph-agora`, the stores** — `Store<T>`, the registry, the task ledger and
     its retention, the board, seeding the Agora, the boot order (split from R1.4 by the
     Architect, 2026-10-20).
+    *Evidence (2026-10-20 and 2026-10-25):* `crates/eph-agora` is the one store every
+    structured record goes through. It reads a missing file as absent and anything else
+    it cannot accept as damaged, and it never writes over damage. On it sit the roster,
+    the ledger with its retention (past 9,000 tasks, done tasks beyond the newest 1,000
+    move to an append-only archive, never one a kept task depends on), the board, and the
+    boot. The boot renders `.gitignore` before the reconcile, renders `PROTOCOL.md`,
+    seeds what is absent, and stops only when the committer refuses.
+
+    A design-fidelity review and a refutation pass ran before any round (fixed in
+    `40c1fe6`). Ten Architect answers followed on 2026-10-25, among them SDD-RUST §10
+    approved, four departures from the written design ratified, a seq-less archive
+    writer, and the fix below.
+
+    The Linux run (WSL2) found two R1.3 tests racing and an R1.3 defect: a killed
+    `git init`'s `config.lock` refused every later boot. Open now finishes the init and
+    the boot reports it. On the final tree, plain and instrumented suites each failed
+    0 of 12, and the four POSIX-only tests passed.
+
+    Mutation rounds with honest controls, no TIMEOUT:
+    - `eph-agora` ROUND OK (89 mutants, 49 caught, 0 missed), after a first round's two
+      equivalent survivors became `append_line`;
+    - `eph-git` ROUND OK (164, 112 caught);
+    - `eph-fs` ROUND OK (101, 89 caught);
+    - `eph-schema` ROUND OK (319, 276 caught).
+
+    The floor was seeded by `cargo xtask coverage ratchet` from CI run 40165646997's three
+    attempts on all three platforms, on tree `fnv1a64:81712cd8a87bd1c7`: `eph-agora`
+    95.97% (Windows 96.64%). It raised `eph-fs` to 97.48%, `eph-git` to 98.96% and
+    `eph-schema` to 98.92%, and lowered nothing. Each attempt was red at the coverage step
+    alone, by design, and every TypeScript job was green.
+    [`2026-10-25-r1-4a-agora-store.md`](./implementations/2026-10-25-r1-4a-agora-store.md)
   - [ ] **R1.4b `eph-agora`, the book of record** — the log writer and readers, publish and
     subscribe, the degradation channel, killed mid-append (`DIAGNOSIS.md` moved to R7).
 - [ ] **R2** The terminal plane and the engine seam

@@ -282,9 +282,17 @@ OneDrive, in two worktrees. Nothing tracked changed. This worktree's was removed
 `cargo clean`, and every later build exported the variable. The other worktree's is left
 for the Architect.
 
-**CI.** Not yet run on this branch: `eph-agora`'s floor is seeded from the first push's
-three attempts on Linux, macOS and Windows, and the run on the commit carrying it is cited
-here when it is green.
+**CI** (tier B). Run 40165646997 on `b2318cb`, three attempts:
+- **The steps.** On each attempt, every TypeScript job passed. The Rust gate on Linux,
+  macOS and Windows passed fmt, clippy, test, deny, invariants and deps, and failed
+  coverage only for `eph-agora`'s missing floor, by design.
+- **The figures.** `eph-agora` measured 95.97% on Linux and macOS and 96.64% on Windows
+  in every attempt, the same figures as the local runs on both machines.
+- **The floor.** `cargo xtask coverage ratchet` over the nine artifacts seeded
+  `eph-agora` at 95.97%. It raised `eph-fs` to 97.48%, `eph-git` to 98.96% and
+  `eph-schema` to 98.92%, and lowered nothing, on tree `fnv1a64:81712cd8a87bd1c7`. With
+  it, `cargo xtask gate` exits 0 on Windows, `coverage: ok (5 crate(s), 38 production
+  file(s), windows)`.
 
 ## 7. Related docs
 
