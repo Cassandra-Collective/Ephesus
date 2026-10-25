@@ -508,7 +508,9 @@ and opens when #104 merges.
     attempts on all three platforms, on tree `fnv1a64:81712cd8a87bd1c7`: `eph-agora`
     95.97% (Windows 96.64%). It raised `eph-fs` to 97.48%, `eph-git` to 98.96% and
     `eph-schema` to 98.92%, and lowered nothing. Each attempt was red at the coverage step
-    alone, by design, and every TypeScript job was green.
+    alone, by design, and every TypeScript job was green. CI run 40167524909 on
+    `ef8bbe1`, the commit carrying the floor, is green on every job, including all seven
+    gate steps on all three platforms.
     [`2026-10-25-r1-4a-agora-store.md`](./implementations/2026-10-25-r1-4a-agora-store.md)
   - [ ] **R1.4b `eph-agora`, the book of record** — the log writer and readers, publish and
     subscribe, the degradation channel, killed mid-append (`DIAGNOSIS.md` moved to R7).

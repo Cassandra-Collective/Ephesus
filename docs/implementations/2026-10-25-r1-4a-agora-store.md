@@ -248,7 +248,9 @@ permissions, as a non-root user, so the probe ran), and
 | `cargo llvm-cov --workspace`, repeated | — | 2 of 22 failed | 0 of 12 |
 | `cargo test --workspace`, repeated | — | — | 0 of 12 |
 
-Of the two failures under instrumentation, one was the test's: the deadline fired after
+Each column ran on a WSL copy whose 186 files hash identically (`git hash-object`) to the
+named commit's tree, checked afterwards against `git ls-tree`. Of the two failures under
+instrumentation, one was the test's: the deadline fired after
 `git init` had written a whole repository. A probe killed `git init` 360 times at 0 to
 3 ms. It left nothing 40 times, only `config` once, and all of `HEAD`, `config`,
 `objects/` and `refs/`, a valid repository, 319 times. The other was the defect §5
@@ -293,6 +295,19 @@ for the Architect.
   `eph-schema` to 98.92%, and lowered nothing, on tree `fnv1a64:81712cd8a87bd1c7`. With
   it, `cargo xtask gate` exits 0 on Windows, `coverage: ok (5 crate(s), 38 production
   file(s), windows)`.
+- **The run on the floor.** Run 40167524909 on `ef8bbe1`, which carries the floor, is
+  green on every job: all seven gate steps on Linux, macOS and Windows, and every
+  TypeScript job.
+
+**Not proven:**
+
+| Claim | Where | Evidence | What remains |
+|---|---|---|---|
+| Open finishes a killed `git init` | Linux (WSL2), Windows | A: planted lock files, and one real kill caught by the instrumented run | That the kill window itself is closed on a loaded CI runner: CI's passes are single instrumented runs (tier B), and they show the recovery path, not every kill point. macOS has no local evidence at all |
+| The two R1.3 tests no longer race | Linux (WSL2, 20 CPUs) | A: 0 of 12 plain and 0 of 12 instrumented runs | Any other machine's timing; CI shows one pass per attempt (tier B) |
+| The four POSIX-only tests | Linux (WSL2, uid 1000) | A | macOS, as CI's tier B only |
+| The 62 s archive figure | win32, the 2026-10-20 session | D for its antivirus state, which was not recorded then | Not re-measured; the design it motivated (one line per run) no longer depends on it |
+| Retention past the threshold at scale | Windows, Linux | A: 9,001 and 17,002 tasks in one test | The cost of a 10,000-task ledger write on a slow disk |
 
 ## 7. Related docs
 
