@@ -6,7 +6,8 @@
 //! becomes a [`Condition`] in the degradation grammar, and the boot goes on
 //! (invariant 7). The order:
 //! 1. **The committer** (`eph-git`): its lock, `git init` when there is no
-//!    repository, and an `index.lock` a killed git left. A repository made over
+//!    repository (after the lock files a killed `git init` left, which are
+//!    reported), and an `index.lock` a killed git left. A repository made over
 //!    a directory that already held files is reported, since whatever history
 //!    it had is gone.
 //! 2. **`.gitignore`, rendered** before anything is committed, so the reconcile
@@ -156,6 +157,16 @@ impl Agora {
                     STALE_AFTER.as_secs()
                 ),
             )),
+        }
+        if !opened.init_locks.is_empty() {
+            conditions.push(condition(
+                "init-lock",
+                None,
+                format!(
+                    "a git init killed before it finished had left {} in .git; removed, and the repository was made",
+                    opened.init_locks.join(", ")
+                ),
+            ));
         }
         if opened.initialized && held {
             conditions.push(condition(
@@ -638,6 +649,26 @@ mod tests {
         drop(open(&root));
         let meta = fs::symlink_metadata(root.join(GITIGNORE_FILE)).unwrap();
         assert!(meta.is_file(), "git does not follow a linked .gitignore");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_git_init_a_kill_left_unfinished_is_reported_and_the_boot_goes_on() {
+        let dir = scratch("init-lock");
+        let root = dir.join("agora");
+        write(&root.join(".git").join("config.lock"), "[core]\n");
+        let booted = open(&root);
+        assert!(booted.initialized);
+        assert_eq!(causes(&booted), ["agora/init-lock"]);
+        assert!(
+            booted.conditions[0]
+                .detail
+                .contains("had left config.lock in .git; removed"),
+            "{}",
+            booted.conditions[0].detail
+        );
+        assert_eq!(subjects(&root), [SEED_SUBJECT], "the boot went on");
+        drop(booted);
         fs::remove_dir_all(&dir).unwrap();
     }
 

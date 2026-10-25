@@ -13,6 +13,12 @@
 //!   and before any commit can run. Open waits while `.git/index.lock` exists,
 //!   over the retry schedule, so a git still running for a killed harness can
 //!   finish, and then removes one that outlived it ([`Opened::index_lock`]).
+//! - **A `git init` a kill left unfinished is finished.** When `.git` has no
+//!   `HEAD`, open waits over the same schedule while any other lock file sits
+//!   directly in `.git` (a killed init's `config.lock`, say), removes those
+//!   left, and runs `git init`, naming them in [`Opened::init_locks`]. Without
+//!   that, the next `git init` refuses the lock, and so would every later open
+//!   (DECISIONS-LOG 2026-10-25, *R1.4a — Architect decisions, `eph-git`*).
 //! - **One queue.** One thread runs every git call on the Agora, so two can never
 //!   run at once and `index.lock` contention cannot be self-inflicted.
 //! - **Batching.** Commits enqueued while the thread is busy land together, as
@@ -238,6 +244,10 @@ pub struct Opened {
     pub initialized: bool,
     /// What open found at `.git/index.lock`, for the boot to report.
     pub index_lock: IndexLock,
+    /// The lock files a `git init` killed before it finished had left directly
+    /// in `.git`, removed before this open's `git init`, for the boot to report.
+    /// Empty unless [`Opened::initialized`].
+    pub init_locks: Vec<String>,
 }
 
 /// The answer to one [`Committer::commit`]. Dropping it is allowed: a failure
@@ -292,7 +302,9 @@ impl Committer {
         // Agora cannot both run `init`, and a `.git` a crash left half made is
         // finished here.
         let initialized = !dot_git.join("HEAD").exists();
+        let mut init_locks = Vec::new();
         if initialized {
+            init_locks = settle_init_locks(&dot_git)?;
             let init = git.run(&root, &["init", "--template=", "-b", "main"]);
             if !init.ok() {
                 return Err(OpenError::Init(init.stderr.trim().to_string()));
@@ -323,6 +335,7 @@ impl Committer {
             },
             initialized,
             index_lock,
+            init_locks,
         })
     }
 
@@ -432,6 +445,47 @@ pub fn commit_message(subjects: &[String]) -> String {
         subjects.len() - 1,
         listed.join("\n")
     )
+}
+
+/// The lock files directly in `dot_git` that a killed `git init` can leave,
+/// such as `config.lock`: every `*.lock` there except the committer's own,
+/// which open holds, and `index.lock`, which open settles on its own.
+fn init_locks(dot_git: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut locks = Vec::new();
+    for entry in fs::read_dir(dot_git)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.ends_with(".lock") && name != LOCK_FILE && name != "index.lock" {
+            locks.push(entry.path());
+        }
+    }
+    locks.sort();
+    Ok(locks)
+}
+
+/// Waits while [`init_locks`] finds any, over the retry schedule, so a git
+/// still running for a killed harness can finish; then removes those left, and
+/// names the ones it removed. One that cannot be removed is left for `git init`
+/// to refuse in its own words.
+fn settle_init_locks(dot_git: &Path) -> io::Result<Vec<String>> {
+    let mut waits = RETRY_WAITS.iter();
+    loop {
+        let locks = init_locks(dot_git)?;
+        if locks.is_empty() {
+            return Ok(Vec::new());
+        }
+        if let Some(wait) = waits.next() {
+            thread::sleep(Duration::from_millis(*wait));
+            continue;
+        }
+        return Ok(locks
+            .iter()
+            .filter(|lock| fs::remove_file(lock).is_ok())
+            .filter_map(|lock| lock.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect());
+    }
 }
 
 /// Takes the committer's lock, asking again over [`LOCK_WAITS`] while it reads
@@ -957,10 +1011,85 @@ mod tests {
         let said = init.to_string();
         assert!(said.starts_with("git init failed: "), "{said}");
         assert!(said.contains("deadline"), "{said}");
-        // The lock came first, and the next open finishes the repository.
+        // The lock came first, and the next open leaves a repository a commit
+        // lands in. Whether it ran `git init` depends on how far the stopped one
+        // got, which the planted tests below fix (R1.4a, 2026-10-25).
         assert!(root.join(".git").join(LOCK_FILE).exists());
         let opened = Committer::open(&root, Hooks::none()).unwrap();
+        write(&root.join("m.json"), "{}\n");
+        opened.committer.commit("first").wait().unwrap();
+        assert!(tracked(&root, "m.json"));
+        drop(opened);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_git_init_a_kill_left_holding_its_locks_is_finished_and_named() {
+        let dir = scratch("init-locks");
+        let root = dir.join("agora");
+        let dot_git = root.join(".git");
+        write(&dot_git.join("config.lock"), "[core]\n");
+        write(&dot_git.join("HEAD.lock"), "ref: refs/heads/main\n");
+        write(&dot_git.join("index.lock"), "");
+        let opened = Committer::open(&root, Hooks::none()).unwrap();
+        assert!(
+            opened.initialized,
+            "a .git with no HEAD is no repository yet"
+        );
+        assert_eq!(opened.init_locks, ["HEAD.lock", "config.lock"]);
+        assert_eq!(
+            opened.index_lock,
+            IndexLock::Removed,
+            "index.lock is settled and reported on its own"
+        );
+        assert!(!dot_git.join("config.lock").exists());
+        assert!(
+            dot_git.join(LOCK_FILE).exists(),
+            "the committer's own lock stays"
+        );
+        assert!(matches!(
+            Committer::open(&root, Hooks::none()),
+            Err(OpenError::Held(_))
+        ));
+        write(&root.join("m.json"), "{}\n");
+        opened.committer.commit("first").wait().unwrap();
+        assert!(tracked(&root, "m.json"));
+        drop(opened);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_repository_with_a_head_keeps_its_lock_files() {
+        let (dir, root) = agora("init-locks-kept");
+        let stray = root.join(".git").join("config.lock");
+        write(&stray, "[core]\n");
+        let opened = Committer::open(&root, Hooks::none()).unwrap();
+        assert!(!opened.initialized);
+        assert!(opened.init_locks.is_empty());
+        assert!(
+            stray.exists(),
+            "only a .git with no HEAD is a killed init's"
+        );
+        drop(opened);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn open_lets_a_live_init_finish_with_its_lock() {
+        let dir = scratch("init-live");
+        let root = dir.join("agora");
+        let lock = root.join(".git").join("config.lock");
+        write(&lock, "[core]\n");
+        // The stand-in git finishes 30 ms in, far inside open's 375 ms wait.
+        let opened = thread::scope(|scope| {
+            scope.spawn(|| {
+                thread::sleep(Duration::from_millis(30));
+                fs::remove_file(&lock).unwrap();
+            });
+            Committer::open(&root, Hooks::none()).unwrap()
+        });
         assert!(opened.initialized);
+        assert!(opened.init_locks.is_empty(), "the git finished on its own");
         drop(opened);
         fs::remove_dir_all(&dir).unwrap();
     }
