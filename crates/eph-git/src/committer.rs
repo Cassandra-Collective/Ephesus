@@ -865,8 +865,10 @@ mod tests {
     fn a_lock_released_a_moment_ago_is_taken_not_refused() {
         let (dir, root) = agora("released");
         let lock_path = root.join(".git").join(LOCK_FILE);
-        // A fork's copy of the lock's file stands in, held for 60 ms.
-        let held = Exclusive::try_acquire(&lock_path).unwrap().unwrap();
+        // A fork's copy of the lock's file stands in, held for 60 ms. Taking it
+        // waits too: the helper's committer released it a moment ago, and a git
+        // another test forked can still hold a copy (R1.4a, Linux, 2026-10-25).
+        let held = acquire(&lock_path).unwrap().unwrap();
         let opened = thread::scope(|scope| {
             scope.spawn(move || {
                 thread::sleep(Duration::from_millis(60));
@@ -931,14 +933,26 @@ mod tests {
                 .starts_with("the Agora could not be opened: "),
             "{io}"
         );
-        // A deadline already past stops `git init` before it can finish.
-        let root = dir.join("agora");
-        let init = Committer::open_with(
-            &root,
-            Hooks::none(),
-            Git::agora().with_timeout(Duration::ZERO),
-        )
-        .unwrap_err();
+        // A deadline already past stops `git init` before it can finish, unless
+        // git exits before the runner first looks, which a fast `git init` on
+        // Linux sometimes does; a git that finished is rightly not a failure. So
+        // fresh directories are tried until the deadline wins (R1.4a, 2026-10-25).
+        let (root, init) = (0..20)
+            .find_map(|attempt| {
+                let root = dir.join(format!("agora-{attempt}"));
+                match Committer::open_with(
+                    &root,
+                    Hooks::none(),
+                    Git::agora().with_timeout(Duration::ZERO),
+                ) {
+                    Ok(opened) => {
+                        drop(opened);
+                        None
+                    }
+                    Err(error) => Some((root, error)),
+                }
+            })
+            .expect("git init finished inside a zero deadline 20 times running");
         assert!(matches!(init, OpenError::Init(_)), "{init:?}");
         let said = init.to_string();
         assert!(said.starts_with("git init failed: "), "{said}");
