@@ -15,9 +15,10 @@ use std::fmt;
 use std::io;
 
 use eph_schema::document::{Versioned, parse};
-use eph_schema::error::SchemaError;
 use eph_schema::id::TaskId;
+use eph_schema::json::strict_value;
 use eph_schema::tasks::{ArchivedTasks, Task};
+use serde_json::Value;
 
 use crate::store::Damage;
 
@@ -65,32 +66,33 @@ pub fn read(bytes: &[u8], held: &HashSet<TaskId>) -> Archived {
     let mut archived = Archived::default();
     let mut at: HashMap<TaskId, usize> = HashMap::new();
     let mut tasks: Vec<Task> = Vec::new();
-    let mut rest = bytes;
-    while !rest.is_empty() {
-        let Some(end) = rest.iter().position(|byte| *byte == b'\n') else {
+    for piece in bytes.split_inclusive(|byte| *byte == b'\n') {
+        let Some(line) = piece.strip_suffix(b"\n") else {
             archived.torn_tail = true;
             break;
         };
-        let line = String::from_utf8_lossy(&rest[..end]);
-        rest = &rest[end + 1..];
-        match parse::<ArchivedTasks>(&line) {
-            Ok(archive) => {
-                for task in archive.tasks {
-                    match at.get(&task.id) {
-                        Some(&index) => tasks[index] = task,
-                        None => {
-                            at.insert(task.id.clone(), tasks.len());
-                            tasks.push(task);
-                        }
-                    }
+        let line = String::from_utf8_lossy(line);
+        // A line a newer build wrote is told apart by its version before it
+        // is read as this build's, as the book's reader does.
+        let version = strict_value(&line)
+            .ok()
+            .and_then(|value| value.get("schemaVersion").and_then(Value::as_u64));
+        if version.is_some_and(|version| version > u64::from(ArchivedTasks::VERSION)) {
+            archived.unknown += 1;
+            continue;
+        }
+        let Ok(archive) = parse::<ArchivedTasks>(&line) else {
+            archived.damaged += 1;
+            continue;
+        };
+        for task in archive.tasks {
+            match at.get(&task.id) {
+                Some(&index) => tasks[index] = task,
+                None => {
+                    at.insert(task.id.clone(), tasks.len());
+                    tasks.push(task);
                 }
             }
-            Err(SchemaError::UnknownVersion { found, .. })
-                if found > u64::from(ArchivedTasks::VERSION) =>
-            {
-                archived.unknown += 1;
-            }
-            Err(_) => archived.damaged += 1,
         }
     }
     archived.tasks = tasks
@@ -167,6 +169,14 @@ mod tests {
             "{whole}not a line\n\n{newer}{older}{}",
             &torn[..torn.len() / 2]
         );
+        let none = HashSet::new();
+        let counts = |text: &str| {
+            let read = read(text.as_bytes(), &none);
+            (read.unknown, read.damaged)
+        };
+        assert_eq!(counts(&newer), (1, 0), "a newer line is unknown");
+        assert_eq!(counts(&older), (0, 1), "an older line is damage");
+        assert_eq!(counts(&whole), (0, 0), "a line of this version is read");
         let archived = read(text.as_bytes(), &HashSet::new());
         assert_eq!(titles(&archived), ["task 1"]);
         assert_eq!(archived.unknown, 1, "a newer build's line is kept, counted");

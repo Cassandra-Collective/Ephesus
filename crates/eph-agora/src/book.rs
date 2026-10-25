@@ -294,15 +294,16 @@ impl Book {
         let mut base = 0u64;
         for (path, len) in &snapshot.segments {
             let end = base + len;
+            // A segment the cursor has passed is not opened (the TypeScript
+            // build's "segment skipping, with no I/O").
             if end > read.cursor.0 {
-                // A sealed segment is read to its listed end and consumed whole,
-                // its unterminated last line counted as damage, so the next
-                // segment starts exactly where this one ended.
+                // A sealed segment is consumed whole, its unterminated last line
+                // counted as damage, so the next segment starts where this one
+                // ended. No writer adds to a sealed segment; one grown by hand
+                // is read as it is when it is read.
                 let mut file = File::open(path)?;
-                let skip = read.cursor.0.saturating_sub(base);
-                let bytes = read_from(&mut file, skip)?;
-                let listed = usize::try_from(len - skip).unwrap_or(usize::MAX);
-                consume(&bytes[..bytes.len().min(listed)], false, &mut read);
+                let bytes = read_from(&mut file, read.cursor.0.saturating_sub(base))?;
+                consume(&bytes, false, &mut read);
                 read.cursor = Cursor(end);
             }
             base = end;
@@ -459,23 +460,21 @@ fn read_from(file: &mut File, offset: u64) -> io::Result<Vec<u8>> {
 /// consumed; anywhere else it is damage.
 fn consume(bytes: &[u8], live: bool, read: &mut Read) -> u64 {
     let mut consumed = 0;
-    let mut rest = bytes;
-    while !rest.is_empty() {
-        let (line, next, whole) = match rest.iter().position(|byte| *byte == b'\n') {
-            Some(at) => (&rest[..at], &rest[at + 1..], true),
-            None => (rest, &rest[rest.len()..], false),
+    for piece in bytes.split_inclusive(|byte| *byte == b'\n') {
+        let line = match piece.strip_suffix(b"\n") {
+            Some(line) => line,
+            None if live => {
+                read.torn_tail = true;
+                break;
+            }
+            None => piece,
         };
-        if !whole && live {
-            read.torn_tail = true;
-            break;
-        }
         match read_line(&String::from_utf8_lossy(line)) {
             LineRead::Entry(entry) => read.entries.push(entry),
             LineRead::Unknown { .. } => read.unknown += 1,
             LineRead::Unreadable { .. } => read.damaged += 1,
         }
-        consumed += (rest.len() - next.len()) as u64;
-        rest = next;
+        consumed += piece.len() as u64;
     }
     consumed
 }
@@ -747,6 +746,9 @@ pub(crate) mod tests {
         assert_eq!(details(&read), ["line 1"]);
         assert_eq!(read.damaged, 0, "a torn last line is not damage");
         assert!(book.ends_mid_line().unwrap());
+        let tail = book.tail(5).unwrap();
+        assert!(tail.torn_tail, "a tail says so too");
+        assert_eq!(tail.cursor, read.cursor);
         // The writer finishes the line: the cursor stopped before it.
         bytes.extend_from_slice(&line[cut..]);
         write_atomic(&dir.join(LOG_FILE), &bytes).unwrap();

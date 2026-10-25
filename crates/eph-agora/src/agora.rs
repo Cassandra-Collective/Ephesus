@@ -900,6 +900,45 @@ mod tests {
     }
 
     #[test]
+    fn a_boot_that_wrote_nothing_runs_one_batch_the_reconcile() {
+        let dir = scratch("one-batch");
+        let root = dir.join("agora");
+        drop(open(&root));
+        let batches = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&batches);
+        let hooks = Hooks::none().on_landing(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+        });
+        let booted = Agora::open(&root, &prompts(&root), hooks).unwrap();
+        assert!(booted.conditions.is_empty(), "{:?}", booted.conditions);
+        assert_eq!(
+            batches.load(Ordering::SeqCst),
+            1,
+            "no boot commit is queued when neither a file nor the book was written"
+        );
+        drop(booted);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_list_of_names_holds_what_fits_in_its_room_and_counts_the_rest() {
+        let ten = ["aaaaaaaaaa"; 5];
+        // Each name costs its length and a separator: 12, 24, and the third
+        // ends at exactly 34, so it fits; the fourth does not.
+        assert_eq!(
+            named(&ten, 34),
+            "aaaaaaaaaa, aaaaaaaaaa, aaaaaaaaaa, and 2 more"
+        );
+        assert_eq!(named(&ten, 33), "aaaaaaaaaa, aaaaaaaaaa, and 3 more");
+        assert_eq!(
+            named(&ten, 0),
+            "aaaaaaaaaa, and 4 more",
+            "one is always named"
+        );
+        assert_eq!(named(&ten[..1], 1_000), "aaaaaaaaaa");
+    }
+
+    #[test]
     fn a_boot_that_changes_nothing_commits_nothing() {
         let dir = scratch("unchanged");
         let root = dir.join("agora");
