@@ -503,7 +503,10 @@ mod tests {
         for n in 0..LIMIT {
             channel.report(cause(&format!("agora/c{n}")), "x");
         }
-        for _ in 0..3_000 {
+        // Enough repeats to cross two steps of the ladder. A mutant that stops
+        // the count makes every repeat a synced line, so a few hundred keep
+        // that mutant's run inside its timeout (R1.4b round 2).
+        for _ in 0..200 {
             channel.report(cause("agora/c0"), "noisy");
         }
         assert_eq!(
@@ -511,6 +514,7 @@ mod tests {
             cause("agora/c0"),
             "a repeat never moves"
         );
+        assert_eq!(channel.list()[0].count, 201);
         channel.report(cause("agora/newest"), "x");
         let list = channel.list();
         assert_eq!(list.len(), LIMIT);
