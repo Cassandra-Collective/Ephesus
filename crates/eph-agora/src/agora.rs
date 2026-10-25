@@ -37,21 +37,19 @@
 //!
 //! `PROTOCOL.md` is today's text: correcting what it teaches about the message
 //! (`schemaVersion` in, `requires_reply` out) belongs to R5, which builds
-//! Hermes and the message reader (DECISIONS-LOG 2026-10-20, *R1.4a —
-//! implementation*).
+//! Hermes and the message reader (Architect, DECISIONS-LOG 2026-10-25).
 
 use std::fmt::Display;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use eph_fs::append::{AppendError, AppendLog};
+use eph_fs::append::append_line;
 use eph_fs::atomic::write_atomic;
 use eph_fs::home::{Condition, prompt};
 use eph_git::committer::{Committer, Hooks, IndexLock, OpenError, STALE_AFTER};
 use eph_schema::degradation::{Cause, Source};
 use eph_schema::document::Versioned;
-use eph_schema::error::SchemaError;
 use eph_schema::registry::Registry;
 use eph_schema::tasks::{ArchivedTasks, Task, Tasks, render_archived};
 use eph_schema::time::Timestamp;
@@ -96,10 +94,6 @@ pub const SEED_SUBJECT: &str = "seed the Agora";
 /// the one commit holds the leftovers too, so it names them.
 pub const RECONCILE_AND_SEED_SUBJECT: &str =
     "reconcile uncommitted work after restart, and seed the Agora";
-
-/// The archive's rotation directory. The archive never rotates, so nothing is
-/// ever written there; `AppendLog` takes one for every file it writes.
-const ARCHIVE_ROTATED: &str = "tasks-archive";
 
 /// What a failed render leaves.
 const RENDER_LATER: &str = "what is on disk, if anything, stays until a later boot renders it";
@@ -281,26 +275,13 @@ impl Agora {
         Store::at(&self.root, OnDamaged::Refuse)
     }
 
-    /// Appends one archive line holding `tasks`.
+    /// Appends one archive line holding `tasks`. The archive's lines carry no
+    /// `seq` and it never rotates, so only its last byte is read (Architect,
+    /// 2026-10-25).
     fn archive(&self, tasks: Vec<Task>) -> Result<(), StoreError> {
-        let mut log = AppendLog::open(
-            &self.root.join(ArchivedTasks::FILE),
-            &self.root.join(ARCHIVE_ROTATED),
-            u64::MAX,
-            no_seq,
-        )
-        .map_err(StoreError::Io)?;
-        let line = ArchivedTasks::new(tasks, Timestamp::now());
-        match log.append(|_seq| render_archived(&line)) {
-            Ok(_) => Ok(()),
-            Err(AppendError::Render(error)) => Err(StoreError::Invalid(error)),
-            Err(AppendError::Multiline) => Err(StoreError::Invalid(SchemaError::invalid(
-                ArchivedTasks::FILE,
-                "tasks",
-                "rendered as more than one line",
-            ))),
-            Err(AppendError::Io(error)) => Err(StoreError::Io(error)),
-        }
+        let line = render_archived(&ArchivedTasks::new(tasks, Timestamp::now()))
+            .map_err(StoreError::Invalid)?;
+        append_line(&self.root.join(ArchivedTasks::FILE), &line).map_err(StoreError::Io)
     }
 
     /// Writes `text` to the owned file `name` unless it is a regular file that
@@ -372,11 +353,6 @@ fn holds_files(root: &Path) -> bool {
         Err(error) => error.kind() != io::ErrorKind::NotFound,
         Ok(entries) => entries.flatten().any(|entry| entry.file_name() != ".git"),
     }
-}
-
-/// The archive's lines carry no `seq`.
-fn no_seq(_line: &str) -> Option<u64> {
-    None
 }
 
 fn failed(slug: &str, name: &str, error: &dyn Display, consequence: &str) -> Condition {
