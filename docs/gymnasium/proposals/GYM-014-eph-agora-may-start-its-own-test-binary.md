@@ -1,6 +1,7 @@
 # GYM-014 — `eph-agora` may start a process, so a kill mid-append is a real kill
 
-**Status:** approved · **Proposed:** 2026-10-25 · **Decided:** 2026-10-25 (Architect,
+**Status:** landed (R1.4b, 2026-10-25; metrics 1 and 2 measured at its close, metric 3 due
+at R2's close, in the ledger) · **Proposed:** 2026-10-25 · **Decided:** 2026-10-25 (Architect,
 asked before any R1.4b code: a real kill as well as the planted prefixes, with this
 row) ·
 **Gate:** Architect approval. It changes what `cargo xtask invariants`, a step of the

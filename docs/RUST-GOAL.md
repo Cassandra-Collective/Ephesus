@@ -26,10 +26,10 @@ began.*
 | Package | State | Where |
 |---|---|---|
 | R0.1 workspace skeleton | Merged | #102 |
-| R0.2 the gate chain | PR open, mergeable, waiting for review | #104, `feature/r0-2-gate-chain` |
+| R0.2 the gate chain | Merged | #104 (`9aa30bd`, 2026-10-25) |
 | R0.3, R1.0, R1.1, R1.2, R1.3 | Done, pushed, stacked on R0.2; each gets its PR as the one below it merges | `feature/r0-3-standards-learn-rust` … `feature/r1-3-eph-git` @ `8c57d28` |
 | R1.4a `eph-agora`, the stores | **Done and ticked**, pushed. CI run 40167524909 on `ef8bbe1` (the floor) is green on every job; `3fe7490` cites it | `feature/r1-4a-agora-store` @ `3fe7490` |
-| **R1.4b** `eph-agora`, the book of record | **Begun:** four Architect answers committed, no code | `feature/r1-4b-book-of-record` @ this doc's commit, cut from `3fe7490` |
+| **R1.4b** `eph-agora`, the book of record | **Done and ticked**, pushed. CI run 40206703962 on `237aa31` is green on every job; the close commit cites it | `feature/r1-4b-book-of-record`, cut from `3fe7490` |
 
 R1.4a's close is recorded in PROGRESS (its tick and evidence), in
 [`2026-10-25-r1-4a-agora-store.md`](./implementations/2026-10-25-r1-4a-agora-store.md),

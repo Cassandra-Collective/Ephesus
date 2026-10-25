@@ -21,7 +21,7 @@ recorded.
 
 ## Resume here
 
-*As of 2026-10-25: R0.1 is merged as #102 and R0.2 is PR #104. R0.3 (`feature/r0-3-standards-learn-rust`), R1.0 (`feature/r1-0-home-design`), R1.1 (`feature/r1-1-eph-schema`), R1.2 (`feature/r1-2-eph-fs`), R1.3 (`feature/r1-3-eph-git`) and R1.4a (`feature/r1-4a-agora-store`) are stacked on it, pushed, and get their PRs as the one below each merges. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
+*As of 2026-10-25: R0.1 is merged as #102 and R0.2 as #104 (`9aa30bd`). R0.3 (`feature/r0-3-standards-learn-rust`), R1.0 (`feature/r1-0-home-design`), R1.1 (`feature/r1-1-eph-schema`), R1.2 (`feature/r1-2-eph-fs`), R1.3 (`feature/r1-3-eph-git`), R1.4a (`feature/r1-4a-agora-store`) and R1.4b (`feature/r1-4b-book-of-record`) are stacked, pushed, and get their PRs as the one below each merges; R0.3's is next. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
 
 **Ephesus is being rewritten in Rust (ADR-0041, the Architect's direction of
 2026-10-19), and the rewrite comes before everything below.** The Architect
@@ -36,19 +36,21 @@ approved [`RUST-PLAN.md`](./RUST-PLAN.md), crate Set A in
 that never delete work. **R1.4a is done** (2026-10-25): `eph-agora`'s one store for
 records, the roster, the task ledger and its retention, the board, and the Agora's boot
 order. On the way, the Linux run found an R1.3 defect, a killed `git init`'s lock that
-refused every later boot, and the Architect had it fixed. **The next build step is
-R1.4b, `eph-agora`'s book of record**: the log writer, its readers across rotation,
-publish and subscribe, the degradation channel (which then carries `Booted::conditions`
-and the committer's unwaited failures as `agora/commit` rows), the reader half of killed
-mid-append, and the committer's detection of work an agent's own ignore file hides
-(Architect, 2026-10-25). Its open choices are asked first (the Architect split R1.4 and
-moved `DIAGNOSIS.md` to R7, 2026-10-20). Three constraints carry forward. A new crate's
+refused every later boot, and the Architect had it fixed. **R1.4b is done** (2026-10-25):
+`eph-agora`'s book of record, its readers across rotation, publish and subscribe, the
+degradation channel, a kill mid-append proved by plant and by real kill (GYM-014), and
+the committer's naming of what an agent's ignore file or nested repository keeps out of
+history. Its reviews found two more R1.3 defects (a nested repository stopped every
+commit, or hid its work as a gitlink) and an R1.4a one (the `.gitignore` hid a directory
+named like a temporary file), each fixed on the Architect's answer. **The next step is
+R1's close, `/milestone-review`** against RUST-PLAN §5's exit; then R2 starts only once
+the Architect approves its package list. Three constraints carry forward. A new crate's
 first push is red at the coverage step until its floor is seeded from that push's CI
 runs (ENGINEERING-STANDARDS §1.1). A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
 `.gitignore`, rendered at every boot, keeps `write_atomic`'s temporaries out of history
-(SDD-RUST §2). And `tasks-archive.jsonl` has no reader yet: the phase that builds one
-dedupes by id and lets the ledger win (SDD-RUST §4.5). A later
+(SDD-RUST §2). And `.git/` is outside an agent's grant, which R2.3 builds (Architect,
+2026-10-25). A later
 phase still starts only when he approves its package list, through AskUserQuestion.
 Silence is not a yes. The TypeScript tree is frozen as
 the behavioural reference and is deleted at R14 (parity). The rewrite is measured by
@@ -512,8 +514,42 @@ and opens when #104 merges.
     `ef8bbe1`, the commit carrying the floor, is green on every job, including all seven
     gate steps on all three platforms.
     [`2026-10-25-r1-4a-agora-store.md`](./implementations/2026-10-25-r1-4a-agora-store.md)
-  - [ ] **R1.4b `eph-agora`, the book of record** — the log writer and readers, publish and
+  - [x] **R1.4b `eph-agora`, the book of record** — the log writer and readers, publish and
     subscribe, the degradation channel, killed mid-append (`DIAGNOSIS.md` moved to R7).
+    *Evidence (2026-10-25):* `eph-agora`'s `Book` syncs each line before it publishes it
+    to every subscriber in file order. Its readers page by a byte offset that a rotation
+    does not move. They skip a torn live tail without consuming it, and count damage.
+    `Degradations` carries the TypeScript build's channel: one entry per cause, the
+    ladder, a replay as carried. A boot clears the boot causes it no longer finds. Every
+    `agora/commit` cause clears at the next commit that lands.
+
+    Twenty-three Architect answers are recorded in six DECISIONS-LOG entries, among them:
+    - the ignore check folded into the batch's status;
+    - no attributes read from the tree;
+    - a kill proved by plant and by real kill (GYM-014);
+    - a nested repository kept out and named.
+
+    A design-fidelity review and a refutation pass, both read-only, found two R1.3 defects
+    and one R1.4a defect, all fixed:
+    - one agent's `git init` stopped every Agora commit;
+    - a nested repository with a commit hid its work as a gitlink;
+    - the `.gitignore` hid any directory named like a temporary file.
+
+    Every planted prefix of an append, and real kills of a child writer, lose nothing
+    acknowledged.
+
+    At `5bab4ec`, win32 and WSL2 Linux each ran 0 of 10 plain and 0 of 10 instrumented runs
+    failed, and the gate is green on both.
+
+    Mutation rounds with honest controls, no TIMEOUT:
+    - `eph-agora` ROUND OK on round 3 (292 mutants, 219 caught, 0 missed);
+    - `eph-git` ROUND OK on round 2 (218, 162 caught);
+    - `xtask` ROUND OK (517, 484 caught).
+
+    One equivalent mutant is excluded on the Architect's answer. CI run 40206703962 on
+    `237aa31` is green on every job, all seven gate steps on ubuntu, macOS and Windows, its
+    coverage the local figures exactly. No floor moved: no new crate, and no raise.
+    [`2026-10-25-r1-4b-book-of-record.md`](./implementations/2026-10-25-r1-4b-book-of-record.md)
 - [ ] **R2** The terminal plane and the engine seam
 - [ ] **R3** The event plane
 - [ ] **R4** The first window

@@ -453,7 +453,7 @@ requirements and the thirteen invariants do not change. The order, phase by phas
 [`docs/RUST-PLAN.md`](./docs/RUST-PLAN.md). Phase R0 builds the gates first, so every
 later phase is checked from its first line.
 
-<!-- landed: R1.0 R1.1 R1.2 R1.3 R1.4a
+<!-- landed: R1.0 R1.1 R1.2 R1.3 R1.4a R1.4b
      Checked by scripts/check-readme-current.cjs against the register (docs/PROGRESS.md
      and the milestones archived in docs/progress/): every package of the milestone or
      phase holding the most recent tick must be listed here, and listing one is a claim
@@ -496,6 +496,17 @@ Landed so far in R1, the home and the book of record:
   a crash left half made, and reports every failure short of the committer instead of
   stopping. The ledger stays bounded: past 9,000 tasks, the oldest finished ones move to
   an append-only archive, and never one a kept task depends on.
+- **R1.4b, the book of record.** Every event goes to one append-only book. Each line is
+  on disk before anyone hears of it, then reaches every listener in order. A reader
+  keeps its place by a position that survives the book being split into archive files.
+  It skips a line a crash cut short until the line is whole, and counts damage rather
+  than hiding it. Every failure short of the committer lands on one degradation channel,
+  which keeps one entry per cause, writes a bounded trail, and comes back after a
+  restart. A commit that failed clears once a later one lands. A harness killed
+  mid-append loses nothing it was told was written: real kills and every byte a kill
+  can leave prove it. The Agora also names work an agent's own ignore file or nested
+  repository would keep out of history. It keeps one agent's repository from stopping
+  everyone's commits, and reads no attributes file an agent wrote.
 
 **R0, the workspace and its gates, is done** (2026-10-19):
 
