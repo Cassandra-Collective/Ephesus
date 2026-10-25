@@ -41,6 +41,8 @@ new memo row.
 | `egui_kittest` | 0.37 (0.37.0, 2026-10-15) | MIT OR Apache-2.0 | Driving the window headlessly in tests: query by label, click, type, snapshot | R4 |
 | `syn` (`full`, `visit`) | 3 (3.0.9, 2026-10-12) | MIT OR Apache-2.0 | `xtask`'s syntax-tree invariant checks, so a wrapped call cannot slip past a line regex | R0 |
 | `cargo_metadata` | 0.23 (0.23.1, 2025-11-12) | MIT | `xtask`'s dependency-rule and `deps` checks | R0 |
+| `toml` | 1 (1.1.8, 2026-10-09) | MIT OR Apache-2.0 | `xtask` reads each crate's `Cargo.toml` to check its `[lints]` opt-in, which `cargo metadata` does not report. **Added by its own memo row, approved 2026-10-19** (DECISIONS-LOG, R0.2) | R0 |
+| `proc-macro2` (`span-locations`) | 1 (1.0.107, 2026-07-19) | MIT OR Apache-2.0 | `xtask`: turns on source positions in `syn` spans, so an invariant refusal names its file and line (GYM-013 metric 4). Already in the graph under `syn`. **Added by its own memo row, approved 2026-10-19** (DECISIONS-LOG, R0.2) | R0 |
 
 ### Cargo tools (installed binaries, not dependencies)
 

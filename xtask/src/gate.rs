@@ -3,12 +3,13 @@
 //! Contract: [`run`] executes [`STEPS`] in order through a [`Runner`] and stops
 //! at the first step that does not pass. A step whose tool is not installed
 //! fails with the command that installs it, because a refusal must teach the
-//! rule rather than only state it. Nothing here reads or writes files; the
-//! only side effects are the cargo processes the runner starts.
+//! rule rather than only state it. This module writes nothing. Its side effects
+//! are the cargo processes the runner starts and the files xtask's own checks
+//! read.
 
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
+use std::process::{Command, Stdio};
 
 /// A cargo subcommand a step needs that does not ship with the toolchain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,13 +20,31 @@ pub struct Tool {
     pub install: &'static str,
 }
 
-/// One step of the chain: a cargo invocation and what it holds.
+/// One of xtask's own checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Check {
+    /// `cargo xtask invariants` (RUST-PLAN §4 item 5).
+    Invariants,
+    /// `cargo xtask deps` (RUST-PLAN §4 item 6).
+    Deps,
+}
+
+/// What a step runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// `cargo <args>`.
+    Cargo(&'static [&'static str]),
+    /// One of xtask's own checks, run in this process.
+    Check(Check),
+}
+
+/// One step of the chain: what it runs and what it needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Step {
     /// The name printed in the report.
     pub name: &'static str,
-    /// Arguments to `cargo`.
-    pub args: &'static [&'static str],
+    /// What it runs.
+    pub action: Action,
     /// The tool the step needs beyond cargo itself, if any.
     pub requires: Option<Tool>,
 }
@@ -35,12 +54,12 @@ pub struct Step {
 pub const STEPS: &[Step] = &[
     Step {
         name: "fmt",
-        args: &["fmt", "--all", "--check"],
+        action: Action::Cargo(&["fmt", "--all", "--check"]),
         requires: None,
     },
     Step {
         name: "clippy",
-        args: &[
+        action: Action::Cargo(&[
             "clippy",
             "--workspace",
             "--all-targets",
@@ -48,21 +67,31 @@ pub const STEPS: &[Step] = &[
             "--",
             "-D",
             "warnings",
-        ],
+        ]),
         requires: None,
     },
     Step {
         name: "test",
-        args: &["test", "--workspace", "--locked"],
+        action: Action::Cargo(&["test", "--workspace", "--locked"]),
         requires: None,
     },
     Step {
         name: "deny",
-        args: &["deny", "check"],
+        action: Action::Cargo(&["deny", "check"]),
         requires: Some(Tool {
             probe: &["deny", "--version"],
             install: "cargo install cargo-deny --version 0.20.2 --locked",
         }),
+    },
+    Step {
+        name: "invariants",
+        action: Action::Check(Check::Invariants),
+        requires: None,
+    },
+    Step {
+        name: "deps",
+        action: Action::Check(Check::Deps),
+        requires: None,
     },
 ];
 
@@ -87,6 +116,9 @@ pub trait Runner {
     fn cargo(&mut self, dir: &Path, args: &[&str]) -> Option<i32>;
     /// Runs `cargo <args>` in `dir` with all output discarded, for probes.
     fn cargo_silent(&mut self, dir: &Path, args: &[&str]) -> Option<i32>;
+    /// Runs one of xtask's own checks over the workspace at `root`, printing
+    /// its findings. Returns its exit code.
+    fn check(&mut self, root: &Path, check: Check) -> Option<i32>;
 }
 
 /// Runs the chain in order and stops at the first step that does not pass.
@@ -111,7 +143,11 @@ fn run_step(runner: &mut dyn Runner, root: &Path, step: &Step) -> StepResult {
     {
         return StepResult::ToolMissing(tool.install);
     }
-    match runner.cargo(root, step.args) {
+    let code = match step.action {
+        Action::Cargo(args) => runner.cargo(root, args),
+        Action::Check(check) => runner.check(root, check),
+    };
+    match code {
         Some(0) => StepResult::Passed,
         Some(code) => StepResult::Failed(code),
         None => StepResult::DidNotFinish,
@@ -127,7 +163,14 @@ pub fn render(report: &[(&'static str, StepResult)]) -> (String, bool) {
             StepResult::Passed => format!("gate: {name} ok\n"),
             StepResult::Failed(code) => {
                 green = false;
-                format!("gate: {name} FAILED (cargo exited {code}); the chain stops here\n")
+                let own_check = STEPS
+                    .iter()
+                    .any(|step| step.name == *name && matches!(step.action, Action::Check(_)));
+                if own_check {
+                    format!("gate: {name} FAILED (its findings are above); the chain stops here\n")
+                } else {
+                    format!("gate: {name} FAILED (cargo exited {code}); the chain stops here\n")
+                }
             }
             StepResult::DidNotFinish => {
                 green = false;
@@ -182,7 +225,7 @@ pub struct CargoRunner {
 impl CargoRunner {
     #[expect(
         clippy::disallowed_methods,
-        reason = "RUST-PLAN §3.2 allowlists xtask: running cargo is the gate chain's whole job"
+        reason = "process: RUST-PLAN §3.2 allowlists xtask; running cargo is the gate chain's whole job"
     )]
     fn command(&self, dir: &Path, args: &[&str]) -> Command {
         let mut command = Command::new(&self.cargo);
@@ -205,6 +248,10 @@ impl Runner for CargoRunner {
             .ok()?
             .code()
     }
+
+    fn check(&mut self, root: &Path, check: Check) -> Option<i32> {
+        Some(i32::from(crate::run_check(root, check)))
+    }
 }
 
 /// The workspace root: xtask's own manifest directory's parent.
@@ -214,7 +261,7 @@ pub fn workspace_root() -> PathBuf {
 }
 
 /// `cargo xtask gate`.
-pub fn main() -> ExitCode {
+pub fn main() -> u8 {
     let root = workspace_root();
     if let Some(warning) = target_dir_warning(&root, std::env::var_os("CARGO_TARGET_DIR").as_ref())
     {
@@ -225,11 +272,7 @@ pub fn main() -> ExitCode {
     };
     let (text, green) = render(&run(&mut runner, &root));
     print!("{text}");
-    if green {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    }
+    u8::from(!green)
 }
 
 #[cfg(test)]
@@ -269,21 +312,38 @@ mod tests {
             self.calls.push(format!("probe:{}", args.join(" ")));
             self.probe
         }
+
+        fn check(&mut self, _root: &Path, check: Check) -> Option<i32> {
+            let name = match check {
+                Check::Invariants => "invariants",
+                Check::Deps => "deps",
+            };
+            self.calls.push(format!("check:{name}"));
+            self.codes
+                .iter()
+                .find(|(step, _)| *step == name)
+                .map_or(Some(0), |(_, code)| *code)
+        }
     }
 
     #[test]
     fn the_chain_is_fmt_clippy_test_deny_in_that_order() {
         let names: Vec<&str> = STEPS.iter().map(|step| step.name).collect();
-        assert_eq!(names, ["fmt", "clippy", "test", "deny"]);
+        assert_eq!(
+            names,
+            ["fmt", "clippy", "test", "deny", "invariants", "deps"]
+        );
     }
 
     #[test]
     fn clippy_denies_warnings_and_every_build_step_is_locked() {
-        let clippy = STEPS.iter().find(|s| s.name == "clippy").unwrap();
-        assert!(clippy.args.ends_with(&["--", "-D", "warnings"]));
+        let args = |name: &str| match STEPS.iter().find(|s| s.name == name).unwrap().action {
+            Action::Cargo(args) => args,
+            Action::Check(_) => panic!("{name} is not a cargo step"),
+        };
+        assert!(args("clippy").ends_with(&["--", "-D", "warnings"]));
         for name in ["clippy", "test"] {
-            let step = STEPS.iter().find(|s| s.name == name).unwrap();
-            assert!(step.args.contains(&"--locked"), "{name} must be --locked");
+            assert!(args(name).contains(&"--locked"), "{name} must be --locked");
         }
     }
 
@@ -293,7 +353,15 @@ mod tests {
         let report = run(&mut runner, Path::new("."));
         assert_eq!(
             runner.calls,
-            ["fmt", "clippy", "test", "probe:deny --version", "deny"]
+            [
+                "fmt",
+                "clippy",
+                "test",
+                "probe:deny --version",
+                "deny",
+                "check:invariants",
+                "check:deps"
+            ]
         );
         let (text, green) = render(&report);
         assert!(green);
@@ -310,6 +378,20 @@ mod tests {
         assert!(!green);
         assert!(text.contains("gate: clippy FAILED (cargo exited 101)"));
         assert!(text.ends_with("gate: RED\n"));
+    }
+
+    #[test]
+    fn a_failing_check_stops_the_chain_and_points_at_its_findings() {
+        let mut runner = Scripted::new(vec![("invariants", Some(1))], Some(0));
+        let report = run(&mut runner, Path::new("."));
+        assert_eq!(
+            runner.calls.last().map(String::as_str),
+            Some("check:invariants")
+        );
+        assert_eq!(report.last(), Some(&("invariants", StepResult::Failed(1))));
+        let (text, green) = render(&report);
+        assert!(!green);
+        assert!(text.contains("gate: invariants FAILED (its findings are above)"));
     }
 
     #[test]
@@ -345,7 +427,9 @@ mod tests {
 
     #[test]
     fn onedrive_without_a_target_dir_warns_and_names_the_fix() {
-        let root = Path::new(r"C:\Users\someone\OneDrive\Masaüstü\ephesus");
+        // Forward slashes are a separator on every platform; a backslash on
+        // Linux or macOS is part of one component, and the test would fail there.
+        let root = Path::new("/Users/someone/OneDrive/Masaüstü/ephesus");
         let warning = target_dir_warning(root, None).unwrap();
         assert!(warning.contains("CARGO_TARGET_DIR is not set"));
         assert!(warning.contains("outside OneDrive"));
@@ -355,8 +439,8 @@ mod tests {
 
     #[test]
     fn a_set_target_dir_or_a_path_outside_onedrive_is_silent() {
-        let inside = Path::new(r"C:\Users\someone\OneDrive - Work\ephesus");
-        let set = OsString::from(r"C:\cargo-target");
+        let inside = Path::new("/Users/someone/OneDrive - Work/ephesus");
+        let set = OsString::from("/cargo-target");
         assert_eq!(target_dir_warning(inside, Some(&set)), None);
         assert!(target_dir_warning(inside, None).is_some());
         let outside = Path::new("/home/someone/src/ephesus");

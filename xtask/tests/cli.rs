@@ -10,13 +10,13 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::Command;
 
-use xtask::gate::{CargoRunner, Runner, workspace_root};
+use xtask::gate::{CargoRunner, Check, Runner, workspace_root};
 
 const XTASK: &str = env!("CARGO_BIN_EXE_xtask");
 
 #[expect(
     clippy::disallowed_methods,
-    reason = "the test runs the xtask binary it is testing"
+    reason = "process: the test runs the xtask binary it is testing"
 )]
 fn xtask(args: &[&str]) -> Command {
     let mut command = Command::new(XTASK);
@@ -71,9 +71,50 @@ fn the_real_runner_returns_the_exit_code_or_none() {
 }
 
 #[test]
+fn invariants_and_deps_pass_over_this_workspace_and_say_what_they_read() {
+    for check in ["invariants", "deps"] {
+        let out = xtask(&[check]).output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(out.status.code(), Some(0), "{check}: {stdout}");
+        assert!(stdout.starts_with(&format!("{check}: ok (")), "{stdout}");
+        assert!(stdout.contains("source file(s))"), "{stdout}");
+    }
+}
+
+#[test]
+fn mutants_without_a_package_is_a_usage_error() {
+    let out = xtask(&["mutants"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("usage: cargo xtask mutants <package>"));
+}
+
+#[test]
 fn the_workspace_root_is_the_directory_holding_the_workspace_manifest() {
     let root = workspace_root();
     let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
     assert!(manifest.contains("[workspace]"));
     assert!(Path::new(&root).join("xtask").is_dir());
+}
+
+#[test]
+fn the_real_runner_runs_each_check_and_returns_its_verdict() {
+    let fixtures = workspace_root()
+        .join("xtask")
+        .join("tests")
+        .join("fixtures");
+    let mut runner = CargoRunner {
+        cargo: OsString::from(XTASK),
+    };
+    for check in [Check::Invariants, Check::Deps] {
+        assert_eq!(
+            runner.check(&fixtures.join("clean"), check),
+            Some(0),
+            "{check:?}"
+        );
+        assert_eq!(
+            runner.check(&fixtures.join("violating"), check),
+            Some(1),
+            "{check:?}"
+        );
+    }
 }
