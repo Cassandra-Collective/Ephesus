@@ -22,18 +22,13 @@
 //!   that fills a pipe is never stalled;
 //! - opens no console window on Windows.
 //!
-//! **The deadline (20 s) bounds the call, not git.** Past it, the process this
-//! runner started is killed and the call returns. That process is not always
-//! the whole git: on Windows the `git.exe` on PATH is Git for Windows' wrapper,
-//! and killing it leaves the real git running (measured, 2026-10-20). On POSIX
-//! the kill does not reach git's own children, such as a commit's housekeeping.
-//! So a git killed at its deadline may finish its work later, or leave a lock
-//! behind. Killing the whole tree is R2's, with `eph-pty`'s Job Objects and
-//! process groups (DECISIONS-LOG 2026-10-20, *R1.3 — Architect decisions,
-//! after review*). Output is waited for until the deadline and half a second
-//! more. A grandchild such as a shell alias can hold the pipes open after git
-//! has exited, and output that never arrives makes the call a failure, not an
-//! empty success.
+//! **The deadline (20 s) triggers owned shutdown (ADR-0042).** Windows
+//! stops the Job Object, including children of the Git for Windows wrapper.
+//! POSIX signals the dedicated process group, which excludes descendants
+//! that joined another group. Shutdown observation and pipe collection share
+//! a bounded grace period. If pipes remain held after the root exits, the
+//! call fails and gets one bounded cleanup window for the still-owned
+//! descendants.
 //!
 //! **Two profiles** (DECISIONS-LOG 2026-10-20, *R1.3 — Architect decisions*):
 //! - [`Git::agora`] reads no machine configuration:
@@ -69,10 +64,16 @@
 //!   [`Git::without_machine_config`] gives it the Agora's isolation, which is
 //!   how every test runs git (the R1 exit criterion).
 
+#[cfg(unix)]
+use eph_process::unix as native;
+#[cfg(windows)]
+use eph_process::windows as native;
 use std::ffi::OsString;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::Command;
+#[cfg(all(test, windows))]
+use std::process::Stdio;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -196,10 +197,6 @@ const IDENTITY: [(&str, &str); 4] = [
 /// Dates a caller's environment could stamp on the Agora's commits.
 const IDENTITY_DATES: [&str; 2] = ["GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"];
 
-/// `CREATE_NO_WINDOW`: a git started by the windowed build opens no console.
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
 /// What one git call did.
 #[must_use]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -284,8 +281,12 @@ impl Git {
 
     /// Runs git in `cwd`. See the module contract.
     pub fn run(&self, cwd: &Path, args: &[&str]) -> GitResult {
-        let mut child = match self.command(cwd, args).spawn() {
-            Ok(child) => child,
+        let native::Piped {
+            mut child,
+            stdout,
+            stderr,
+        } = match self.launch(cwd, args) {
+            Ok(piped) => piped,
             Err(error) => {
                 return GitResult {
                     stdout: String::new(),
@@ -294,37 +295,64 @@ impl Git {
                 };
             }
         };
-        let stdout = child.stdout.take().map(drain);
-        let stderr = child.stderr.take().map(drain);
-        let deadline = Instant::now() + self.timeout;
-        let exit = finish(&mut child, deadline);
-        let until = drain_until(deadline);
-        let (stdout, stdout_arrived) = collect(stdout.as_ref(), until);
-        let (mut stderr, stderr_arrived) = collect(stderr.as_ref(), until);
-        let mut code = match exit {
-            Exit::Exited(code) => code,
-            Exit::Stopped => {
-                stderr.push_str(&format!(
-                    "\ngit was stopped at its {} ms deadline",
-                    self.timeout.as_millis()
-                ));
-                None
-            }
-            Exit::Lost(error) => {
-                stderr.push_str(&format!("\ngit's status could not be read: {error}"));
-                None
-            }
+        let stdout = drain(stdout);
+        let stderr = drain(stderr);
+        let result = complete(&mut child, &stdout, &stderr, self.timeout);
+        #[cfg(unix)]
+        if child.try_wait().ok().flatten().is_none() {
+            // A root that exits after the shutdown grace still needs to be
+            // collected. Its wait must not extend the caller's deadline.
+            let _cleanup = thread::Builder::new()
+                .name("eph-git-reap".to_owned())
+                .spawn(move || child.reap());
+        }
+        result
+    }
+
+    #[cfg(unix)]
+    fn launch(&self, cwd: &Path, args: &[&str]) -> io::Result<native::Piped> {
+        native::spawn_piped(&mut self.command(cwd, args))
+    }
+
+    #[cfg(windows)]
+    fn launch(&self, cwd: &Path, args: &[&str]) -> io::Result<native::Piped> {
+        let command = self.command(cwd, args);
+        // After env_clear, Command contains the complete supplied environment.
+        // In that mode env_remove deletes an entry rather than leaving a
+        // tombstone, so starting from the original values would restore it.
+        let mut environment: Vec<_> = if self.environment.is_some() {
+            Vec::new()
+        } else {
+            std::env::vars_os()
+                .filter(|(name, _)| !self.drops(name))
+                .collect()
         };
-        if !(stdout_arrived && stderr_arrived) {
-            stderr.push_str("\ngit's output did not arrive in time");
-            code = None;
+        for (key, value) in command.get_envs() {
+            environment.retain(|(existing, _)| !existing.eq_ignore_ascii_case(key));
+            if let Some(value) = value {
+                environment.push((key.to_owned(), value.to_owned()));
+            }
         }
-        teach_old_git(&mut stderr);
-        GitResult {
-            stdout,
-            stderr,
-            code,
-        }
+
+        // Resolve the same program the old Command launch would find. Only an
+        // explicitly supplied child PATH precedes the system/parent search.
+        let child_path = self.environment.as_ref().and_then(|_| {
+            environment
+                .iter()
+                .rev()
+                .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
+                .map(|(_, value)| value.as_os_str())
+        });
+        let executable =
+            native::resolve_process_executable(std::ffi::OsStr::new("git.exe"), child_path)?;
+        let cwd = std::path::absolute(cwd)?;
+        let args = command.get_args().map(OsString::from).collect::<Vec<_>>();
+        native::spawn_piped(native::Launch {
+            executable: &executable,
+            args: &args,
+            cwd: &cwd,
+            environment: &environment,
+        })
     }
 
     #[expect(
@@ -354,17 +382,7 @@ impl Git {
         if self.identity {
             command.envs(IDENTITY);
         }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
-        command
-            .args(args)
-            .current_dir(cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        command.args(args).current_dir(cwd);
         command
     }
 
@@ -388,38 +406,173 @@ fn teach_old_git(stderr: &mut String) {
     }
 }
 
+fn complete(
+    child: &mut dyn OwnedChild,
+    stdout: &Receiver<io::Result<Vec<u8>>>,
+    stderr: &Receiver<io::Result<Vec<u8>>>,
+    timeout: Duration,
+) -> GitResult {
+    let deadline = Instant::now() + timeout;
+    let until = drain_until(deadline);
+    let exit = finish(child, deadline, until);
+    let (stdout, stdout_arrived) = collect(stdout, until);
+    let (mut stderr, stderr_arrived) = collect(stderr, until);
+    let mut code = match &exit {
+        Exit::Exited if stdout_arrived && stderr_arrived => match child.root_status() {
+            Ok(Some(code)) => code,
+            Ok(None) => {
+                stderr.push_str("\ngit's confirmed exit status was unavailable");
+                None
+            }
+            Err(error) => {
+                stderr.push_str(&format!("\ngit's status could not be read: {error}"));
+                None
+            }
+        },
+        Exit::Exited => None,
+        Exit::Stopped => {
+            stderr.push_str(&format!(
+                "\ngit was stopped at its {} ms deadline",
+                timeout.as_millis()
+            ));
+            #[cfg(unix)]
+            stderr
+                .push_str(" (dedicated process group; any descendants in other groups may remain)");
+            None
+        }
+        Exit::StopUnconfirmed(error) => {
+            stderr.push_str(&format!(
+                "\ngit's deadline shutdown could not be confirmed: {error}"
+            ));
+            None
+        }
+        Exit::Lost(error) => {
+            stderr.push_str(&format!("\ngit's status could not be read: {error}"));
+            None
+        }
+    };
+    if !(stdout_arrived && stderr_arrived) {
+        if matches!(exit, Exit::Exited) {
+            // On POSIX the root remains unreaped, so even with a dead
+            // root the group id cannot have been recycled during drain.
+            if let Err(error) = stop_owned(child, Instant::now() + DRAIN_GRACE) {
+                stderr.push_str(&format!(
+                    "\ngit's remaining owned processes could not be stopped: {error}"
+                ));
+            }
+        }
+        stderr.push_str("\ngit's output did not arrive in time");
+        code = None;
+    }
+    teach_old_git(&mut stderr);
+    GitResult {
+        stdout,
+        stderr,
+        code,
+    }
+}
+
 /// How a git ended.
 enum Exit {
-    /// It exited, with this code (`None` for a signal).
-    Exited(Option<i32>),
+    /// The root exited. Its status can be collected once pipes are drained.
+    Exited,
     /// It overran its deadline and was killed.
     Stopped,
+    /// Owned shutdown failed or could not be observed in time.
+    StopUnconfirmed(io::Error),
     /// Its status could not be read. It is not killed: its pid may already
     /// belong to another process.
     Lost(std::io::Error),
 }
 
 /// Waits for `child` until `deadline`, then kills it.
-fn finish(child: &mut Child, deadline: Instant) -> Exit {
+fn finish(child: &mut dyn OwnedChild, deadline: Instant, until: Instant) -> Exit {
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Exit::Exited(status.code()),
-            Ok(None) => {}
+        match child.root_exited() {
+            Ok(true) => return Exit::Exited,
+            Ok(false) => {}
             Err(error) => return Exit::Lost(error),
         }
         match deadline.checked_duration_since(Instant::now()) {
             Some(left) => thread::sleep(left.min(POLL)),
             None => {
-                let _killed = child.kill();
-                let _reaped = child.wait();
-                return Exit::Stopped;
+                return match stop_owned(child, until) {
+                    Ok(()) => Exit::Stopped,
+                    Err(error) => Exit::StopUnconfirmed(error),
+                };
             }
         }
     }
 }
 
+// These observations and the shutdown request form the OS seam. The
+// runner uses the same deadline and reporting logic even on a failed syscall.
+trait OwnedChild {
+    fn root_exited(&mut self) -> io::Result<bool>;
+    fn root_status(&mut self) -> io::Result<Option<Option<i32>>>;
+    fn request_shutdown(&mut self) -> io::Result<()>;
+    fn shutdown_confirmed(&mut self) -> io::Result<bool>;
+}
+
+impl OwnedChild for native::Child {
+    fn root_exited(&mut self) -> io::Result<bool> {
+        #[cfg(windows)]
+        return self.try_wait().map(|status| status.is_some());
+        #[cfg(unix)]
+        self.exit_pending()
+    }
+
+    fn root_status(&mut self) -> io::Result<Option<Option<i32>>> {
+        #[cfg(windows)]
+        return self
+            .try_wait()
+            .map(|status| status.map(|code| Some(code as i32)));
+        #[cfg(unix)]
+        self.try_wait().map(|status| {
+            status.map(|status| match status {
+                native::ExitStatus::Code(code) => Some(code),
+                native::ExitStatus::Signal(_) => None,
+            })
+        })
+    }
+
+    fn request_shutdown(&mut self) -> io::Result<()> {
+        #[cfg(windows)]
+        return self.terminate();
+        #[cfg(unix)]
+        self.terminate_group()
+    }
+
+    fn shutdown_confirmed(&mut self) -> io::Result<bool> {
+        // Job counts can reach zero before the process handle signals. Wait
+        // for both before saying that the Windows job stopped.
+        let root_exited = self.root_status()?.is_some();
+        #[cfg(windows)]
+        return Ok(root_exited && self.active_processes()? == 0);
+        #[cfg(unix)]
+        Ok(root_exited)
+    }
+}
+
+fn stop_owned(child: &mut dyn OwnedChild, until: Instant) -> io::Result<()> {
+    child.request_shutdown()?;
+    loop {
+        if child.shutdown_confirmed()? {
+            return Ok(());
+        }
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "process exit was not observed in the shutdown grace period",
+            ));
+        }
+        thread::sleep(left.min(POLL));
+    }
+}
+
 /// Reads a pipe to its end on its own thread.
-fn drain<R: Read + Send + 'static>(mut pipe: R) -> Receiver<Vec<u8>> {
+fn drain<R: Read + Send + 'static>(mut pipe: R) -> Receiver<io::Result<Vec<u8>>> {
     let (sender, receiver) = mpsc::channel();
     // A thread that cannot start drops the pipe and the sender, which reads as
     // no output: git then sees a closed pipe, not a full one.
@@ -427,8 +580,8 @@ fn drain<R: Read + Send + 'static>(mut pipe: R) -> Receiver<Vec<u8>> {
         .name("eph-git-output".to_string())
         .spawn(move || {
             let mut bytes = Vec::new();
-            let _read = pipe.read_to_end(&mut bytes);
-            let _sent = sender.send(bytes);
+            let outcome = pipe.read_to_end(&mut bytes).map(|_| bytes);
+            let _sent = sender.send(outcome);
         });
     receiver
 }
@@ -440,12 +593,11 @@ fn drain_until(deadline: Instant) -> Instant {
 }
 
 /// A drained pipe's text, waited for until `until`, and whether it arrived.
-fn collect(output: Option<&Receiver<Vec<u8>>>, until: Instant) -> (String, bool) {
-    let bytes = output.and_then(|output| {
-        output
-            .recv_timeout(until.saturating_duration_since(Instant::now()))
-            .ok()
-    });
+fn collect(output: &Receiver<io::Result<Vec<u8>>>, until: Instant) -> (String, bool) {
+    let bytes = output
+        .recv_timeout(until.saturating_duration_since(Instant::now()))
+        .ok()
+        .and_then(Result::ok);
     let arrived = bytes.is_some();
     (
         String::from_utf8_lossy(&bytes.unwrap_or_default()).into_owned(),
@@ -580,6 +732,109 @@ pub(crate) mod tests {
         assert!(result(Some(0)).ok());
         assert!(!result(Some(1)).ok());
         assert!(!result(None).ok());
+    }
+
+    #[test]
+    fn process_observation_failures_preserve_output_and_cannot_report_success() {
+        struct Child {
+            observed: io::Result<bool>,
+            status: io::Result<Option<Option<i32>>>,
+            shutdown_fails: bool,
+            stops: bool,
+        }
+
+        impl OwnedChild for Child {
+            fn root_exited(&mut self) -> io::Result<bool> {
+                std::mem::replace(&mut self.observed, Ok(false))
+            }
+
+            fn root_status(&mut self) -> io::Result<Option<Option<i32>>> {
+                std::mem::replace(&mut self.status, Ok(None))
+            }
+
+            fn request_shutdown(&mut self) -> io::Result<()> {
+                if self.shutdown_fails {
+                    Err(io::Error::other("shutdown error"))
+                } else {
+                    Ok(())
+                }
+            }
+
+            fn shutdown_confirmed(&mut self) -> io::Result<bool> {
+                Ok(self.stops)
+            }
+        }
+
+        fn pipe(bytes: Option<&[u8]>) -> Receiver<io::Result<Vec<u8>>> {
+            let (send, receive) = mpsc::channel();
+            if let Some(bytes) = bytes {
+                send.send(Ok(bytes.to_vec())).unwrap();
+            }
+            receive
+        }
+
+        for (observed, status, shutdown_fails, output, diagnostic) in [
+            (
+                Ok(true),
+                Ok(None),
+                false,
+                Some(b"output".as_slice()),
+                "confirmed exit status was unavailable",
+            ),
+            (
+                Ok(true),
+                Err(io::Error::other("status error")),
+                false,
+                Some(b"output"),
+                "status could not be read: status error",
+            ),
+            (
+                Err(io::Error::other("wait error")),
+                Ok(None),
+                false,
+                Some(b"output"),
+                "status could not be read: wait error",
+            ),
+            (
+                Ok(false),
+                Ok(None),
+                true,
+                Some(b"output"),
+                "deadline shutdown could not be confirmed: shutdown error",
+            ),
+            (
+                Ok(true),
+                Ok(None),
+                true,
+                None,
+                "remaining owned processes could not be stopped: shutdown error",
+            ),
+        ] {
+            let mut child = Child {
+                observed,
+                status,
+                shutdown_fails,
+                stops: false,
+            };
+            let result = complete(
+                &mut child,
+                &pipe(output),
+                &pipe(Some(b"child diagnostic")),
+                Duration::ZERO,
+            );
+            assert_eq!(result.code, None);
+            assert!(result.stderr.starts_with("child diagnostic\n"));
+            assert!(result.stderr.contains(diagnostic), "{result:?}");
+            assert_eq!(result.stdout.as_bytes(), output.unwrap_or_default());
+        }
+        let mut still_running = Child {
+            observed: Ok(false),
+            status: Ok(None),
+            shutdown_fails: false,
+            stops: false,
+        };
+        let error = stop_owned(&mut still_running, Instant::now()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     }
 
     #[test]
@@ -864,6 +1119,37 @@ pub(crate) mod tests {
         assert!(
             started.elapsed() < Duration::from_secs(6),
             "deadline plus grace, not the sleep"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_descendant_holding_output_past_the_deadline_cannot_continue_after_the_root_exits() {
+        let dir = scratch("output-deadline-owned-descendant");
+        let start = Instant::now();
+        let result = git().with_timeout(Duration::from_secs(2)).run(
+            &dir,
+            &[
+                "-c",
+                "alias.linger=!(echo ready > started; sleep 4; echo survived > late) & echo root-exiting",
+                "linger",
+            ],
+        );
+        assert!(dir.join("started").is_file(), "the descendant actually ran");
+        assert!(
+            result
+                .stderr
+                .ends_with("\ngit's output did not arrive in time"),
+            "{result:?}"
+        );
+        assert!(
+            !result.stderr.contains("could not be stopped"),
+            "{result:?}"
+        );
+        thread::sleep(Duration::from_secs(5).saturating_sub(start.elapsed()));
+        assert!(
+            !dir.join("late").exists(),
+            "a descendant survived the deadline"
         );
         fs::remove_dir_all(&dir).unwrap();
     }

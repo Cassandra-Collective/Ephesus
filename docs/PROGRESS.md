@@ -49,9 +49,18 @@ named like a temporary file), each fixed on the Architect's answer. **R1 is DONE
 opens with a probe of `portable-pty`'s kill over a real process tree, which decides
 RUST-PLAN §9's tree-kill question (and R1.3's deadline-kill residual). Its open choices
 are asked before its code. Three
-constraints carry forward. A new crate's
-first push is red at the coverage step until its floor is seeded from that push's CI
-runs (ENGINEERING-STANDARDS §1.1). A `.tmp` file left by a crash before its rename is a
+constraints carry forward. **R2.1's probe and decision (2026-11-16):** the
+[probe](./implementations/2026-11-16-r2-1-pty-tree-probe.md) found surviving
+descendants on Windows and Linux. The Architect approved the R2.1 build plan,
+[ADR-0042](./adr/ADR-0042-owned-process-group-shutdown.md) and
+[ADR-0043](./adr/ADR-0043-preserve-the-terminal-spawn-plan.md).
+The local branch connects PATH lookup, streaming redaction and native shutdown
+to the PTY session and applies the same process ownership to Git deadlines.
+The local checks and independent evidence review are complete. The Windows
+coverage step reports the two unseeded crate floors.
+The first branch push starts the CI runs that supply the two new coverage
+floors (ENGINEERING-STANDARDS §1.1) and test the macOS runtime.
+A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
 `.gitignore`, rendered at every boot, keeps `write_atomic`'s temporaries out of history
 (SDD-RUST §2). And `.git/` is outside an agent's grant, which R2.3 builds (Architect,
@@ -102,7 +111,7 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1.0 (the design) approved, and R1.1 (`eph-schema`, the coverage floors), R1.2 (`eph-fs`) and R1.3 (`eph-git`) done, 2026-10-20; R1.4a (`eph-agora`'s stores) done, 2026-10-25; R1.4b next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19. **R0 and R1 are done.** R2.1 is in local verification. The rewrite runs before M9. | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 
@@ -589,9 +598,9 @@ and opens when #104 merges.
   R2 starts only once he approves its package list.
 - [ ] **R2** The terminal plane and the engine seam (package list approved 2026-10-25)
   - [ ] **R2.1 `eph-pty`** — spawn, write, resize, interrupt, kill; PATH resolution; the
-    redaction filter. Opens with a probe of `portable-pty`'s kill over a real process tree
-    on win32 and Linux, which decides RUST-PLAN §9's tree-kill question (Architect,
-    2026-10-25).
+    redaction filter. The [probe](./implementations/2026-11-16-r2-1-pty-tree-probe.md)
+    informed the owned shutdown contract. The PTY and Git deadline paths are
+    implemented locally. Coverage ratcheting and the macOS runtime check await CI.
   - [ ] **R2.2 `eph-engines`** — the adapter trait, the `claude` adapter, `codex` and
     `gemini` as conformance subjects.
   - [ ] **R2.3 The agent manager** — spawn ordering, the install offer, the exit unwind,

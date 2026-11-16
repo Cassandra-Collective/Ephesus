@@ -26,12 +26,19 @@ new memo row.
 | `jiff` | 0.2 (0.2.38, 2026-10-06) | Unlicense OR MIT | UTC timestamps (RFC 3339), durations, the trigger clock | R1 | `std::time` has no calendar or formatting. Rejected: `time` 0.3, which is comparable, with a smaller API for durations and spans. |
 | `uuid` (`v4`) | 1 (1.28.0, 2026-10-10) | Apache-2.0 OR MIT | Message, memo, gate and spawn-token ids | R1 | `std` has no RNG. |
 | `tokio` | 1 (1.53.3, 2026-10-13) | MIT | The hook and control sockets (Unix sockets, Windows named pipes), child processes, timers | R3 | `std` has no named pipes and no async process I/O. One runtime for every socket keeps the one-harness-per-home probe and both endpoints alike. |
-| `portable-pty` | 0.9 (0.9.0, 2025-02-11) | MIT | ConPTY on Windows, openpty on POSIX (ADR-0014's spawn) | R2 | WezTerm's PTY layer. Writing ConPTY bindings ourselves is an FFI crate and the riskiest code in the system. |
+| `portable-pty` | 0.9 (0.9.0, 2025-02-11) | MIT | R2.1 shutdown probe | R2 | Originally approved for the terminal. [ADR-0043](./adr/ADR-0043-preserve-the-terminal-spawn-plan.md) records the native implementation required to preserve the exact spawn plan. |
 | `notify` | 8 (8.2.0, 2025-08-03) | CC0-1.0 | Watching agent outboxes (Hermes) | R5 | Per-OS file-event APIs are FFI. Polling is the fallback, and its use is reported as a degradation. |
 | `rusqlite` (`bundled`) | 0.40 (0.40.2, 2026-08-08) | MIT | The cost ledger, app-local state, the FTS5 keyword rung | R6, R8 | SQLite is the store ADR-0001 already chose (`better-sqlite3`). `bundled` builds SQLite from source with FTS5, with no system library to match. |
 | `egui` | 0.37 (0.37.0, 2026-10-15) | MIT OR Apache-2.0 | The window's widgets, layout and painter (ADR-0041 §2) | R4 | The Architect's choice of framework. |
 | `eframe` | 0.37 (0.37.0, 2026-10-15) | MIT OR Apache-2.0 | egui's native shell: the window, event loop and renderer backend | R4 | egui's own shell. The backend (glow, which is the default, or wgpu) is decided at R4 by measured memory. |
 | `alacritty_terminal` | 0.26 (0.26.0, 2026-04-06) | Apache-2.0 | The terminal emulator core under the terminal widget | R4 | A VT emulator is a large state machine we would otherwise write. Its `tty` module is not used: PTYs belong to `eph-pty`. |
+
+### Approved by separate memo
+
+| Crate | Version | License | Role | Phase | Why not `std` or our own code |
+| --- | --- | --- | --- | --- | --- |
+| `windows-sys` | 0.61 | MIT OR Apache-2.0 | Windows Job Objects and native spawn attributes in `eph-process` | R2.1 | Stable `std` does not provide child process creation attributes. Approved for the lifecycle boundary in [ADR-0042](./adr/ADR-0042-owned-process-group-shutdown.md). |
+| `libc` | 0.2 | MIT OR Apache-2.0 | Owned process groups and POSIX PTY operations in `eph-process` | R2.1 | Group signaling and observing exit before reaping need native calls. Native `openpty` preserves the exact spawn plan. Approved in [ADR-0042](./adr/ADR-0042-owned-process-group-shutdown.md) and [ADR-0043](./adr/ADR-0043-preserve-the-terminal-spawn-plan.md). |
 
 ### Tests and tooling (never shipped)
 
@@ -69,7 +76,7 @@ Each gets its own memo at its phase, as PHASE-9-PLAN §10 did for Phase 9:
 | Candidate | Phase | For |
 |---|---|---|
 | `keyring` 4.x | R6 | The secret broker's OS keychain seam (ADR-0010) |
-| `windows-sys` 0.61 | R2/R3 if needed | A named FFI boundary crate (job objects, a pipe ACL), the one place `unsafe` would be allowed |
+| `windows-sys` 0.61 (pipe ACL features) | R3 if needed | Restricting a Windows named pipe, outside the R2.1 dependency approval |
 | an HTTP client (`ureq` or `reqwest`) | R10, R12 | GitHub App tokens, voice providers |
 | `tokio-tungstenite` | R12 | OpenAI Realtime's WebSocket |
 | `cpal` | R12 | Audio capture and playback |

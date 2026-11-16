@@ -220,8 +220,24 @@ fn parse_source(source: &str) -> Result<syn::File, String> {
 /// function, a method, or a trait's default method, outside test-only items.
 /// A production file the report never names and that holds one is untested
 /// (review finding F11).
-pub fn has_body(source: &str) -> Result<bool, String> {
-    Ok(items_have_body(&parse_source(source)?.items))
+pub fn has_body(source: &str, os: &str) -> Result<bool, String> {
+    let source = parse_source(source)?;
+    let mut conditions = source
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"));
+    if let Some(condition) = conditions.next()
+        && condition.path().is_ident("cfg")
+        && conditions.next().is_none()
+        && let Ok(syn::Meta::Path(platform)) = condition.parse_args()
+    {
+        match os {
+            "windows" if platform.is_ident("unix") => return Ok(false),
+            "linux" | "macos" if platform.is_ident("windows") => return Ok(false),
+            _ => {}
+        }
+    }
+    Ok(items_have_body(&source.items))
 }
 
 fn items_have_body(items: &[syn::Item]) -> bool {
@@ -420,14 +436,15 @@ pub struct Tally {
 /// Tallies `report` against the workspace's sources, in both directions (the
 /// TypeScript record's rule). Pure. A report naming a file that is no source of
 /// the workspace is a report of another tree, and fails, as does a production
-/// file whose syntax tree cannot be read. A production file the report never
-/// names but that holds a function body ([`has_body`]) is untested: declared by
-/// no `mod`, compiled only on another platform, or only generics nothing
-/// instantiates (review finding F11).
+/// file whose syntax tree cannot be read. An unreported production file
+/// with a function body is untested on the measured OS. A file with a single
+/// crate-level `cfg(unix)` or `cfg(windows)` is required on the matching
+/// platforms. Unknown or combined predicates keep the normal check.
 pub fn tally(
     root: &Path,
     workspace: &Workspace,
     report: &[ReportFile],
+    os: &str,
 ) -> Result<Tally, Vec<String>> {
     let mut out = Tally {
         crates: workspace
@@ -489,7 +506,7 @@ pub fn tally(
             if !is_production(dir, &source.path) || reported.contains(&path_key(&source.path)) {
                 continue;
             }
-            match has_body(&source.text) {
+            match has_body(&source.text, os) {
                 Ok(true) => out.untested.push(relative(root, &source.path)),
                 Ok(false) => {}
                 Err(error) => errors.push(format!("{}: {error}", relative(root, &source.path))),
@@ -1000,7 +1017,8 @@ pub fn check(floors: &Floors, measured: &Measurement) -> (Vec<String>, Vec<Strin
     }
     for file in &measured.untested {
         failures.push(format!(
-            "{file}: no test runs any of its production lines (or the report never names it: a file no `mod` declares, one compiled only on another platform, or generics nothing instantiates). Test it, or delete it if nothing needs it"
+            "{file}: no test runs any of its production lines on {} (or the report never names it, as with an undeclared module or generics nothing instantiates). Test it, or delete it if nothing needs it",
+            measured.os
         ));
     }
     for (name, lines) in &measured.crates {
@@ -1417,7 +1435,7 @@ fn measure(
     }
     let text = harness.read(report).map_err(|error| vec![error])?;
     let files = parse_lcov(&text).map_err(|error| vec![error])?;
-    let tally = tally(root, &workspace, &files)?;
+    let tally = tally(root, &workspace, &files, os)?;
     let run = match (
         harness.env("GITHUB_RUN_ID"),
         harness.env("GITHUB_RUN_ATTEMPT"),
@@ -1992,7 +2010,7 @@ pub fn ships_too() {}
             ("a/tests/it.rs", &[(1, 1)]),
         ]))
         .unwrap();
-        let counted = tally(&root(), &workspace(), &report).unwrap();
+        let counted = tally(&root(), &workspace(), &report, "linux").unwrap();
         assert_eq!(
             counted.crates["a"],
             Lines {
@@ -2019,7 +2037,9 @@ pub fn ships_too() {}
         ]))
         .unwrap();
         assert_eq!(
-            tally(&root(), &workspace(), &empty).unwrap().untested,
+            tally(&root(), &workspace(), &empty, "linux")
+                .unwrap()
+                .untested,
             Vec::<String>::new(),
             "a reported file with no executable line is not untested"
         );
@@ -2031,12 +2051,14 @@ pub fn ships_too() {}
         ]))
         .unwrap();
         assert_eq!(
-            tally(&root(), &only_mods, &without_b).unwrap().untested,
+            tally(&root(), &only_mods, &without_b, "linux")
+                .unwrap()
+                .untested,
             Vec::<String>::new(),
             "an unreported file of declarations only holds nothing to run"
         );
         only_mods.members[1].sources[0].text = "fn x( {".to_string();
-        let errors = tally(&root(), &only_mods, &without_b).unwrap_err();
+        let errors = tally(&root(), &only_mods, &without_b, "linux").unwrap_err();
         assert!(
             errors[0].starts_with("crates/b/src/lib.rs: line 1"),
             "{errors:?}"
@@ -2061,9 +2083,40 @@ pub fn ships_too() {}
             ("pub trait T {\n#[cfg(test)]\nfn h(&self) {}\n}", false),
             ("pub fn generic<T: Clone>(t: &T) -> T { t.clone() }", true),
         ] {
-            assert_eq!(has_body(source).unwrap(), body, "{source}");
+            assert_eq!(has_body(source, "linux").unwrap(), body, "{source}");
         }
-        assert!(has_body("fn (").unwrap_err().starts_with("line 1"));
+        assert!(has_body("fn (", "linux").unwrap_err().starts_with("line 1"));
+    }
+
+    #[test]
+    fn every_platform_must_measure_its_own_backend() {
+        let mut fixture = workspace();
+        fixture.members[0].sources[0].text = "#![cfg(unix)]\nfn f() {}".into();
+        fixture.members[1].sources[0].text = "#![cfg(windows)]\nfn f() {}".into();
+        for (os, required) in [
+            ("windows", "crates/b/src/lib.rs"),
+            ("linux", "crates/a/src/lib.rs"),
+            ("macos", "crates/a/src/lib.rs"),
+        ] {
+            let absent = tally(&root(), &fixture, &[], os).unwrap();
+            assert!(absent.untested.contains(&required.to_owned()));
+            let other = if os == "windows" {
+                "crates/a/src/lib.rs"
+            } else {
+                "crates/b/src/lib.rs"
+            };
+            assert!(!absent.untested.contains(&other.to_owned()));
+        }
+        for condition in [
+            "#![cfg(unix)]\n#![cfg(windows)]",
+            "#![cfg(unix)]\n#![cfg_attr(unix, cfg(target_os = \"linux\"))]",
+            "#![cfg_attr(unix)]",
+            "#![cfg(all(unix, windows))]",
+            "#![cfg(target_os = \"other\")]",
+        ] {
+            let source = format!("{condition}\nfn f() {{}}");
+            assert!(has_body(&source, "windows").unwrap(), "{source}");
+        }
     }
 
     #[test]
@@ -2099,7 +2152,7 @@ pub fn ships_too() {}
     #[test]
     fn a_report_of_another_tree_is_refused() {
         let report = parse_lcov(&lcov(&[("gone/src/lib.rs", &[(1, 1)])])).unwrap();
-        let errors = tally(&root(), &workspace(), &report).unwrap_err();
+        let errors = tally(&root(), &workspace(), &report, "linux").unwrap_err();
         assert!(
             errors[0].contains("is no source of this workspace"),
             "{errors:?}"
@@ -2107,7 +2160,7 @@ pub fn ships_too() {}
         let mut broken = workspace();
         broken.members[1].sources[0].text = "fn x( {".to_string();
         let report = parse_lcov(&lcov(&[("b/src/lib.rs", &[(1, 1)])])).unwrap();
-        let errors = tally(&root(), &broken, &report).unwrap_err();
+        let errors = tally(&root(), &broken, &report, "linux").unwrap_err();
         assert!(
             errors[0].starts_with("crates/b/src/lib.rs: line 1"),
             "{errors:?}"
@@ -2116,7 +2169,7 @@ pub fn ships_too() {}
         let mut broken_test = workspace();
         broken_test.members[0].sources[2].text = "fn x( {".to_string();
         let report = parse_lcov(&lcov(&[("a/tests/it.rs", &[(1, 1)])])).unwrap();
-        assert!(tally(&root(), &broken_test, &report).is_ok());
+        assert!(tally(&root(), &broken_test, &report, "linux").is_ok());
     }
 
     #[test]

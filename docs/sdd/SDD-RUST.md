@@ -166,6 +166,33 @@ proposed*, in §4.13.
 
 Everything else in the tree keeps today's name and place.
 
+## 3. The terminal plane
+
+R2.1 implements FR-1.1 in `eph-pty` over the native `eph-process` boundary.
+The launch and shutdown guarantees are in
+[ADR-0042](../adr/ADR-0042-owned-process-group-shutdown.md) and
+[ADR-0043](../adr/ADR-0043-preserve-the-terminal-spawn-plan.md).
+
+- `Session::spawn` takes a program, literal arguments, working directory,
+  exact environment and geometry. A bare program uses the plan's PATH. A
+  miss fails launch. A Windows npm shim can resolve to the executable it
+  names. The checked batch fallback runs its system interpreter in the
+  same job and rejects arguments that need interpreter expansion or operators.
+- `write` and `interrupt` send bytes through the terminal's line discipline.
+  The engine adapter supplies the interrupt sequence. `resize` applies
+  geometry in cells. `kill` returns the scope to which termination was
+  requested. `try_wait` observes the root exit separately from output.
+- The output worker applies ADR-0010 before bytes enter the bounded queue.
+  The consumer must drain this queue as the session runs and continue to
+  EOF after root exit. The worker flushes any held prefix at EOF. Initial
+  credential values remain covered through exit alongside current broker
+  values. Session disposal closes the input and terminal and drops any unread
+  redacted output.
+- `eph-git` retains process ownership while it collects pipes. If the root
+  exits and descendants hold pipes past the deadline and output grace, the
+  call fails and gets a separate bounded cleanup interval. POSIX keeps the
+  root unreaped until it no longer needs to signal the group.
+
 ## 4. Persisted formats
 
 ### 4.0 Rules every format follows

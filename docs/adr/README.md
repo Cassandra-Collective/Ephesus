@@ -44,6 +44,8 @@ New ADRs append; accepted ADRs are never edited, only superseded.
 | [ADR-0036](./ADR-0036-two-engine-kinds.md) | Two engine kinds: a wrapped CLI, and a native agent the harness owns (supersedes one sentence of ADR-0009; planned for M9, not yet built) | accepted |
 | [ADR-0040](./ADR-0040-the-floor-is-a-view-mode.md) | The floor is a view mode; the window opens on the workspace (extends ADR-0014; planned for M9b, not yet built) | accepted |
 | [ADR-0041](./ADR-0041-ephesus-is-rewritten-in-rust.md) | Ephesus is rewritten in Rust, window included (supersedes ADR-0001; changes the mechanism, not the decision, of ADR-0002, ADR-0007, ADR-0014 and ADR-0036; the rewrite is in progress, see `../RUST-PLAN.md`) | accepted |
+| [ADR-0042](./ADR-0042-owned-process-group-shutdown.md) | Own the shutdown boundary at spawn | accepted |
+| [ADR-0043](./ADR-0043-preserve-the-terminal-spawn-plan.md) | Preserve the terminal spawn plan | accepted |
 
 **Numbers 0037–0039 are reserved, not missing.** ADR-0037 (the bench), ADR-0038
 (the provider seam) and ADR-0039 (the gate as a native agent's permission system)
