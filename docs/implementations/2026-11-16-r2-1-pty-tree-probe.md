@@ -197,3 +197,31 @@ passed 114 Git, 93 Agora, nine process and 19 PTY tests. The focused Git
 mutation run caught all 11 viable ref-lock recovery mutants. The five
 frozen TypeScript checks passed, and Apple ARM64 cross-Clippy passed for
 all four affected crates. Native CI must still verify the corrected tree.
+
+## Windows tree fixture follow-up
+
+[CI on 8756e19](https://github.com/Cassandra-Collective/Ephesus/actions/runs/44046337806)
+produced three measurements each on Linux and macOS. The first Windows
+attempt produced a measurement. Attempt 2 timed out in the plain Windows
+piped tree tests. Attempt 3 timed out in the instrumented last-handle-close
+test. Twelve concurrent local runs of the Windows process tests on one
+allowed CPU passed. The CI timeout did not identify which stage stalled.
+
+With ready markers and diagnostics added, the local piped tests reproduced
+the exact-count failure with all three fixtures ready, a live root, and four
+active members. A Windows process-tree trace observed `conhost.exe` under
+the piped root in that reproduction.
+
+Each fixture now reports its PID. The test checks that the IDs are distinct,
+that the root matches the launcher's handle, and that each of the three
+processes is live in the same Job Object. Startup failures report job
+membership, root status, and child output. Explicit termination checks zero
+active members and the root exit code. Last-handle close observes each
+fixture process handle signal and EOF on both pipes. The ConPTY test also
+requires its stream to close. Start and shutdown have independent bounded
+waits. [IsProcessInJob](https://learn.microsoft.com/en-us/windows/win32/api/jobapi/nf-jobapi-isprocessinjob).
+
+On the final fixture, the Windows gate passed the nine process tests in
+both builds and reached coverage. Only the two new crate floors remain
+unseeded. Twelve concurrent one-CPU runs of the nine tests passed in each
+of the plain and instrumented builds.

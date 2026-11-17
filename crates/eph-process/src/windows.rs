@@ -628,16 +628,30 @@ mod tests {
         env,
         io::{Read as _, Write as _},
         process::Command,
+        sync::{
+            Arc, Mutex,
+            mpsc::{self, Receiver},
+        },
         thread,
         time::{Duration, Instant},
     };
-    use windows_sys::Win32::System::Console::{
-        CONSOLE_SCREEN_BUFFER_INFO, GetConsoleScreenBufferInfo, GetStdHandle, STD_OUTPUT_HANDLE,
+    use windows_sys::Win32::System::{
+        Console::{
+            CONSOLE_SCREEN_BUFFER_INFO, GetConsoleScreenBufferInfo, GetStdHandle, STD_OUTPUT_HANDLE,
+        },
+        JobObjects::IsProcessInJob,
+        Threading::{
+            GetProcessId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+            WaitForMultipleObjects,
+        },
     };
 
     const FIXTURE_DEPTH: &str = "EPH_JOB_FIXTURE_DEPTH";
     const FIXTURE: [&str; 3] = ["--exact", "windows::tests::job_fixture", "--nocapture"];
     const SIZE_FIXTURE: &str = "EPH_CONPTY_TEST_SIZE";
+    const TREE_STARTUP: Duration = Duration::from_secs(30);
+    const TREE_SHUTDOWN: Duration = Duration::from_secs(15);
+    const READY_LINE: &str = "descendant fixture ready at depth ";
 
     #[test]
     fn environment_names_follow_windows_ordinal_order_and_last_alias_wins() {
@@ -693,9 +707,11 @@ mod tests {
         } else {
             None
         };
-        println!("descendant fixture ready at depth {depth}");
-        // Exiting on its own gives the driver a bound even if termination fails.
-        thread::sleep(Duration::from_secs(12));
+        println!("{READY_LINE}{depth} pid={};", std::process::id());
+        io::stdout().flush().unwrap();
+        // Keep the members available throughout startup and the shutdown
+        // observation window. This fallback only bounds a failed fixture.
+        thread::sleep(Duration::from_secs(60));
         if let Some(child) = &mut child {
             assert!(child.wait().unwrap().success());
         }
@@ -712,12 +728,134 @@ mod tests {
         }
     }
 
+    struct FixtureOutput {
+        text: Arc<Mutex<String>>,
+        eof: Receiver<io::Result<()>>,
+    }
+
+    impl FixtureOutput {
+        fn collect(mut stream: impl io::Read + Send + 'static) -> Self {
+            let text = Arc::new(Mutex::new(String::new()));
+            let writer = Arc::clone(&text);
+            let (sender, eof) = mpsc::channel();
+            thread::spawn(move || {
+                let result = (|| {
+                    let mut buffer = [0; 512];
+                    loop {
+                        let count = stream.read(&mut buffer)?;
+                        if count == 0 {
+                            return Ok(());
+                        }
+                        writer
+                            .lock()
+                            .unwrap()
+                            .push_str(&String::from_utf8_lossy(&buffer[..count]));
+                    }
+                })();
+                let _reported = sender.send(result);
+            });
+            Self { text, eof }
+        }
+
+        fn snapshot(&self) -> String {
+            self.text.lock().unwrap().clone()
+        }
+
+        fn expect_eof(&self) {
+            assert!(
+                matches!(self.eof.recv_timeout(TREE_SHUTDOWN), Ok(Ok(()))),
+                "fixture stream did not reach EOF: {:?}",
+                self.snapshot()
+            );
+        }
+    }
+
+    fn wait_for_live_tree(
+        child: &Child,
+        stdout: &FixtureOutput,
+        stderr: Option<&FixtureOutput>,
+    ) -> [OwnedHandle; 3] {
+        let deadline = Instant::now() + TREE_STARTUP;
+        let markers = [0, 1, 2].map(|depth| format!("{READY_LINE}{depth} pid="));
+        loop {
+            let active = child.active_processes().unwrap();
+            let exit = child.try_wait().unwrap();
+            let output = stdout.snapshot();
+            let pids = markers.each_ref().map(|marker| {
+                let (_, tail) = output.split_once(marker)?;
+                let (pid, _) = tail.split_once(';')?;
+                pid.parse::<u32>().ok()
+            });
+            if active >= 3
+                && exit.is_none()
+                && let [Some(root), Some(child_pid), Some(grandchild)] = pids
+            {
+                // SAFETY: the launcher retains a valid handle to the root.
+                assert_eq!(root, unsafe { GetProcessId(child.process.as_raw_handle()) });
+                assert!(root != child_pid && root != grandchild && child_pid != grandchild);
+                return [root, child_pid, grandchild].map(|pid| live_job_member(child, pid));
+            }
+            assert!(
+                exit.is_none() && Instant::now() < deadline,
+                "fixture tree startup failed (active {active}, root exit {exit:?})\nstdout: {output:?}\nstderr: {:?}",
+                stderr.map(FixtureOutput::snapshot)
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn live_job_member(child: &Child, pid: u32) -> OwnedHandle {
+        // SAFETY: the fixture supplied a PID and OpenProcess accepts these
+        // query and wait rights. A non-null result transfers ownership.
+        let raw = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                0,
+                pid,
+            )
+        };
+        assert!(
+            !raw.is_null(),
+            "open fixture PID {pid}: {}",
+            io::Error::last_os_error()
+        );
+        // SAFETY: OpenProcess succeeded and returned an owned process handle.
+        let process = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let mut included = 0;
+        // SAFETY: both handles are valid and the output slot is writable.
+        checked(unsafe {
+            IsProcessInJob(
+                process.as_raw_handle(),
+                child.job.as_raw_handle(),
+                &mut included,
+            )
+        })
+        .unwrap();
+        assert_ne!(included, 0, "fixture PID {pid} escaped the job");
+        // SAFETY: the handle is valid and carries synchronization rights.
+        assert_eq!(
+            unsafe { WaitForSingleObject(process.as_raw_handle(), 0) },
+            WAIT_TIMEOUT
+        );
+        process
+    }
+
     fn terminate_fixture(child: &Child) {
-        until(|| child.active_processes().unwrap() == 3);
-        assert_eq!(child.try_wait().unwrap(), None);
         child.terminate().unwrap();
-        until(|| child.active_processes().unwrap() == 0 && child.try_wait().unwrap().is_some());
-        assert_eq!(child.try_wait().unwrap(), Some(1));
+        let deadline = Instant::now() + TREE_SHUTDOWN;
+        loop {
+            let active = child.active_processes().unwrap();
+            let exit = child.try_wait().unwrap();
+            if active == 0 && exit.is_some() {
+                assert_eq!(exit, Some(1));
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "terminated job still has {active} active members, root exit {exit:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]
@@ -726,14 +864,23 @@ mod tests {
         let cwd = env::current_dir().unwrap();
         let args = FIXTURE.map(OsString::from);
         let environment = [(FIXTURE_DEPTH.into(), "0".into())];
-        let child = spawn_piped(Launch {
+        let Piped {
+            child,
+            stdout,
+            stderr,
+        } = spawn_piped(Launch {
             executable: &executable,
             args: &args,
             cwd: &cwd,
             environment: &environment,
         })
         .unwrap();
-        terminate_fixture(&child.child);
+        let stdout = FixtureOutput::collect(stdout);
+        let stderr = FixtureOutput::collect(stderr);
+        let _members = wait_for_live_tree(&child, &stdout, Some(&stderr));
+        terminate_fixture(&child);
+        stdout.expect_eof();
+        stderr.expect_eof();
     }
 
     #[test]
@@ -744,8 +891,8 @@ mod tests {
         let environment = [(FIXTURE_DEPTH.into(), "0".into())];
         let Piped {
             child,
-            mut stdout,
-            stderr: _stderr,
+            stdout,
+            stderr,
         } = spawn_piped(Launch {
             executable: &executable,
             args: &args,
@@ -753,24 +900,27 @@ mod tests {
             environment: &environment,
         })
         .unwrap();
-        let root = child.process.try_clone().unwrap();
-        let (sender, exited) = std::sync::mpsc::channel();
-        let drain = thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let result = stdout.read_to_end(&mut bytes);
-            sender.send(result).unwrap();
-        });
-        until(|| child.active_processes().unwrap() == 3);
-        assert_eq!(child.try_wait().unwrap(), None);
+        let stdout = FixtureOutput::collect(stdout);
+        let stderr = FixtureOutput::collect(stderr);
+        let members = wait_for_live_tree(&child, &stdout, Some(&stderr));
         drop(child);
-        // SAFETY: this duplicate retains the root process handle only. It
-        // cannot keep the Job Object alive.
+        let handles = members.each_ref().map(AsRawHandle::as_raw_handle);
+        // SAFETY: these valid and distinct process handles live through the
+        // wait. They cannot keep the Job Object alive. Wait for all of them
+        // within one bound that ends before the fixtures' own fallback.
         assert_eq!(
-            unsafe { WaitForSingleObject(root.as_raw_handle(), 3000) },
+            unsafe {
+                WaitForMultipleObjects(
+                    handles.len() as u32,
+                    handles.as_ptr(),
+                    1,
+                    TREE_SHUTDOWN.as_millis() as u32,
+                )
+            },
             WAIT_OBJECT_0
         );
-        assert!(exited.recv_timeout(Duration::from_secs(3)).unwrap().is_ok());
-        drain.join().unwrap();
+        stdout.expect_eof();
+        stderr.expect_eof();
     }
 
     #[test]
@@ -782,7 +932,7 @@ mod tests {
         let Terminal {
             child,
             input,
-            mut output,
+            output,
             console,
         } = spawn_terminal(
             Launch {
@@ -795,17 +945,13 @@ mod tests {
             24,
         )
         .unwrap();
-        let drain = thread::spawn(move || {
-            let mut text = String::new();
-            output.read_to_string(&mut text).unwrap();
-            text
-        });
+        let stdout = FixtureOutput::collect(output);
         console.resize(100, 28).unwrap();
+        let _members = wait_for_live_tree(&child, &stdout, None);
         terminate_fixture(&child);
         drop(input);
         drop(console);
-        let text = drain.join().unwrap();
-        assert!(text.contains("running 1 test"), "{text:?}");
+        stdout.expect_eof();
     }
 
     #[test]

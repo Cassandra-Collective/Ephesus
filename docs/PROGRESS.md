@@ -59,8 +59,11 @@ to the PTY session and applies the same process ownership to Git deadlines.
 The [first CI run](https://github.com/Cassandra-Collective/Ephesus/actions/runs/43949500607)
 found Linux coverage fixture, Windows Git crash recovery, and macOS terminal
 cleanup issues. The implementation record tracks the corrections and local
-proof. A new CI run must measure the corrected tree across three attempts to
-seed the floors (ENGINEERING-STANDARDS §1.1) and verify macOS runtime behavior.
+proof. Native macOS passed on the corrected tree. The intermittent Windows
+fixture failure reproduced locally with four active job members. The fixture
+now checks each reported PID's job membership directly. CI must measure the final tree
+three times on each platform before seeding the floors
+(ENGINEERING-STANDARDS §1.1).
 A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
 `.gitignore`, rendered at every boot, keeps `write_atomic`'s temporaries out of history
