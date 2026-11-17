@@ -61,9 +61,11 @@ found Linux coverage fixture, Windows Git crash recovery, and macOS terminal
 cleanup issues. The implementation record tracks the corrections and local
 proof. Native macOS passed on the corrected tree. The intermittent Windows
 fixture failure reproduced locally with four active job members. The fixture
-now checks each reported PID's job membership directly. CI must measure the final tree
-three times on each platform before seeding the floors
-(ENGINEERING-STANDARDS §1.1).
+now checks each reported PID's job membership directly. CI passed the native
+tests, but the ratchet refused the lowest macOS `eph-git` measurement
+(98.93% against a 98.96% floor). The Git fault tests now cover two recovery
+paths deterministically. CI must measure the final tree three times on each
+platform before seeding the floors (ENGINEERING-STANDARDS §1.1).
 A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
 `.gitignore`, rendered at every boot, keeps `write_atomic`'s temporaries out of history

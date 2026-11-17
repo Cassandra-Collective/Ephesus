@@ -740,7 +740,7 @@ pub(crate) mod tests {
             observed: io::Result<bool>,
             status: io::Result<Option<Option<i32>>>,
             shutdown_fails: bool,
-            stops: bool,
+            confirmations: std::vec::IntoIter<bool>,
         }
 
         impl OwnedChild for Child {
@@ -761,7 +761,7 @@ pub(crate) mod tests {
             }
 
             fn shutdown_confirmed(&mut self) -> io::Result<bool> {
-                Ok(self.stops)
+                Ok(self.confirmations.next().unwrap_or(false))
             }
         }
 
@@ -814,7 +814,7 @@ pub(crate) mod tests {
                 observed,
                 status,
                 shutdown_fails,
-                stops: false,
+                confirmations: Vec::new().into_iter(),
             };
             let result = complete(
                 &mut child,
@@ -831,10 +831,17 @@ pub(crate) mod tests {
             observed: Ok(false),
             status: Ok(None),
             shutdown_fails: false,
-            stops: false,
+            confirmations: Vec::new().into_iter(),
         };
         let error = stop_owned(&mut still_running, Instant::now()).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+
+        let mut confirming = Child {
+            confirmations: vec![false, true].into_iter(),
+            ..still_running
+        };
+        stop_owned(&mut confirming, Instant::now() + Duration::from_secs(2)).unwrap();
+        assert_eq!(confirming.confirmations.len(), 0);
     }
 
     #[test]

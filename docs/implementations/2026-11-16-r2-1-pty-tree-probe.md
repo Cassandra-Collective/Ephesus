@@ -225,3 +225,24 @@ On the final fixture, the Windows gate passed the nine process tests in
 both builds and reached coverage. Only the two new crate floors remain
 unseeded. Twelve concurrent one-CPU runs of the nine tests passed in each
 of the plain and instrumented builds.
+
+## Git coverage variation
+
+[Three attempts on b907852](https://github.com/Cassandra-Collective/Ephesus/actions/runs/44073093548)
+produced all nine artifacts, and the native suites passed. The third macOS
+attempt measured `eph-git` at 1,111 of 1,123 lines (98.93%). The other two
+macOS attempts covered 1,113 lines (99.10%). The artifacts do not identify
+which lines differed. The ratchet refused the batch against the existing
+98.96% floor.
+
+A Git test now blocks the commit-message write with a real directory at the
+target. It verifies that the error is reported and leaves HEAD and the work
+intact, then removes the obstruction and confirms the next commit lands the
+work. The existing shutdown test now deterministically observes an
+unconfirmed poll followed by confirmation. Ref-lock recovery shares one
+error classification for a lock that vanishes before metadata inspection or
+removal. The local Windows Git suite passed 115 tests. The Windows gate
+measured `eph-git` at 99.64% and stopped only at the two unseeded floors.
+Six focused Linux guest tests and Apple ARM64 cross-Clippy passed.
+The focused ref-lock mutation round caught all ten viable changes.
+The final sources need a new set of native measurements.

@@ -598,22 +598,18 @@ fn settle_ref_locks(dot_git: &Path) -> Vec<RefLockRecovery> {
                         Err(io::Error::other("expected a regular ref lock file"))
                     }
                 });
-                if removed
-                    .as_ref()
-                    .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
-                {
-                    return None;
-                }
                 Some(RefLockRecovery {
                     name,
-                    error: removed.err().map(|error| error.to_string()),
+                    error: observe_ref_lock(removed)?
+                        .err()
+                        .map(|error| error.to_string()),
                 })
             })
             .collect();
     }
 }
 
-fn observe_ref_lock(observed: io::Result<fs::Metadata>) -> Option<io::Result<fs::Metadata>> {
+fn observe_ref_lock<T>(observed: io::Result<T>) -> Option<io::Result<T>> {
     match observed {
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         observed => Some(observed),
@@ -1640,8 +1636,9 @@ mod tests {
         let lock = dir.join("HEAD.lock");
         assert!(observe_ref_lock(fs::symlink_metadata(&lock)).is_none());
         let denied = io::ErrorKind::PermissionDenied;
-        let observed = observe_ref_lock(Err(io::Error::from(denied))).unwrap();
+        let observed = observe_ref_lock::<()>(Err(io::Error::from(denied))).unwrap();
         assert_eq!(observed.unwrap_err().kind(), denied);
+        assert!(observe_ref_lock::<()>(Err(io::ErrorKind::NotFound.into())).is_none());
         fs::create_dir(&lock).unwrap();
         let found = settle_ref_locks(&dir);
         assert_eq!(found.len(), 1);
@@ -1928,6 +1925,36 @@ mod tests {
         fs::remove_file(&branch_lock).unwrap();
         assert_eq!(committer.commit("again").wait().unwrap().attempts, 1);
         assert!(tracked(&root, "m.json"));
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_blocked_commit_message_keeps_the_work_for_the_next_commit() {
+        let (dir, root) = agora("message-write-refused");
+        let committer = open(&root);
+        let message = root.join(".git").join(MESSAGE_FILE);
+        fs::remove_file(&message).unwrap();
+        fs::create_dir(&message).unwrap();
+        write(&root.join("new-work.json"), "{}\n");
+        let before = committer.head();
+
+        let failure = committer.commit("deliver").wait().unwrap_err();
+        assert!(
+            failure
+                .reason
+                .contains("the commit message could not be written"),
+            "{failure:?}"
+        );
+        assert_eq!(committer.head(), before);
+        assert!(root.join("new-work.json").is_file());
+
+        fs::remove_dir(&message).unwrap();
+        assert_eq!(
+            committer.commit("retry delivery").wait().unwrap().attempts,
+            1
+        );
+        assert!(tracked(&root, "new-work.json"));
         drop(committer);
         fs::remove_dir_all(&dir).unwrap();
     }
