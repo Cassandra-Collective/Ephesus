@@ -398,9 +398,9 @@ mod tests {
             .map(|(name, _)| name)
             .filter(|name| {
                 // The coverage runner's path is explicitly included in this
-                // test plan. On Windows the LLVM runtime adds its own marker
-                // inside the child before this fixture starts.
-                name != PROFILE && !(cfg!(windows) && name == "__LLVM_PROFILE_RT_INIT_ONCE")
+                // test plan. The LLVM runtime adds its own init marker
+                // inside instrumented children before this fixture starts.
+                name != PROFILE && name != "__LLVM_PROFILE_RT_INIT_ONCE"
             })
             .collect();
         assert_eq!(keys, [FIXTURE], "the fixture's exact environment");

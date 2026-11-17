@@ -138,10 +138,12 @@ and [cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html).
   root exited. The control ran the same Git alias outside the runner and
   observed both its start marker and its delayed write.
 - The coverage-instrumented PTY fixture initially failed its exact-environment
-  assertion. Launching the instrumented binary directly proved that the
-  Windows LLVM runtime adds `__LLVM_PROFILE_RT_INIT_ONCE` inside the child.
-  The fixture accounts for that marker and passes the coverage runner's
-  profile path explicitly when present. Production spawn adds no values.
+  assertion. Launching the instrumented binary directly on Windows proved that
+  LLVM adds `__LLVM_PROFILE_RT_INIT_ONCE` inside the child. Linux CI observed the
+  same marker, so the fixture allows it on both hosts. The fixture passes the
+  coverage runner's profile path explicitly when present. Production spawn
+  adds no values. The Linux guest fixture accepted the exact marker and
+  deliberately failed when given an additional unrelated environment key.
 - Linux 6.8.12 x86 guest. Real PTY and process suites passed 18 and four
   tests. Git 2.49.1 passed all 21 Git runner tests, including both deadline
   cases and late output on each pipe. The broader Git suite exceeded the
@@ -164,3 +166,34 @@ and [cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html).
 POSIX forced shutdown covers members of the dedicated group. Descendants
 in another group can survive. The macOS runtime and the two initial
 coverage floors still need the CI matrix.
+
+## First CI run and corrections
+
+The [first evidence run on 33250b4](https://github.com/Cassandra-Collective/Ephesus/actions/runs/43949500607)
+passed docs, attribution and the frozen TypeScript suite. Its three native
+jobs exposed distinct failures.
+
+- Linux passed the plain Rust suite. Coverage failed when LLVM inserted
+  its initialization marker into the two exact-environment fixtures.
+- Windows passed the plain Rust suite. The instrumented random-kill test
+  left `.git/HEAD.lock` and the reopened committer could not reconcile.
+  In a disposable local Git repository, either this lock or
+  `.git/refs/heads/main.lock` returned exit 128 on commit. Removing it
+  restored exit 0. The Architect approved recovering only those known
+  locks under the committer lock at open and reporting the result.
+- macOS passed all 108 Git tests and the three-process forced-shutdown
+  test. The PTY geometry fixture observed the new dimensions and then
+  got `EPERM` while collecting the normal exit. Darwin excludes zombies
+  from group signaling and can return this code when the group has no
+  signalable member. Recovery now requires an observed root exit and a
+  native group query returning exactly that root. Any group with another
+  member or an inconclusive query keeps the original failure.
+  [XNU group signaling](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c#L1612-L1621)
+  · [XNU process listing](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/proc_info.c#L377-L454).
+
+On the corrected tree, the local Windows Rust gate passed its first six
+steps and every existing floor. The plain and instrumented runs each
+passed 114 Git, 93 Agora, nine process and 19 PTY tests. The focused Git
+mutation run caught all 11 viable ref-lock recovery mutants. The five
+frozen TypeScript checks passed, and Apple ARM64 cross-Clippy passed for
+all four affected crates. Native CI must still verify the corrected tree.

@@ -225,6 +225,13 @@ impl Child {
         let result = unsafe { libc::kill(-group, libc::SIGKILL) };
         if result != 0 {
             let error = io::Error::last_os_error();
+            #[cfg(target_os = "macos")]
+            if error.raw_os_error() == Some(libc::EPERM)
+                && self.exit_pending().unwrap_or(false)
+                && group_contains_only_root(group)
+            {
+                return Ok(());
+            }
             if error.raw_os_error() != Some(libc::ESRCH) {
                 return Err(error);
             }
@@ -254,6 +261,23 @@ impl Child {
         }
         Ok(status)
     }
+}
+
+#[cfg(target_os = "macos")]
+fn group_contains_only_root(group: libc::pid_t) -> bool {
+    // XNU's group signal skips zombies and can return EPERM when it finds
+    // only the unreaped root. libproc lists live and zombie members. Two
+    // slots distinguish a lone root from any other member or a failed query.
+    let mut members = [0 as libc::pid_t; 2];
+    // SAFETY: the aligned array is writable and its size is in bytes.
+    let count = unsafe {
+        libc::proc_listpgrppids(
+            group,
+            members.as_mut_ptr().cast(),
+            size_of_val(&members) as libc::c_int,
+        )
+    };
+    count == 1 && members[0] == group
 }
 
 fn exit_pending(pid: libc::pid_t) -> io::Result<bool> {
@@ -427,6 +451,8 @@ mod tests {
             seen[usize::from(observations.recv_timeout(Duration::from_secs(3)).unwrap())] = true;
         }
         assert_eq!(seen, [true; 3]);
+        #[cfg(target_os = "macos")]
+        assert!(!group_contains_only_root(child.group.unwrap()));
         assert_eq!(child.try_wait().unwrap(), None);
         child.terminate_group().unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);

@@ -13,6 +13,8 @@
 //!   and before any commit can run. Open waits while `.git/index.lock` exists,
 //!   over the retry schedule, so a git still running for a killed harness can
 //!   finish, and then removes one that outlived it ([`Opened::index_lock`]).
+//!   Open also settles the two ref locks its commits can leave, in
+//!   [`Opened::ref_locks`], while it still owns the committer lock.
 //! - **A `git init` a kill left unfinished is finished.** When `.git` has no
 //!   `HEAD`, open waits over the same schedule while any other lock file sits
 //!   directly in `.git` (a killed init's `config.lock`, say), removes those
@@ -242,6 +244,15 @@ pub enum IndexLock {
     Stuck(String),
 }
 
+/// The result of recovering a known Git ref lock at open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefLockRecovery {
+    /// The lock path relative to the Agora's `.git` directory.
+    pub name: &'static str,
+    /// The reason recovery could not remove this lock, if it remains.
+    pub error: Option<String>,
+}
+
 /// Why an Agora could not be opened. Each says what to do about it.
 #[derive(Debug)]
 pub enum OpenError {
@@ -296,6 +307,8 @@ pub struct Opened {
     /// in `.git`, removed before this open's `git init`, for the boot to report.
     /// Empty unless [`Opened::initialized`].
     pub init_locks: Vec<String>,
+    /// Known ref locks found after waiting for Git at open.
+    pub ref_locks: Vec<RefLockRecovery>,
 }
 
 /// The answer to one [`Committer::commit`]. Dropping it is allowed: a failure
@@ -329,7 +342,7 @@ pub struct Committer {
 impl Committer {
     /// Opens the Agora at `root`. See the module contract for the order: the
     /// directory, the lock, `git init -b main` (with no template) when there is
-    /// no repository yet, the stale `index.lock`, then the queue.
+    /// no repository yet, the stale index and ref locks, then the queue.
     pub fn open(root: &Path, hooks: Hooks) -> Result<Opened, OpenError> {
         Committer::open_with(root, hooks, Git::agora())
     }
@@ -358,6 +371,7 @@ impl Committer {
                 return Err(OpenError::Init(init.stderr.trim().to_string()));
             }
         }
+        let ref_locks = settle_ref_locks(&dot_git);
         let record = Arc::new(Record {
             kept: Mutex::new(VecDeque::new()),
             report: hooks.report.clone(),
@@ -385,6 +399,7 @@ impl Committer {
             initialized,
             index_lock,
             init_locks,
+            ref_locks,
         })
     }
 
@@ -544,6 +559,71 @@ fn settle_init_locks(dot_git: &Path) -> io::Result<Vec<String>> {
             .map(|name| name.to_string_lossy().into_owned())
             .collect());
     }
+}
+
+/// Wait for a previous commit to finish before recovering specific ref locks.
+/// Only the committer holding the Agora lock calls this, before starting a
+/// new queue. Git's ref contents and other branches' locks are left in place.
+fn settle_ref_locks(dot_git: &Path) -> Vec<RefLockRecovery> {
+    const HEAD: &str = "HEAD.lock";
+    const MAIN: &str = "refs/heads/main.lock";
+
+    let mut candidates = vec![(HEAD, dot_git.join(HEAD))];
+    // Check both ancestors before considering a branch lock. Recovery must
+    // not follow a redirected refs directory and remove another repo's file.
+    if ref_dirs_are_real(dot_git) {
+        candidates.push((MAIN, dot_git.join(MAIN)));
+    }
+
+    let mut waits = RETRY_WAITS.into_iter();
+    loop {
+        candidates.retain(|(_, lock)| observe_ref_lock(fs::symlink_metadata(lock)).is_some());
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+        if let Some(wait) = waits.next() {
+            thread::sleep(Duration::from_millis(wait));
+            continue;
+        }
+        return candidates
+            .into_iter()
+            .filter_map(|(name, lock)| {
+                if name == MAIN && !ref_dirs_are_real(dot_git) {
+                    return None;
+                }
+                let removed = observe_ref_lock(fs::symlink_metadata(&lock))?.and_then(|metadata| {
+                    if metadata.is_file() {
+                        fs::remove_file(&lock)
+                    } else {
+                        Err(io::Error::other("expected a regular ref lock file"))
+                    }
+                });
+                if removed
+                    .as_ref()
+                    .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+                {
+                    return None;
+                }
+                Some(RefLockRecovery {
+                    name,
+                    error: removed.err().map(|error| error.to_string()),
+                })
+            })
+            .collect();
+    }
+}
+
+fn observe_ref_lock(observed: io::Result<fs::Metadata>) -> Option<io::Result<fs::Metadata>> {
+    match observed {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        observed => Some(observed),
+    }
+}
+
+fn ref_dirs_are_real(dot_git: &Path) -> bool {
+    ["refs", "refs/heads"].iter().all(|part| {
+        fs::symlink_metadata(dot_git.join(part)).is_ok_and(|metadata| metadata.is_dir())
+    })
 }
 
 /// Takes the committer's lock, asking again over [`LOCK_WAITS`] while it reads
@@ -1476,6 +1556,104 @@ mod tests {
             "only a .git with no HEAD is a killed init's"
         );
         drop(opened);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn ref_lock_recovery_waits_for_git_to_finish() {
+        let (dir, root) = agora("live-ref-lock");
+        let lock = root.join(".git/HEAD.lock");
+        write(&lock, "");
+        let opened = thread::scope(|scope| {
+            scope.spawn(|| {
+                thread::sleep(Duration::from_millis(30));
+                fs::remove_file(&lock).unwrap();
+            });
+            Committer::open(&root, Hooks::none()).unwrap()
+        });
+        assert!(opened.ref_locks.is_empty());
+        drop(opened);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn recovery_removes_only_the_known_ref_locks_and_keeps_the_refs() {
+        let (dir, root) = agora("crash-ref-lock");
+        let dot_git = root.join(".git");
+        let head = fs::read(dot_git.join("HEAD")).unwrap();
+        let main = fs::read(dot_git.join("refs/heads/main")).unwrap();
+        for name in [
+            "HEAD.lock",
+            "refs/heads/main.lock",
+            "refs/heads/private.lock",
+        ] {
+            write(&dot_git.join(name), "interrupted write");
+        }
+        let opened = Committer::open(&root, Hooks::none()).unwrap();
+        assert_eq!(
+            opened.ref_locks,
+            [
+                RefLockRecovery {
+                    name: "HEAD.lock",
+                    error: None
+                },
+                RefLockRecovery {
+                    name: "refs/heads/main.lock",
+                    error: None
+                },
+            ]
+        );
+        for removed in &opened.ref_locks {
+            assert!(!dot_git.join(removed.name).exists());
+        }
+        assert!(dot_git.join("refs/heads/private.lock").is_file());
+        assert_eq!(fs::read(dot_git.join("HEAD")).unwrap(), head);
+        assert_eq!(fs::read(dot_git.join("refs/heads/main")).unwrap(), main);
+        drop(opened);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_ref_lock_under_redirected_refs_is_left_in_place() {
+        let dir = scratch("redirected-ref-lock");
+        let dot_git = dir.join("agora").join(".git");
+        fs::create_dir_all(&dot_git).unwrap();
+        let other = dir.join("other");
+        let foreign = other.join("heads/main.lock");
+        write(&foreign, "keep this");
+        write(&dot_git.join("HEAD.lock"), "");
+        link_dir(&other, &dot_git.join("refs"));
+        assert_eq!(
+            settle_ref_locks(&dot_git),
+            [RefLockRecovery {
+                name: "HEAD.lock",
+                error: None
+            }]
+        );
+        assert_eq!(fs::read_to_string(&foreign).unwrap(), "keep this");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_missing_ref_lock_has_no_recovery_and_a_non_file_is_reported() {
+        let dir = scratch("ref-lock-observation");
+        let lock = dir.join("HEAD.lock");
+        assert!(observe_ref_lock(fs::symlink_metadata(&lock)).is_none());
+        let denied = io::ErrorKind::PermissionDenied;
+        let observed = observe_ref_lock(Err(io::Error::from(denied))).unwrap();
+        assert_eq!(observed.unwrap_err().kind(), denied);
+        fs::create_dir(&lock).unwrap();
+        let found = settle_ref_locks(&dir);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "HEAD.lock");
+        assert!(
+            found[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("regular ref lock file")
+        );
+        assert!(lock.is_dir());
         fs::remove_dir_all(&dir).unwrap();
     }
 
