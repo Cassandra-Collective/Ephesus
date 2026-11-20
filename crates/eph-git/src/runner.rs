@@ -282,7 +282,7 @@ impl Git {
     /// Runs git in `cwd`. See the module contract.
     pub fn run(&self, cwd: &Path, args: &[&str]) -> GitResult {
         let native::Piped {
-            mut child,
+            child,
             stdout,
             stderr,
         } = match self.launch(cwd, args) {
@@ -297,16 +297,13 @@ impl Git {
         };
         let stdout = drain(stdout);
         let stderr = drain(stderr);
-        let result = complete(&mut child, &stdout, &stderr, self.timeout);
         #[cfg(unix)]
-        if child.try_wait().ok().flatten().is_none() {
-            // A root that exits after the shutdown grace still needs to be
-            // collected. Its wait must not extend the caller's deadline.
-            let _cleanup = thread::Builder::new()
-                .name("eph-git-reap".to_owned())
-                .spawn(move || child.reap());
+        return complete_and_reap(child, &stdout, &stderr, self.timeout, native::Child::reap);
+        #[cfg(windows)]
+        {
+            let mut child = child;
+            complete(&mut child, &stdout, &stderr, self.timeout)
         }
-        result
     }
 
     #[cfg(unix)]
@@ -404,6 +401,26 @@ fn teach_old_git(stderr: &mut String) {
         stderr.push('\n');
         stderr.push_str(OLD_GIT_FIX);
     }
+}
+
+// A root still pending after the bounded call is collected by a detached
+// worker. Own the result and cleanup in one path, including failed status
+// observations, so neither the wait nor its error can extend the deadline.
+#[cfg(unix)]
+fn complete_and_reap<C: OwnedChild + Send + 'static>(
+    mut child: C,
+    stdout: &Receiver<io::Result<Vec<u8>>>,
+    stderr: &Receiver<io::Result<Vec<u8>>>,
+    timeout: Duration,
+    reap: impl FnOnce(C) + Send + 'static,
+) -> GitResult {
+    let result = complete(&mut child, stdout, stderr, timeout);
+    if child.root_status().ok().flatten().is_none() {
+        let _cleanup = thread::Builder::new()
+            .name("eph-git-reap".to_owned())
+            .spawn(move || reap(child));
+    }
+    result
 }
 
 fn complete(
@@ -842,6 +859,273 @@ pub(crate) mod tests {
         };
         stop_owned(&mut confirming, Instant::now() + Duration::from_secs(2)).unwrap();
         assert_eq!(confirming.confirmations.len(), 0);
+    }
+
+    #[test]
+    fn missing_either_pipe_keeps_the_root_owned_until_cleanup_is_confirmed() {
+        struct Child {
+            reads: usize,
+            requests: usize,
+            confirmations: std::vec::IntoIter<bool>,
+        }
+        impl OwnedChild for Child {
+            fn root_exited(&mut self) -> io::Result<bool> {
+                Ok(true)
+            }
+            fn root_status(&mut self) -> io::Result<Option<Option<i32>>> {
+                self.reads += 1;
+                Ok(Some(Some(0)))
+            }
+            fn request_shutdown(&mut self) -> io::Result<()> {
+                self.requests += 1;
+                Ok(())
+            }
+            fn shutdown_confirmed(&mut self) -> io::Result<bool> {
+                Ok(self.confirmations.next().unwrap())
+            }
+        }
+        fn pipe(arrived: bool) -> Receiver<io::Result<Vec<u8>>> {
+            let (sent, received) = mpsc::channel();
+            if arrived {
+                sent.send(Ok(b"preserved output".to_vec())).unwrap();
+            }
+            received
+        }
+        for (stdout, stderr) in [(false, true), (true, false)] {
+            let mut child = Child {
+                reads: 0,
+                requests: 0,
+                confirmations: vec![false, true].into_iter(),
+            };
+            let result = complete(&mut child, &pipe(stdout), &pipe(stderr), Duration::ZERO);
+            assert_eq!(result.code, None);
+            assert!(
+                result
+                    .stderr
+                    .ends_with("git's output did not arrive in time")
+            );
+            assert!(
+                !result.stderr.contains("could not be stopped"),
+                "{result:?}"
+            );
+            assert_eq!(
+                child.reads, 0,
+                "the root must remain unreaped while pipes are held"
+            );
+            assert_eq!(child.requests, 1);
+            assert_eq!(
+                child.confirmations.len(),
+                0,
+                "cleanup received its own grace interval"
+            );
+        }
+    }
+
+    #[test]
+    fn native_adapter_observes_a_ready_child_before_and_after_owned_shutdown() {
+        use std::io::BufRead as _;
+
+        fn actually_exited(child: &mut native::Child) -> bool {
+            #[cfg(windows)]
+            return child.try_wait().unwrap().is_some();
+            #[cfg(unix)]
+            child.exit_pending().unwrap()
+        }
+        fn actually_stopped(child: &mut native::Child) -> bool {
+            let exited = actually_exited(child);
+            #[cfg(windows)]
+            return exited && child.active_processes().unwrap() == 0;
+            #[cfg(unix)]
+            exited
+        }
+        let mut cases = vec![(false, "alias.held=!echo native-ready; sleep 10")];
+        #[cfg(windows)]
+        cases.push((
+            true,
+            "alias.held=!(echo native-ready; sleep 10) & echo root-exiting",
+        ));
+        for (root_exited, alias) in cases.drain(..) {
+            let dir = scratch(if root_exited {
+                "adapter-exited-root"
+            } else {
+                "adapter-live-root"
+            });
+            let native::Piped {
+                mut child,
+                stdout,
+                stderr,
+            } = git().launch(&dir, &["-c", alias, "held"]).unwrap();
+            let mut output = std::io::BufReader::new(stdout);
+            let mut line = String::new();
+            while !line.contains("native-ready") {
+                line.clear();
+                assert_ne!(output.read_line(&mut line).unwrap(), 0);
+            }
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while actually_exited(&mut child) != root_exited {
+                assert!(
+                    Instant::now() < deadline,
+                    "fixture did not reach its expected root state"
+                );
+                thread::sleep(POLL);
+            }
+            #[cfg(windows)]
+            let expected_status = {
+                assert!(child.active_processes().unwrap() > 0);
+                if root_exited {
+                    Some(Some(child.try_wait().unwrap().unwrap() as i32))
+                } else {
+                    Some(Some(1))
+                }
+            };
+            let observed_exit = child.root_exited().unwrap();
+            let observed_shutdown = child.shutdown_confirmed().unwrap();
+            #[cfg(windows)]
+            child.terminate().unwrap();
+            #[cfg(unix)]
+            child.terminate_group().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !actually_stopped(&mut child) {
+                assert!(
+                    Instant::now() < deadline,
+                    "native cleanup was not confirmed"
+                );
+                thread::sleep(POLL);
+            }
+            assert!(child.try_wait().unwrap().is_some());
+            let final_status = child.root_status().unwrap();
+            let final_exit = child.root_exited().unwrap();
+            let final_shutdown = child.shutdown_confirmed().unwrap();
+            for ended in [drain(output), drain(stderr)] {
+                ended.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
+            }
+            drop(child);
+            fs::remove_dir_all(dir).unwrap();
+            // Cleanup precedes the assertions even for a lying adapter mutant.
+            assert_eq!(observed_exit, root_exited);
+            assert!(!observed_shutdown, "an owned member is still alive");
+            #[cfg(windows)]
+            assert_eq!(final_status, expected_status);
+            #[cfg(unix)]
+            assert_eq!(final_status, Some(None));
+            assert!(final_exit && final_shutdown);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn inherited_environment_fixture() {
+        let Ok(expected) = std::env::var("EPH_TEST_INHERITED_PLAIN") else {
+            return;
+        };
+        let dir = scratch("inherited-environment-child");
+        let result = git().run(
+            &dir,
+            &[
+                "-c",
+                "alias.show-parent=!printf '%s' \"$EPH_TEST_INHERITED_PLAIN\"",
+                "show-parent",
+            ],
+        );
+        assert!(result.ok(), "{result:?}");
+        assert_eq!(result.stdout, expected);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "process: supply a controlled parent environment in a disposable test process"
+    )]
+    fn an_ordinary_inherited_variable_reaches_native_windows_launch() {
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "runner::tests::inherited_environment_fixture",
+                "--nocapture",
+            ])
+            .env("EPH_TEST_INHERITED_PLAIN", "preserved-parent-value")
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "the inherited launch lost the supplied ordinary value"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pending_or_failed_final_status_is_reaped_without_blocking_the_result() {
+        struct Child(Option<io::Result<Option<Option<i32>>>>);
+        impl OwnedChild for Child {
+            fn root_exited(&mut self) -> io::Result<bool> {
+                Err(io::Error::other("observation failed"))
+            }
+            fn root_status(&mut self) -> io::Result<Option<Option<i32>>> {
+                self.0.take().unwrap()
+            }
+            fn request_shutdown(&mut self) -> io::Result<()> {
+                panic!("a failed observation cannot send a signal")
+            }
+            fn shutdown_confirmed(&mut self) -> io::Result<bool> {
+                panic!("no shutdown was requested")
+            }
+        }
+        fn pipe(bytes: &[u8]) -> Receiver<io::Result<Vec<u8>>> {
+            let (sent, received) = mpsc::channel();
+            sent.send(Ok(bytes.to_vec())).unwrap();
+            received
+        }
+        for (status, expected_reap) in [
+            (Ok(None), true),
+            (Err(io::Error::other("final status failed")), true),
+            (Ok(Some(Some(0))), false),
+            (Ok(Some(None)), false),
+        ] {
+            let (started, observed_start) = mpsc::channel();
+            let (release, gate) = mpsc::channel();
+            let (finished, observed_finish) = mpsc::channel();
+            let (sent, received) = mpsc::channel();
+            let caller = thread::spawn(move || {
+                let result = complete_and_reap(
+                    Child(Some(status)),
+                    &pipe(b"preserved output"),
+                    &pipe(b"preserved diagnostic"),
+                    Duration::ZERO,
+                    move |_| {
+                        started.send(()).unwrap();
+                        gate.recv().unwrap();
+                        finished.send(()).unwrap();
+                    },
+                );
+                sent.send(result).unwrap();
+            });
+            let result = received.recv_timeout(Duration::from_secs(2));
+            let began = observed_start.recv_timeout(Duration::from_secs(2));
+            // Release even when an aimed synchronous-reap mutation blocks the
+            // caller, then join before asserting: a timeout is not a kill.
+            let _released = release.send(());
+            caller.join().unwrap();
+            assert!(result.is_ok(), "the result waited for the reaper");
+            let result = result.unwrap();
+            assert_eq!(result.stdout, "preserved output");
+            assert!(result.stderr.starts_with("preserved diagnostic\n"));
+            assert!(result.stderr.contains("observation failed"));
+            assert_eq!(result.code, None);
+            if expected_reap {
+                began.unwrap();
+                observed_finish
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap();
+            } else {
+                assert!(matches!(began, Err(mpsc::RecvTimeoutError::Disconnected)));
+                assert!(matches!(
+                    observed_finish.try_recv(),
+                    Err(mpsc::TryRecvError::Disconnected)
+                ));
+            }
+        }
     }
 
     #[test]

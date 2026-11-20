@@ -12,6 +12,7 @@ publish.workspace = true
 eph-process = { path = "../eph-process" }
 
 [dev-dependencies]
+eph-process = { path = "../eph-process", features = ["test-support"] }
 eph-fs = { path = "../eph-fs" }
 tempfile = "3"
 

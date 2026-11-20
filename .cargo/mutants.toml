@@ -4,6 +4,9 @@
 # runs the round with it and then the control (one shard, no test run, every
 # viable mutant must be missed); see xtask/src/mutants.rs for the five rules a
 # round is judged by.
+# Aimed seam plants use the same baseline/control/restoration rules; their
+# source changes and required tests are specified in
+# docs/implementations/2026-11-20-r2-1-guard-proof.md.
 #
 # An exclusion is a decision: it names the mutant and why no test can or should
 # kill it, in a reviewed commit. A survivor no test COULD kill is a design smell

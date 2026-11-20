@@ -53,6 +53,16 @@ pub fn terminal_eof(error: &io::Error) -> bool {
     error.raw_os_error() == Some(libc::EIO)
 }
 
+/// Observe this fixture process's terminal geometry in cells.
+#[cfg(any(test, feature = "test-support"))]
+pub fn current_terminal_size() -> io::Result<(u16, u16)> {
+    let mut size = dimensions(1, 1)?;
+    // SAFETY: stdin is queried into an aligned, writable winsize. The kernel
+    // checks that the descriptor belongs to a terminal.
+    checked(unsafe { libc::ioctl(libc::STDIN_FILENO, libc::TIOCGWINSZ, &raw mut size) })?;
+    Ok((size.ws_col, size.ws_row))
+}
+
 /// Start a caller-built command in a new process group with piped output.
 pub fn spawn_piped(command: &mut Command) -> io::Result<Piped> {
     let _launch = launch_lock()?;
@@ -373,11 +383,8 @@ mod tests {
         let mut line = String::new();
         io::stdin().read_line(&mut line).unwrap();
         assert_eq!(line.trim(), "sample");
-        let mut size = dimensions(1, 1).unwrap();
-        // SAFETY: stdin is the PTY slave and size is a writable winsize.
-        checked(unsafe { libc::ioctl(libc::STDIN_FILENO, libc::TIOCGWINSZ, &raw mut size) })
-            .unwrap();
-        println!("\nobserved-geometry={}x{}", size.ws_col, size.ws_row);
+        let (cols, rows) = current_terminal_size().unwrap();
+        println!("\nobserved-geometry={cols}x{rows}");
     }
 
     #[test]

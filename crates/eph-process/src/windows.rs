@@ -18,6 +18,10 @@ use std::{
     path::{Path, PathBuf},
     ptr::{null, null_mut},
 };
+#[cfg(any(test, feature = "test-support"))]
+use windows_sys::Win32::System::Console::{
+    CONSOLE_SCREEN_BUFFER_INFO, GetConsoleScreenBufferInfo, GetStdHandle, STD_OUTPUT_HANDLE,
+};
 use windows_sys::Win32::{
     Foundation::{
         DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
@@ -44,6 +48,18 @@ use windows_sys::Win32::{
         },
     },
 };
+
+/// Observe this fixture process's terminal geometry in cells.
+#[cfg(any(test, feature = "test-support"))]
+pub fn current_terminal_size() -> io::Result<(u16, u16)> {
+    let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
+    // SAFETY: the process's console handle is queried into a valid output
+    // structure. The API validates whether this process has a console.
+    checked(unsafe { GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &mut info) })?;
+    let cols = info.srWindow.Right - info.srWindow.Left + 1;
+    let rows = info.srWindow.Bottom - info.srWindow.Top + 1;
+    Ok((cols as u16, rows as u16))
+}
 
 /// A complete launch plan supplied by a trusted process-owning crate.
 pub struct Launch<'a> {
@@ -636,9 +652,6 @@ mod tests {
         time::{Duration, Instant},
     };
     use windows_sys::Win32::System::{
-        Console::{
-            CONSOLE_SCREEN_BUFFER_INFO, GetConsoleScreenBufferInfo, GetStdHandle, STD_OUTPUT_HANDLE,
-        },
         JobObjects::IsProcessInJob,
         Threading::{
             GetProcessId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
@@ -677,12 +690,7 @@ mod tests {
         let mut line = String::new();
         io::stdin().read_line(&mut line).unwrap();
         assert_eq!(line.trim(), "sample");
-        let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
-        // SAFETY: Read the child console into a valid native output structure.
-        checked(unsafe { GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &mut info) })
-            .unwrap();
-        let cols = info.srWindow.Right - info.srWindow.Left + 1;
-        let rows = info.srWindow.Bottom - info.srWindow.Top + 1;
+        let (cols, rows) = current_terminal_size().unwrap();
         println!("observed-geometry={cols}x{rows}");
     }
 
@@ -1062,6 +1070,16 @@ mod tests {
             let command = String::from_utf16(&command[..command.len() - 1]).unwrap();
             assert!(command.contains("cmd.exe /d /s /e:on /v:off /c"));
             assert!(command.contains("\"arg with space\""));
+            let overhead = batch_arguments(&path, &["".into()]).unwrap().1.len();
+            let largest = "x".repeat(8191 - overhead);
+            assert_eq!(
+                batch_arguments(&path, &[largest.clone().into()])
+                    .unwrap()
+                    .1
+                    .len(),
+                8191
+            );
+            assert!(batch_arguments(&path, &[format!("{largest}x").into()]).is_err());
             assert!(batch_arguments(&path, &["x".repeat(8192).into()]).is_err());
             for prefix in [r"\\?\C:\", r"\\.\C:\"] {
                 let device = PathBuf::from(format!("{prefix}tool.{extension}"));

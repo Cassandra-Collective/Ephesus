@@ -292,24 +292,21 @@ impl Backend {
     }
 
     fn dispose(mut self, exited: bool) {
+        if !exited {
+            let _requested = self.terminate();
+        }
         #[cfg(windows)]
         {
-            if !exited {
-                let _requested = self.terminate();
-            }
             // The job is closed before the console. The reader is independent.
             drop(self.child);
         }
         #[cfg(unix)]
         {
-            if !exited {
-                let _requested = self.terminate();
-            }
             drop(self.input);
             drop(self.console);
-            if !exited {
-                self.child.reap();
-            }
+            // An observed exit is already cached by try_wait. Otherwise this
+            // background worker collects the root after the shutdown request.
+            self.child.reap();
         }
     }
 }
@@ -407,8 +404,11 @@ mod tests {
         let mut stdin = io::stdin().lock();
         let mut first = String::new();
         let mut second = String::new();
+        println!("fixture-pid={}", std::process::id());
         println!("fixture-ready");
         stdin.read_line(&mut first).unwrap();
+        let (cols, rows) = native::current_terminal_size().unwrap();
+        println!("fixture-geometry={cols}x{rows}");
         println!("fixture-input={}", first.trim_end());
         stdin.read_line(&mut second).unwrap();
         println!("fixture-interrupt={}", second.trim_end());
@@ -496,6 +496,7 @@ mod tests {
         let (exit, output) = finish(&mut session, seen);
         assert_eq!(exit, ExitStatus::Code(0));
         assert!(output.contains("fixture-input=typed"), "{output:?}");
+        assert!(output.contains("fixture-geometry=101x27"), "{output:?}");
         assert!(output.contains("fixture-interrupt=cancel"), "{output:?}");
         assert!(
             output.contains("fixture-value=•••eph-masked•••"),
@@ -532,64 +533,27 @@ mod tests {
     }
 
     #[test]
-    fn the_public_resize_changes_the_dimensions_observed_inside_the_terminal() {
-        #[cfg(windows)]
-        let (program, args, environment, expected) = {
-            let root = env::var_os("SystemRoot").unwrap();
-            let program = std::path::PathBuf::from(&root)
-                .join("System32")
-                .join("WindowsPowerShell")
-                .join("v1.0")
-                .join("powershell.exe");
-            let script = "[void][Console]::ReadLine(); Write-Output ('observed-geometry=' + [Console]::WindowWidth + 'x' + [Console]::WindowHeight)";
-            (
-                program,
-                [
-                    "-NoLogo",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    script,
-                ]
-                .map(OsString::from)
-                .to_vec(),
-                vec![("SystemRoot".into(), root)],
-                "observed-geometry=97x29",
-            )
-        };
-        #[cfg(unix)]
-        let (program, args, environment, expected) = (
-            std::path::PathBuf::from("/bin/sh"),
-            ["-c", "read answer; /bin/stty size"]
-                .map(OsString::from)
-                .to_vec(),
-            Vec::new(),
-            "29 97",
-        );
-        let cwd = env::current_dir().unwrap();
-        let mut session = Session::spawn(
-            SpawnPlan {
-                executable: program.as_os_str(),
-                args: &args,
-                cwd: &cwd,
-                environment: &environment,
-                cols: 80,
-                rows: 24,
-            },
-            Vec::new(),
-        )
-        .unwrap();
-        session.resize(97, 29).unwrap();
-        session.write(b"sample\r").unwrap();
-        let (exit, output) = finish(&mut session, Vec::new());
-        assert_eq!(exit, ExitStatus::Code(0), "{output:?}");
-        assert!(output.contains(expected), "{output:?}");
-    }
-
-    #[test]
     fn dropping_a_live_session_closes_its_owned_output_and_forgets_credentials() {
         let mut session = fixture();
-        until_ready(&mut session);
+        let ready = until_ready(&mut session);
+        #[cfg(target_os = "linux")]
+        let root = {
+            let ready = String::from_utf8_lossy(&ready);
+            let pid: u32 = ready
+                .split("fixture-pid=")
+                .nth(1)
+                .unwrap()
+                .split_whitespace()
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap();
+            let root = std::path::PathBuf::from(format!("/proc/{pid}"));
+            assert!(root.metadata().unwrap().is_dir());
+            root
+        };
+        #[cfg(not(target_os = "linux"))]
+        drop(ready);
         let output = session.output.take().unwrap();
         let values = Arc::clone(&session.values);
         drop(session);
@@ -605,6 +569,17 @@ mod tests {
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        #[cfg(target_os = "linux")]
+        loop {
+            match root.metadata() {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+                Err(error) => panic!("could not inspect fixture root: {error}"),
+                Ok(_) => {
+                    assert!(Instant::now() < deadline, "dropped root was not reaped");
+                    thread::sleep(Duration::from_millis(2));
+                }
             }
         }
         let retained = values.read().unwrap();
