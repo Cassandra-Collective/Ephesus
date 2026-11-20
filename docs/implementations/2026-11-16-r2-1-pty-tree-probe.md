@@ -246,3 +246,42 @@ measured `eph-git` at 99.64% and stopped only at the two unseeded floors.
 Six focused Linux guest tests and Apple ARM64 cross-Clippy passed.
 The focused ref-lock mutation round caught all ten viable changes.
 The final sources need a new set of native measurements.
+
+## Guard verification — 2026-11-20
+
+The package audit found that the new native and PTY guards still owed
+controlled mutation evidence. The initial rounds exposed missing assertions
+for geometry limits, argument encoding, PATH and shim defenses, terminal
+read errors and disposal. Regression tests now observe public-session resize
+inside the child, exercise each invalid geometry axis, and refuse device
+batch paths and malformed npm prefixes even when the executable exists.
+Windows passed 15 native and 24 PTY tests; the Linux 6.8.12 i686 guest passed
+eight native and 23 PTY tests, using Rust 1.96.0. The five frozen TypeScript
+checks passed. These plain test results do not establish the final mutation
+verdict or the macOS runtime result.
+
+A real piped fixture joins a second fixture-owned group, and the test reads
+its changed group identity before requesting shutdown of the original group.
+The escaped root remains alive and is then explicitly killed and reaped.
+Both fixture roots are cleaned up. This verifies ADR-0042's stated limit.
+The error classification seam receives the actual native error in production;
+deterministic ESRCH, EPERM and EINVAL cases verify that only an absent group
+is accepted on Linux and other failures retain their OS error. The Darwin
+permission exception additionally checks the actual root state and native
+group membership. Apple's [libproc implementation](https://github.com/apple-oss-distributions/xnu/blob/main/libsyscall/wrappers/libproc/libproc.c)
+confirms that `proc_listpgrppids` returns a PID count, after converting the
+underlying byte count.
+
+The Architect approved four equivalent flag-operation exclusions and the
+separately documented observation limit for `Attributes::drop`; no other
+survivor is excluded. The openpty descriptor slots now start at zero because
+success overwrites them and failure returns before using them. Independent
+review checked the precise exclusion matches and the macOS guard selector.
+The new workflow runs both crates' tests for its 17 selected guard mutants,
+then runs a no-tests control over one shard. It retains the reports and source
+fingerprints. Its actual report judge accepted a healthy synthetic result
+and refused nine invalid cases: failed or missing baseline, no viable mutant,
+timeout, round survivor, false control kill, inconsistent counts, and either
+command failing. The shell block and embedded Python judge passed syntax
+checks. Native Darwin execution and the final Windows/Linux mutation rounds
+remain pending, followed by three fresh CI measurements per platform.

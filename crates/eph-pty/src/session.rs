@@ -507,8 +507,142 @@ mod tests {
             "{output:?}"
         );
         assert!(session.write(b"after exit").is_err());
+        let retained = session.values.read().unwrap();
+        assert!(retained.launch.is_empty() && retained.current.is_empty());
     }
 
+    #[test]
+    fn terminal_dimensions_accept_both_boundaries_and_refuse_each_invalid_axis() {
+        for (cols, rows) in [(1, 1), (32767, 32767), (1, 32767), (32767, 1)] {
+            validate_size(cols, rows).unwrap();
+        }
+        for (cols, rows) in [
+            (0, 1),
+            (1, 0),
+            (32768, 1),
+            (1, 32768),
+            (u16::MAX, 1),
+            (1, u16::MAX),
+        ] {
+            assert_eq!(
+                validate_size(cols, rows).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+    }
+
+    #[test]
+    fn the_public_resize_changes_the_dimensions_observed_inside_the_terminal() {
+        #[cfg(windows)]
+        let (program, args, environment, expected) = {
+            let root = env::var_os("SystemRoot").unwrap();
+            let program = std::path::PathBuf::from(&root)
+                .join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe");
+            let script = "[void][Console]::ReadLine(); Write-Output ('observed-geometry=' + [Console]::WindowWidth + 'x' + [Console]::WindowHeight)";
+            (
+                program,
+                [
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    script,
+                ]
+                .map(OsString::from)
+                .to_vec(),
+                vec![("SystemRoot".into(), root)],
+                "observed-geometry=97x29",
+            )
+        };
+        #[cfg(unix)]
+        let (program, args, environment, expected) = (
+            std::path::PathBuf::from("/bin/sh"),
+            ["-c", "read answer; /bin/stty size"]
+                .map(OsString::from)
+                .to_vec(),
+            Vec::new(),
+            "29 97",
+        );
+        let cwd = env::current_dir().unwrap();
+        let mut session = Session::spawn(
+            SpawnPlan {
+                executable: program.as_os_str(),
+                args: &args,
+                cwd: &cwd,
+                environment: &environment,
+                cols: 80,
+                rows: 24,
+            },
+            Vec::new(),
+        )
+        .unwrap();
+        session.resize(97, 29).unwrap();
+        session.write(b"sample\r").unwrap();
+        let (exit, output) = finish(&mut session, Vec::new());
+        assert_eq!(exit, ExitStatus::Code(0), "{output:?}");
+        assert!(output.contains(expected), "{output:?}");
+    }
+
+    #[test]
+    fn dropping_a_live_session_closes_its_owned_output_and_forgets_credentials() {
+        let mut session = fixture();
+        until_ready(&mut session);
+        let output = session.output.take().unwrap();
+        let values = Arc::clone(&session.values);
+        drop(session);
+        let deadline = Instant::now() + PARITY_TIMEOUT;
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "dropped terminal still held its output"
+            );
+            match output.recv_timeout(Duration::from_millis(20)) {
+                Ok(chunk) => {
+                    chunk.unwrap();
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        let retained = values.read().unwrap();
+        assert!(retained.launch.is_empty() && retained.current.is_empty());
+    }
+
+    #[test]
+    fn the_output_worker_retries_interruptions_and_reports_other_read_errors() {
+        struct Chunks(std::collections::VecDeque<io::Result<Vec<u8>>>);
+
+        impl Read for Chunks {
+            fn read(&mut self, target: &mut [u8]) -> io::Result<usize> {
+                let bytes = self.0.pop_front().unwrap_or_else(|| Ok(Vec::new()))?;
+                target[..bytes.len()].copy_from_slice(&bytes);
+                Ok(bytes.len())
+            }
+        }
+
+        let values = RwLock::new(Values {
+            launch: Vec::new(),
+            current: Vec::new(),
+        });
+        let (sent, received) = mpsc::sync_channel(8);
+        let chunks = [
+            Err(io::ErrorKind::Interrupted.into()),
+            Ok(b"observed output".to_vec()),
+            Err(io::Error::other("broken reader")),
+        ];
+        let error = drain(Box::new(Chunks(chunks.into())), &values, &sent).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert_eq!(received.try_recv().unwrap().unwrap(), b"observed output");
+
+        #[cfg(unix)]
+        {
+            let chunks = [Err(io::Error::from_raw_os_error(5))];
+            drain(Box::new(Chunks(chunks.into())), &values, &sent).unwrap();
+        }
+    }
     #[test]
     fn kill_returns_the_os_scope_and_the_public_session_reports_exit_and_eof() {
         let mut session = fixture();

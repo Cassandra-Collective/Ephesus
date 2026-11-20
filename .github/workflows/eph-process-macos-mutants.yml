@@ -1,0 +1,105 @@
+name: Darwin process guard mutations
+
+on:
+  workflow_dispatch:
+  # Architect-approved opt-in bootstrap before this workflow reaches main.
+  push:
+    branches: [feature/r2-1-eph-pty]
+    paths: [.github/workflows/eph-process-macos-mutants.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  darwin-guards:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[verify-darwin]')
+    name: Native Darwin guards and negative control
+    runs-on: macos-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_MUTANTS_JOBS: '2'
+      CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT: '120'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pinned toolchain and native condition
+        run: |
+          rustup toolchain install
+          rustc --version --verbose
+          uname -a
+          git rev-parse HEAD
+      - name: Cache the approved mutation tool and registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/bin/cargo-mutants
+          key: darwin-mutants-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-27.1.0
+      - name: cargo-mutants 27.1.0 (approved, RUST-CRATES.md)
+        run: |
+          if ! cargo mutants --version | grep -Fx 'cargo-mutants 27.1.0'; then
+            cargo install cargo-mutants --version 27.1.0 --locked
+          fi
+      # Scope the mutations to the native shutdown guards, while running both
+      # eph-process and its real PTY caller. The control uses the same selection
+      # and one shard with the project's filter that matches no test (GYM-008).
+      - name: Round, control, and unchanged-source proof
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/darwin-process-mutants"
+          mkdir -p "$base"
+          git ls-files -z -- crates xtask .cargo Cargo.toml Cargo.lock rust-toolchain.toml |
+            xargs -0 shasum -a 256 > "$base/sources-before.txt"
+          args=(--package eph-process --package eph-pty
+            --test-package eph-process --test-package eph-pty
+            --file crates/eph-process/src/unix.rs
+            --re 'Child::terminate_group|Child::group_signal_failure|Child::is_macos_zombie_group|group_contains_only_root|is_only_root'
+            --no-shuffle)
+          unset CARGO_TARGET_DIR
+          set +e
+          cargo mutants "${args[@]}" --output "$base/round" > "$base/round.log" 2>&1
+          round_status=$?
+          cat "$base/round.log"
+          cargo mutants "${args[@]}" --output "$base/control" --shard 1/4 -- -- \
+            __ephesus_mutants_control_matches_no_test__ > "$base/control.log" 2>&1
+          control_status=$?
+          cat "$base/control.log"
+          set -e
+          printf '%s\n' "$round_status" > "$base/round-status.txt"
+          printf '%s\n' "$control_status" > "$base/control-status.txt"
+          git ls-files -z -- crates xtask .cargo Cargo.toml Cargo.lock rust-toolchain.toml |
+            xargs -0 shasum -a 256 > "$base/sources-after.txt"
+          diff -u "$base/sources-before.txt" "$base/sources-after.txt"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          base = Path(os.environ['RUNNER_TEMP']) / 'darwin-process-mutants'
+          reports = {}
+          for name in ('round', 'control'):
+              report = json.loads((base / name / 'mutants.out' / 'outcomes.json').read_text())
+              baseline = [o for o in report['outcomes'] if o['scenario'] == 'Baseline']
+              assert len(baseline) == 1 and baseline[0]['summary'] == 'Success', (name, baseline)
+              total, caught, missed, timeout, unviable = (
+                  report[k] for k in ('total_mutants', 'caught', 'missed', 'timeout', 'unviable'))
+              assert all(type(n) is int and n >= 0 for n in (total, caught, missed, timeout, unviable))
+              assert total == caught + missed + timeout + unviable, (name, report)
+              assert total > unviable and timeout == 0, (name, report)
+              reports[name] = (total, caught, missed, unviable)
+          assert reports['round'][2] == 0, reports
+          assert reports['control'][1] == 0, reports
+          assert reports['control'][2] == reports['control'][0] - reports['control'][3], reports
+          assert (base / 'round-status.txt').read_text().strip() == '0'
+          assert (base / 'control-status.txt').read_text().strip() == '2'
+          print('ROUND OK (native Darwin guard scope):', reports)
+          PY
+      - name: Keep the round, control, and source fingerprints
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: darwin-process-mutants-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/darwin-process-mutants
+          if-no-files-found: error

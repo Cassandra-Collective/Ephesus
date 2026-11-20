@@ -188,6 +188,27 @@ mod tests {
     }
 
     #[test]
+    fn an_explicit_or_empty_name_cannot_be_replaced_by_a_path_candidate() {
+        let cwd = tempfile::tempdir().unwrap();
+        let bin = cwd.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        write_atomic(&bin.join("tool.exe"), b"").unwrap();
+        write_atomic(&bin.join(".exe"), b"").unwrap();
+        let environment = [
+            ("PATH".into(), bin.as_os_str().to_owned()),
+            ("PATHEXT".into(), ".exe".into()),
+        ];
+        assert_eq!(
+            resolve_executable(OsStr::new("./tool.exe"), cwd.path(), &environment),
+            Path::new("./tool.exe")
+        );
+        assert_eq!(
+            resolve_executable(OsStr::new(""), cwd.path(), &environment),
+            Path::new("")
+        );
+    }
+
+    #[test]
     fn npm_shim_uses_its_own_directory_and_requires_an_existing_target() {
         let cwd = tempfile::tempdir().unwrap();
         let bin = cwd.path().join("node_modules");
@@ -199,6 +220,12 @@ mod tests {
         assert_eq!(unwrap_windows_shim(&shim), None);
         write_atomic(&target, b"").unwrap();
         assert_eq!(unwrap_windows_shim(&shim), Some(target));
+        let batch = cwd.path().join("tool.bat");
+        write_atomic(&batch, body.as_bytes()).unwrap();
+        assert_eq!(unwrap_windows_shim(&batch), Some(bin.join("tool.exe")));
+        let ordinary = cwd.path().join("tool.txt");
+        write_atomic(&ordinary, body.as_bytes()).unwrap();
+        assert_eq!(unwrap_windows_shim(&ordinary), None);
     }
 
     #[test]
@@ -211,6 +238,9 @@ mod tests {
             format!("@echo off\r\nREM {decoy}\r\necho {decoy}\r\n"),
             format!("{NPM_HEADER}echo {decoy} %*\r\n"),
             format!("{NPM_HEADER}{decoy} %*\r\necho trailing command\r\n"),
+            format!("{NPM_HEADER}{decoy} argument\r\n"),
+            format!("{NPM_HEADER}\"%bad%\\tool.exe\" %*\r\n"),
+            format!("{NPM_HEADER}\"%dp0%tool.exe\" %*\r\n"),
         ] {
             write_atomic(&shim, body.as_bytes()).unwrap();
             assert_eq!(unwrap_windows_shim(&shim), None, "{body}");

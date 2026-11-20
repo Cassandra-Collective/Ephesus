@@ -66,6 +66,11 @@ tests, but the ratchet refused the lowest macOS `eph-git` measurement
 (98.93% against a 98.96% floor). The Git fault tests now cover two recovery
 paths deterministically. CI must measure the final tree three times on each
 platform before seeding the floors (ENGINEERING-STANDARDS §1.1).
+The package audit also reopened the native and PTY guard mutation proof.
+The added regressions pass 39 tests on Windows and 31 in the Linux guest;
+controlled rounds are running, with an approved native macOS workflow for
+Darwin's shutdown guards. R2.1 stays unticked until those proofs and the
+final coverage ratchet pass.
 A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
 `.gitignore`, rendered at every boot, keeps `write_atomic`'s temporaries out of history

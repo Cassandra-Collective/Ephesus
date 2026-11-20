@@ -965,6 +965,185 @@ mod tests {
     }
 
     #[test]
+    fn native_geometry_accepts_the_maximum_and_rejects_each_invalid_axis() {
+        for (cols, rows) in [(1, 1), (32767, 32767)] {
+            let result = dimensions(cols, rows).unwrap();
+            assert_eq!((result.X, result.Y), (cols as i16, rows as i16));
+        }
+        for (cols, rows) in [(0, 1), (1, 0), (32768, 1), (1, 32768)] {
+            assert_eq!(
+                dimensions(cols, rows).err().unwrap().kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+    }
+
+    #[test]
+    fn process_search_resolves_a_real_supplied_path_and_refuses_an_absent_program() {
+        let executable = env::current_exe().unwrap();
+        let bin = executable.parent().unwrap();
+        let name = executable.file_name().unwrap();
+        assert_eq!(
+            resolve_process_executable(name, Some(bin.as_os_str())).unwrap(),
+            executable
+        );
+        assert_eq!(
+            resolve_process_executable(
+                OsStr::new("ephesus-absent-fixture-47c895.exe"),
+                Some(bin.as_os_str())
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn system_paths_grow_their_buffer_and_refuse_incomplete_results() {
+        unsafe extern "system" fn long_path(out: *mut u16, size: u32) -> u32 {
+            if size < 301 {
+                return 301;
+            }
+            for index in 0..300 {
+                // SAFETY: the reported capacity covers these 300 units and NUL.
+                unsafe {
+                    out.add(index).write(u16::from(b'x'));
+                }
+            }
+            // SAFETY: the supplied capacity has room for the terminator.
+            unsafe {
+                out.add(300).write(0);
+            }
+            300
+        }
+        unsafe extern "system" fn unavailable(_: *mut u16, _: u32) -> u32 {
+            0
+        }
+        unsafe extern "system" fn incomplete(_: *mut u16, size: u32) -> u32 {
+            size + 1
+        }
+
+        assert!(system_directory(GetSystemDirectoryW).unwrap().is_dir());
+        assert!(system_directory(GetWindowsDirectoryW).unwrap().is_dir());
+        assert_eq!(
+            system_directory(long_path).unwrap(),
+            PathBuf::from("x".repeat(300))
+        );
+        assert_eq!(system_directory(unavailable), None);
+        assert_eq!(system_directory(incomplete), None);
+    }
+
+    #[test]
+    fn native_arguments_preserve_quotes_and_trailing_backslashes() {
+        for (input, expected) in [
+            ("", "\"\""),
+            ("plain", "\"plain\""),
+            ("a\\b", "\"a\\b\""),
+            ("a\"b", "\"a\\\"b\""),
+            ("a\\", "\"a\\\\\""),
+            ("a\\\"b", "\"a\\\\\\\"b\""),
+        ] {
+            let mut encoded = Vec::new();
+            quote(&mut encoded, OsStr::new(input)).unwrap();
+            assert_eq!(String::from_utf16(&encoded).unwrap(), expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn batch_arguments_and_error_codes_preserve_the_checked_contract() {
+        for extension in ["cmd", "bat"] {
+            let path = PathBuf::from(format!("C:\\fixture dir\\tool.{extension}"));
+            let (program, command) = launch_arguments(&path, &["arg with space".into()]).unwrap();
+            assert!(
+                OsString::from_wide(&program[..program.len() - 1])
+                    .to_string_lossy()
+                    .ends_with("cmd.exe")
+            );
+            let command = String::from_utf16(&command[..command.len() - 1]).unwrap();
+            assert!(command.contains("cmd.exe /d /s /e:on /v:off /c"));
+            assert!(command.contains("\"arg with space\""));
+            assert!(batch_arguments(&path, &["x".repeat(8192).into()]).is_err());
+            for prefix in [r"\\?\C:\", r"\\.\C:\"] {
+                let device = PathBuf::from(format!("{prefix}tool.{extension}"));
+                assert_eq!(
+                    batch_arguments(&device, &[]).unwrap_err().kind(),
+                    io::ErrorKind::InvalidInput
+                );
+            }
+        }
+        for input in [
+            "\0", "\n", "\"", "%value%", "!", "^", "&", "|", "<", ">", "(", ")",
+        ] {
+            assert!(
+                batch_quote(&mut Vec::new(), OsStr::new(input), false).is_err(),
+                "{input:?}"
+            );
+        }
+        let mut normal = Vec::new();
+        batch_quote(&mut normal, OsStr::new("a value\\with\\slashes"), false).unwrap();
+        assert_eq!(
+            String::from_utf16(&normal).unwrap(),
+            "\"a value\\with\\slashes\""
+        );
+        checked(1).unwrap();
+        // SAFETY: SetLastError only sets this test thread's error slot.
+        unsafe {
+            windows_sys::Win32::Foundation::SetLastError(5);
+        }
+        assert_eq!(checked(0).unwrap_err().raw_os_error(), Some(5));
+        for success in [0, 1] {
+            hresult(success).unwrap();
+        }
+        assert_eq!(
+            hresult(0x8007_0005_u32 as i32).unwrap_err().raw_os_error(),
+            Some(5)
+        );
+        assert!(
+            hresult(0x8000_4005_u32 as i32)
+                .unwrap_err()
+                .to_string()
+                .contains("0x80004005")
+        );
+        assert_eq!(
+            compare_environment_keys(
+                &wide_terminated(OsStr::new("Z")).unwrap(),
+                &wide_terminated(OsStr::new("a")).unwrap()
+            ),
+            Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn closing_the_console_ends_attached_clients_and_the_output_stream() {
+        let executable = env::current_exe().unwrap();
+        let cwd = env::current_dir().unwrap();
+        let args = FIXTURE.map(OsString::from);
+        let environment = [(FIXTURE_DEPTH.into(), "0".into())];
+        let Terminal {
+            child,
+            input,
+            output,
+            console,
+        } = spawn_terminal(
+            Launch {
+                executable: &executable,
+                args: &args,
+                cwd: &cwd,
+                environment: &environment,
+            },
+            80,
+            24,
+        )
+        .unwrap();
+        let stdout = FixtureOutput::collect(output);
+        let _members = wait_for_live_tree(&child, &stdout, None);
+        drop(console);
+        drop(input);
+        until(|| child.try_wait().unwrap().is_some());
+        stdout.expect_eof();
+    }
+
+    #[test]
     fn relative_process_search_entries_use_the_parent_directory() {
         let executable = env::current_exe().unwrap();
         let bin = executable.parent().unwrap();

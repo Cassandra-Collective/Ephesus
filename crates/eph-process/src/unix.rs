@@ -112,7 +112,7 @@ pub struct Terminal {
 pub fn spawn_terminal(mut command: Command, cols: u16, rows: u16) -> io::Result<Terminal> {
     let mut size = dimensions(cols, rows)?;
     let _launch = launch_lock()?;
-    let (mut master, mut slave) = (-1, -1);
+    let (mut master, mut slave) = (0, 0);
     // SAFETY: the return slots and initial size are valid. Passing null for
     // the optional name buffer and termios avoids buffer and ownership issues.
     checked(unsafe {
@@ -224,19 +224,27 @@ impl Child {
         // id assigned to the dedicated group at creation, never zero or init.
         let result = unsafe { libc::kill(-group, libc::SIGKILL) };
         if result != 0 {
-            let error = io::Error::last_os_error();
-            #[cfg(target_os = "macos")]
-            if error.raw_os_error() == Some(libc::EPERM)
-                && self.exit_pending().unwrap_or(false)
-                && group_contains_only_root(group)
-            {
-                return Ok(());
-            }
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                return Err(error);
-            }
+            return self.group_signal_failure(group, io::Error::last_os_error());
         }
         Ok(())
+    }
+
+    fn group_signal_failure(&self, _group: libc::pid_t, error: io::Error) -> io::Result<()> {
+        #[cfg(target_os = "macos")]
+        if self.is_macos_zombie_group(_group, &error) {
+            return Ok(());
+        }
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn is_macos_zombie_group(&self, group: libc::pid_t, error: &io::Error) -> bool {
+        error.raw_os_error() == Some(libc::EPERM)
+            && self.exit_pending().unwrap_or(false)
+            && group_contains_only_root(group)
     }
 
     /// Read the root's exit status when available. For a PTY, shut down any
@@ -277,6 +285,11 @@ fn group_contains_only_root(group: libc::pid_t) -> bool {
             size_of_val(&members) as libc::c_int,
         )
     };
+    is_only_root(group, count, members)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn is_only_root(group: libc::pid_t, count: libc::c_int, members: [libc::pid_t; 2]) -> bool {
     count == 1 && members[0] == group
 }
 
@@ -323,6 +336,34 @@ mod tests {
     const FIXTURE_DEPTH: &str = "EPH_GROUP_FIXTURE_DEPTH";
     const FIXTURE: [&str; 3] = ["--exact", "unix::tests::group_fixture", "--nocapture"];
     const SIZE_FIXTURE: &str = "EPH_POSIX_TEST_SIZE";
+    const ESCAPE_GROUP: &str = "EPH_POSIX_TEST_JOIN_GROUP";
+
+    #[test]
+    fn native_error_and_pid_boundaries_preserve_failures() {
+        assert!(terminal_eof(&io::Error::from_raw_os_error(libc::EIO)));
+        assert!(!terminal_eof(&io::Error::from_raw_os_error(libc::EINTR)));
+        assert!(!terminal_eof(&io::Error::other("unrelated read error")));
+        checked(0).unwrap();
+        checked(1).unwrap();
+        assert!(checked(-1).is_err());
+        assert_eq!(group_id(2).unwrap(), 2);
+        assert!(group_id(0).is_err());
+        assert!(group_id(1).is_err());
+        assert!(group_id(u32::MAX).is_err());
+        assert!(exit_pending(1).is_err(), "init is not a child of this test");
+        assert!(dimensions(0, 1).is_err());
+        assert!(dimensions(1, 0).is_err());
+        let largest = dimensions(u16::MAX, u16::MAX).unwrap();
+        assert_eq!((largest.ws_col, largest.ws_row), (u16::MAX, u16::MAX));
+    }
+
+    #[test]
+    fn a_group_query_requires_exactly_one_member_with_the_root_identity() {
+        assert!(is_only_root(37, 1, [37, 0]));
+        for (count, members) in [(0, [37, 0]), (2, [37, 38]), (1, [38, 0]), (-1, [37, 0])] {
+            assert!(!is_only_root(37, count, members));
+        }
+    }
 
     #[test]
     fn geometry_fixture() {
@@ -389,6 +430,8 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         drain.join().unwrap();
+        assert_eq!(child.try_wait().unwrap(), Some(ExitStatus::Code(0)));
+        assert!(child.exit_pending().unwrap());
     }
 
     #[test]
@@ -407,6 +450,12 @@ mod tests {
             libc::SIG_ERR
         );
         let depth: u8 = depth.parse().unwrap();
+        if let Ok(group) = env::var(ESCAPE_GROUP) {
+            let group: libc::pid_t = group.parse().unwrap();
+            // SAFETY: this disposable child joins another test-owned group
+            // in the same session. It never signals that group.
+            checked(unsafe { libc::setpgid(0, group) }).unwrap();
+        }
         let mut child = if depth < 2 {
             Some(
                 Command::new(env::current_exe().unwrap())
@@ -454,6 +503,7 @@ mod tests {
         #[cfg(target_os = "macos")]
         assert!(!group_contains_only_root(child.group.unwrap()));
         assert_eq!(child.try_wait().unwrap(), None);
+        assert!(!child.exit_pending().unwrap());
         child.terminate_group().unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         let status = loop {
@@ -464,6 +514,7 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         };
         assert_eq!(status, ExitStatus::Signal(libc::SIGKILL.to_string()));
+        assert!(child.exit_pending().unwrap());
         assert_eq!(
             observations.recv_timeout(Duration::from_secs(2)),
             Err(mpsc::RecvTimeoutError::Disconnected),
@@ -474,5 +525,141 @@ mod tests {
             "a reaped PID can no longer be signaled"
         );
         drain.join().unwrap();
+    }
+
+    #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "process: prove that background disposal collects an actual child status"
+    )]
+    fn reaping_a_terminated_owned_child_leaves_no_waitable_root() {
+        let mut command = Command::new(env::current_exe().unwrap());
+        command.args(FIXTURE).env(FIXTURE_DEPTH, "2");
+        let Piped {
+            mut child,
+            stdout,
+            stderr,
+        } = spawn_piped(&mut command).unwrap();
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        while !line.contains("eph group member 2") {
+            line.clear();
+            assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+        }
+        let pid = child.root.id() as libc::pid_t;
+        assert!(!child.exit_pending().unwrap());
+        child.terminate_group().unwrap();
+        child.reap();
+        assert!(
+            exit_pending(pid).is_err(),
+            "the root status was already collected"
+        );
+        drop(reader);
+        drop(stderr);
+    }
+
+    #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "process: prove ESRCH and the approved limit with a root that leaves its owned group"
+    )]
+    fn a_root_that_changes_groups_survives_shutdown_of_its_original_group() {
+        let mut recipient_command = Command::new(env::current_exe().unwrap());
+        recipient_command.args(FIXTURE).env(FIXTURE_DEPTH, "2");
+        let Piped {
+            child: mut recipient,
+            stdout: recipient_stdout,
+            stderr: _recipient_stderr,
+        } = spawn_piped(&mut recipient_command).unwrap();
+        let mut recipient_reader = BufReader::new(recipient_stdout);
+        let mut ready = String::new();
+        while !ready.contains("eph group member 2") {
+            ready.clear();
+            assert_ne!(recipient_reader.read_line(&mut ready).unwrap(), 0);
+        }
+        let recipient_group = recipient.group.unwrap();
+        let mut command = Command::new(env::current_exe().unwrap());
+        command
+            .args(FIXTURE)
+            .env(FIXTURE_DEPTH, "2")
+            .env(ESCAPE_GROUP, recipient_group.to_string());
+        let Piped {
+            mut child,
+            stdout,
+            stderr,
+        } = spawn_piped(&mut command).unwrap();
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        while !line.contains("eph group member 2") {
+            line.clear();
+            assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+        }
+        let group = child.group.unwrap();
+        assert!(!child.exit_pending().unwrap());
+        // SAFETY: getpgid only observes the still-owned root's current group.
+        assert_eq!(unsafe { libc::getpgid(group) }, recipient_group);
+        child
+            .group_signal_failure(group, io::Error::from_raw_os_error(libc::ESRCH))
+            .unwrap();
+        for code in [libc::EINVAL, libc::EPERM] {
+            assert_eq!(
+                child
+                    .group_signal_failure(group, io::Error::from_raw_os_error(code))
+                    .unwrap_err()
+                    .raw_os_error(),
+                Some(code)
+            );
+        }
+        child.terminate_group().unwrap();
+        assert!(
+            !child.exit_pending().unwrap(),
+            "the escaped root is outside the guarantee"
+        );
+        child.root.kill().unwrap();
+        assert!(!child.root.wait().unwrap().success());
+        recipient.terminate_group().unwrap();
+        recipient.reap();
+        drop(reader);
+        drop(stderr);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "process: exercise Darwin's EPERM classification against live and zombie native groups"
+    )]
+    fn darwin_permission_exception_requires_an_exited_root_alone_and_eperm() {
+        let mut command = Command::new(env::current_exe().unwrap());
+        command.args(FIXTURE).env(FIXTURE_DEPTH, "2");
+        let Piped {
+            mut child,
+            stdout,
+            stderr,
+        } = spawn_piped(&mut command).unwrap();
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        while !line.contains("eph group member 2") {
+            line.clear();
+            assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+        }
+        let group = child.group.unwrap();
+        let eperm = io::Error::from_raw_os_error(libc::EPERM);
+        assert!(group_contains_only_root(group));
+        assert!(!child.is_macos_zombie_group(group, &eperm));
+        child.root.kill().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !child.exit_pending().unwrap() {
+            assert!(Instant::now() < deadline, "root did not become waitable");
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(group_contains_only_root(group));
+        assert!(child.is_macos_zombie_group(group, &eperm));
+        assert!(!child.is_macos_zombie_group(group, &io::Error::from_raw_os_error(libc::EINVAL)));
+        child.terminate_group().unwrap();
+        child.reap();
+        assert!(!group_contains_only_root(group));
+        drop(reader);
+        drop(stderr);
     }
 }
