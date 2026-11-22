@@ -66,17 +66,23 @@ tests, but the ratchet refused the lowest macOS `eph-git` measurement
 (98.93% against a 98.96% floor). The Git fault tests now cover two recovery
 paths deterministically. CI must measure the final tree three times on each
 platform before seeding the floors (ENGINEERING-STANDARDS §1.1).
-The package audit also reopened the native and PTY guard mutation proof.
-The consolidated regressions pass 38 tests on Windows and 30 in the Linux guest;
-controlled rounds are running, with an approved native macOS workflow for
-Darwin's shutdown guards. R2.1 stays unticked until those proofs and the
-final coverage ratchet pass.
-The Darwin guard workflow passed 17 mutations with five surviving controls
+The Darwin guard workflow caught 17 mutations with five control misses
 on `681043f`. That tree's Windows CI found a PowerShell fixture timeout.
 The approved follow-up uses native terminal observation from the Rust child
-fixture and strengthens the Git and session cleanup proofs. Its
+fixture and strengthens the Git and session cleanup proofs. On `5c88a65`,
+the Windows and Linux guest rounds, their controls, and the retained native
+Darwin results cover the applicable guard mutations. The Windows gate passed
+its first six steps and reached coverage with only the two new floors
+missing. The
 [guard specification and evidence](./implementations/2026-11-20-r2-1-guard-proof.md)
-distinguish completed earlier rounds from the final certification still owed.
+records the source fingerprint, platform limits and controls.
+The Architect approved publishing `5c88a65`. Its
+[CI run](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45010830867)
+produced three measurements each on Windows and Linux and two on macOS.
+The third macOS run passed its plain suite, then an instrumented Git shutdown
+test timed out waiting for its pipes after root exit. The ratchet refused the
+incomplete set. Investigate the native shutdown before collecting the
+remaining evidence and closing R2.1.
 A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
 `.gitignore`, rendered at every boot, keeps `write_atomic`'s temporaries out of history
@@ -128,7 +134,7 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19. **R0 and R1 are done.** R2.1 is in local verification. The rewrite runs before M9. | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19. **R0 and R1 are done.** R2.1 has local proof and awaits final CI. The rewrite runs before M9. | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 
@@ -616,8 +622,9 @@ and opens when #104 merges.
 - [ ] **R2** The terminal plane and the engine seam (package list approved 2026-10-25)
   - [ ] **R2.1 `eph-pty`** — spawn, write, resize, interrupt, kill; PATH resolution; the
     redaction filter. The [probe](./implementations/2026-11-16-r2-1-pty-tree-probe.md)
-    informed the owned shutdown contract. The PTY and Git deadline paths are
-    implemented locally. Coverage ratcheting and the macOS runtime check await CI.
+    informed the owned shutdown contract. The PTY and Git deadline paths have
+    controlled local proof. Native CI on the final source, coverage ratcheting
+    and the final gate are pending.
   - [ ] **R2.2 `eph-engines`** — the adapter trait, the `claude` adapter, `codex` and
     `gemini` as conformance subjects.
   - [ ] **R2.3 The agent manager** — spawn ordering, the install offer, the exit unwind,

@@ -199,7 +199,104 @@ in `eph-pty` alone. Its required results are a one-test baseline, a failure
 at the geometry assertion with the observed `1x1` value, the same viable
 plant missed with zero tests, and restoration of all 82 inputs.
 
-The public caller plant, dedicated encoding-return and attribute-pointer
-proofs, remaining Linux classification, current-source gates and the
-three-attempt native CI coverage ratchet remain pending. Earlier CI
-measurements cannot seed the changed source's floors.
+On the isolated `5c88a65` copy the public baseline and restored run each
+passed one test. The plant printed `fixture-geometry=1x1` and failed at the
+public geometry assertion in `session.rs:499`. The control baseline and
+planted control each ran zero tests and returned success. All 82 tracked
+inputs matched after restoration.
+
+The default Windows workspace run failed three Git deadline fixture tests
+under concurrent load. All 25 focused runner tests passed with one test
+thread. On the corrected tree, `cargo xtask gate` with two test threads
+passed formatting, Clippy, the plain and instrumented suites, dependency
+checks and invariants. Both builds passed 119 Git, 16 native process and
+23 PTY tests. Coverage emitted the corrected fingerprint and zero untested
+modules. All existing floors passed. The only two coverage findings were the
+unseeded `eph-process` and `eph-pty` floors. The five frozen TypeScript
+checks passed.
+
+The isolated Windows encoding-return round ran 15 mutations. Fourteen had
+failing-test summaries and the empty `wide_terminated` return aborted with
+`STATUS_ACCESS_VIOLATION`. Its four viable controls all missed. The empty
+return was then tested against the existing NUL-path validation alone.
+It failed that Rust assertion, and the same mutation missed in its one-case
+control. Together the two scopes give assertion evidence for all ten prior
+link failures. Both pairs had successful baselines, no timeouts, and all 82
+source hashes restored.
+
+The single `Attributes::as_ptr` default-pointer mutation reproduced
+`STATUS_ACCESS_VIOLATION` during the native tests. The sharded control
+selected zero cases, so it was discarded. The same mutation missed in
+the unsharded zero-tests control. The baseline passed and all 82 source
+hashes matched. The positive result is an observed native abort.
+
+On Linux, the corrected source ran with Rust 1.96.0 for
+`i686-unknown-linux-musl` in the Linux guest, using cargo-mutants 27.1.0.
+The baseline passed eight native and 22 PTY tests. The positive round
+finished 146 cases with 119 failing-test summaries, 19 mutation-caused
+compiler rejections, eight survivors, and zero timeouts.
+
+Seven Linux survivors are in Darwin-only guards and match catches in
+the native macOS artifact. The remaining survivor is the Windows-only
+PATHEXT filter, which has a Windows assertion failure. Linux caught
+the shared Session Drop, backend dispose body and disposal condition
+survivors from Windows in the public session Drop test. It also caught
+the Unix-only environment-name equality and both EIO guard constants.
+The two Windows geometry sign survivors are covered by the corrected
+observer proof above.
+
+The Linux control selected 37 cases. All 36 viable cases missed with zero
+tests running. The remaining case was rejected by the Rust compiler.
+Both baselines passed and there were no timeouts. The positive round and
+control each returned exit 2. All 82 input hashes match before and after
+and agree with the working tree. With the applicable-platform matches
+above, the broad rounds retain their raw survivor results while each
+surviving guard has its relevant test evidence.
+
+### Native CI on the corrected source
+
+[CI run 45010830867](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45010830867)
+measured `5c88a65` with coverage fingerprint `fnv1a64:f7b4cd7840aa1e7e`.
+Linux and Windows uploaded all three reports. macOS uploaded the first two.
+All eight reports have the exact run, attempt, commit and source fingerprint,
+use cargo-llvm-cov 0.9.1, and list zero untested modules. The available
+measurements passed the existing floors. Windows passed the public resize
+test in both builds on all three attempts.
+
+[macOS attempt 3](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45010830867/job/137178294793)
+passed the plain Git suite. The instrumented
+`native_adapter_observes_a_ready_child_before_and_after_owned_shutdown`
+test timed out waiting for pipe EOF at `runner.rs:1000`. The shutdown call
+and root exit observation had already returned successfully. Runner cleanup
+later reported one orphaned `sleep`. Its process group was not recorded.
+The coverage run failed and emitted no macOS artifact for that attempt.
+
+The fixture prints its readiness marker before starting `sleep`. Apple's
+[group signal implementation](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/kern/kern_sig.c#L1612)
+uses a [member snapshot](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/kern/kern_proc.c#L4058)
+that is collected before signal delivery. A fork during delivery is compatible
+with the observed timeout. The log does not establish that the surviving
+process belonged to the owned group or establish when it joined.
+
+The official ratchet returned exit 1 with `macos: 2 of the 3 CI runs a raise
+needs`. The floors file's hash stayed unchanged. R2.1 remains open pending
+resolution of the shutdown failure and a complete native coverage set.
+
+### macOS diagnostic candidate
+
+The diagnostic is confined to the failing test. It records Git's PID and
+native PGID before the fixture starts `sleep`, and retains the unreaped root
+while waiting for both pipes. If a pipe times out, it records the PID, PGID,
+state and command name for members of that group, then sends a second group
+signal through the existing owner and records whether the pipe closes.
+The original timeout still fails the test even if the second signal works.
+Native execution is required to distinguish a surviving member from an
+unrelated orphan and to determine whether a second signal recovers the pipe.
+
+Darwin-target Clippy and both shell syntax checks passed on the final
+diagnostic revision. The Windows gate passed its plain and instrumented
+suites with two test threads, then stopped at the two unseeded floors.
+The plain stage preceded the final macOS-only readiness check. The
+instrumented stage included it and emitted fingerprint
+`fnv1a64:4ad973daec75238a` with zero untested modules. The five frozen
+TypeScript checks passed.
