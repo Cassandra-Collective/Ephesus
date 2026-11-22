@@ -20,7 +20,8 @@ use std::{
 };
 #[cfg(any(test, feature = "test-support"))]
 use windows_sys::Win32::System::Console::{
-    CONSOLE_SCREEN_BUFFER_INFO, GetConsoleScreenBufferInfo, GetStdHandle, STD_OUTPUT_HANDLE,
+    CONSOLE_SCREEN_BUFFER_INFO, GetConsoleScreenBufferInfo, GetStdHandle, SMALL_RECT,
+    STD_OUTPUT_HANDLE,
 };
 use windows_sys::Win32::{
     Foundation::{
@@ -56,9 +57,15 @@ pub fn current_terminal_size() -> io::Result<(u16, u16)> {
     // SAFETY: the process's console handle is queried into a valid output
     // structure. The API validates whether this process has a console.
     checked(unsafe { GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &mut info) })?;
-    let cols = info.srWindow.Right - info.srWindow.Left + 1;
-    let rows = info.srWindow.Bottom - info.srWindow.Top + 1;
-    Ok((cols as u16, rows as u16))
+    Ok(window_cells(info.srWindow))
+}
+
+// Console bounds include both corners and may have a nonzero origin.
+#[cfg(any(test, feature = "test-support"))]
+fn window_cells(window: SMALL_RECT) -> (u16, u16) {
+    let cols = window.Right - window.Left + 1;
+    let rows = window.Bottom - window.Top + 1;
+    (cols as u16, rows as u16)
 }
 
 /// A complete launch plan supplied by a trusted process-owning crate.
@@ -972,6 +979,24 @@ mod tests {
         assert_eq!(environment_block(&[]).unwrap(), [0, 0]);
     }
 
+    #[test]
+    fn console_window_cells_include_both_corners_at_zero_and_nonzero_origins() {
+        for (left, top, right, bottom, expected) in [
+            (0, 0, 100, 26, (101, 27)),
+            (7, 11, 107, 37, (101, 27)),
+            (7, 11, 7, 11, (1, 1)),
+        ] {
+            assert_eq!(
+                window_cells(SMALL_RECT {
+                    Left: left,
+                    Top: top,
+                    Right: right,
+                    Bottom: bottom,
+                }),
+                expected
+            );
+        }
+    }
     #[test]
     fn native_geometry_accepts_the_maximum_and_rejects_each_invalid_axis() {
         for (cols, rows) in [(1, 1), (32767, 32767)] {
