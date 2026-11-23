@@ -44,7 +44,7 @@ never edit an accepted ADR; supersede it.
 The Rust workspace (from R0.1; set `CARGO_TARGET_DIR` outside OneDrive first):
 
 ```bash
-cargo xtask gate   # fmt, clippy -D warnings, test, deny, invariants, deps (RUST-PLAN §4)
+cargo xtask gate   # fmt, clippy -D warnings, test, deny, invariants, deps, coverage (RUST-PLAN §4)
 ```
 
 The frozen TypeScript tree (its CI still guards `main` until R14):

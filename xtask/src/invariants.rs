@@ -683,9 +683,14 @@ impl<'ast> Visit<'ast> for Coverage<'_> {
             if is_command_new(&segments, self.aliases) {
                 self.covered.process = true;
             }
-            if [&["fs", "write"][..], &["File", "create"], &["fs", "copy"]]
-                .iter()
-                .any(|tail| ends_with(&segments, tail))
+            if [
+                &["fs", "write"][..],
+                &["File", "create"],
+                &["File", "create_new"],
+                &["fs", "copy"],
+            ]
+            .iter()
+            .any(|tail| ends_with(&segments, tail))
             {
                 self.covered.fs_write = true;
             }
@@ -1380,6 +1385,7 @@ mod tests {
             "let _ = std::fs::copy(\"a\", \"b\");",
             "let _ = fs::write(\"a\", \"b\");",
             "let _ = File::create(\"a\");",
+            "let _ = File::create_new(\"a\");",
         ] {
             let src = format!(
                 "use std::fs;\nuse std::fs::File;\n#[expect(clippy::disallowed_methods, reason = \"process: x\")]\nfn f(o: &mut fs::OpenOptions) {{ {body} }}\n"

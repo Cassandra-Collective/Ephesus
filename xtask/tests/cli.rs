@@ -10,6 +10,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::Command;
 
+use xtask::coverage::{Harness, Real};
 use xtask::gate::{CargoRunner, Check, Runner, workspace_root};
 
 const XTASK: &str = env!("CARGO_BIN_EXE_xtask");
@@ -117,4 +118,78 @@ fn the_real_runner_runs_each_check_and_returns_its_verdict() {
             "{check:?}"
         );
     }
+}
+
+#[test]
+fn coverage_with_unknown_arguments_is_a_usage_error() {
+    for args in [
+        &["coverage", "bogus"][..],
+        &["coverage", "ratchet"],
+        &["coverage", "emit", "x"],
+    ] {
+        let out = xtask(args).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr)
+                .contains("usage: cargo xtask coverage [emit | ratchet <dir>]"),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn a_ratchet_over_no_measurement_says_what_is_missing_and_prints_no_floors() {
+    let dir = std::env::temp_dir().join(format!("ephesus-ratchet-empty-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = xtask(&["coverage", "ratchet", dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    for os in ["linux", "macos", "windows"] {
+        assert!(
+            stderr.contains(&format!("coverage ratchet: {os}: 0 of the 3 CI runs")),
+            "{stderr}"
+        );
+    }
+    assert!(
+        out.stdout.is_empty(),
+        "a refused ratchet prints nothing to redirect"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_real_coverage_harness_returns_cargos_exit_code_or_none() {
+    let root = workspace_root();
+    let report = std::env::temp_dir()
+        .join("ephesus-no-report")
+        .join("lcov.info");
+    // The xtask binary stands in for cargo: `xtask llvm-cov ...` is an
+    // unknown command, which exits 2.
+    let mut stand_in = Real {
+        cargo: OsString::from(XTASK),
+    };
+    assert_eq!(stand_in.tool(), None, "a failing --version is no tool");
+    assert_eq!(stand_in.llvm_cov(&root, &report), Some(2));
+    let mut missing = Real {
+        cargo: OsString::from("ephesus-no-such-cargo-binary"),
+    };
+    assert_eq!(missing.tool(), None);
+    assert_eq!(missing.llvm_cov(&root, &report), None);
+}
+
+#[test]
+fn the_real_gate_runner_reports_a_coverage_step_without_its_tool_red() {
+    // The gate's coverage step through the real runner, with the xtask binary
+    // as cargo: its probe fails, so the step says how to install the tool and
+    // exits 1. A green coverage step needs a real instrumented run of a whole
+    // workspace, which `cargo xtask gate` performs on every invocation; a
+    // test of it here would nest one coverage run inside another (xtask
+    // mutation round 1 triage, 2026-10-20). The Some(1) mutant is excluded in
+    // .cargo/mutants.toml with that reason.
+    let mut runner = CargoRunner {
+        cargo: OsString::from(XTASK),
+    };
+    assert_eq!(runner.coverage(&workspace_root()), Some(1));
 }

@@ -28,14 +28,15 @@ Rust workspace. How each of the thirteen invariants holds in Rust is ADR-0041's
 invariant table. It lives there and is not restated here. What follows is the
 operational rules the workspace's first packages established (R0.1, R0.2).
 
-- **Toolchain.** `rust-toolchain.toml` pins 1.96.0 with rustfmt and clippy. A bump is a
-  reviewed commit. Set `CARGO_TARGET_DIR` outside OneDrive. `cargo xtask gate` warns
-  when it is unset inside a OneDrive folder.
+- **Toolchain.** `rust-toolchain.toml` pins 1.96.0 with rustfmt, clippy and llvm-tools
+  (the coverage step reads through them). A bump is a reviewed commit. Set
+  `CARGO_TARGET_DIR` outside OneDrive. `cargo xtask gate` warns when it is unset inside a
+  OneDrive folder.
 - **The gate** is `cargo xtask gate`: `fmt --check`, `clippy -D warnings`, `test`,
-  `cargo deny check`, `xtask invariants`, `xtask deps`, in that order, stopping at the
-  first red step (RUST-PLAN §4). It runs through the `cargo xtask` alias, which carries
-  `--locked`, so a stale `Cargo.lock` fails instead of being rewritten. CI's `rust` job
-  runs the same chain on Linux, Windows and macOS.
+  `cargo deny check`, `xtask invariants`, `xtask deps`, `xtask coverage`, in that order,
+  stopping at the first red step (RUST-PLAN §4). It runs through the `cargo xtask` alias,
+  which carries `--locked`, so a stale `Cargo.lock` fails instead of being rewritten.
+  CI's `rust` job runs the same chain on Linux, Windows and macOS.
 - **Lints.** Every crate opts into `[workspace.lints]` (`[lints] workspace = true`), and
   `xtask invariants` refuses one that does not. A disallowed method is exempted only by
   `#[expect(clippy::disallowed_methods, reason = "<category>: …")]`, where the category
@@ -52,6 +53,29 @@ operational rules the workspace's first packages established (R0.1, R0.2).
   INVALID by the five rules in `xtask/src/mutants.rs`. A test fixture must not live
   under `mutants.out/` or `target/`, because cargo-mutants does not copy either into the
   tree it mutates.
+- **Coverage floors** (Architect, 2026-10-20; R1.1) are `xtask/coverage-floors.json`:
+  one floor per crate, the lowest production line coverage of the three CI platforms.
+  Production lines are a crate's `src/` without the items compiled only for tests
+  (`#[cfg(test)]`, and any test attribute such as `#[test]`), read from the syntax
+  tree. `cargo xtask coverage` fails:
+  - a crate below its floor, a crate with no floor, and a floor with no crate;
+  - a production file no test enters, including one the report never names that holds
+    a function body;
+  - a platform more than the recorded lag above its own figure;
+  - a measurement taken with a tool other than the floors';
+  - code under `#[cfg(not(test))]`, which no test can run. Give the test build the same
+    code through a seam.
+
+  A floor rises only through `cargo xtask coverage ratchet <dir>`, over three CI runs
+  per platform of the current tree. Rerun the push's run with `gh run rerun <run>`, or
+  `--failed` while the `rust` job is red. Download each attempt's `rust-coverage-*`
+  artifact. The ratchet prints the new file for you to redirect and move into place.
+  Never edit a row by hand, never lower one, and never seed one from a single machine.
+  The floors file's validator refuses a floor below its own platform figures, a
+  tolerance over 1.00 point, and rows with no recorded runs. So the commit that adds a
+  crate is red at the coverage step until the next commit carries its seeded floor.
+  Write test modules inline: an out-of-line `#[cfg(test)] mod x;` is refused, because
+  its file would count as production.
 - **Before each commit of a Rust package** (Architect, 2026-10-19): `cargo xtask gate`,
   plus the frozen tree's checks a Rust change can break: `prettier --check .`,
   `eslint . --max-warnings 0`, `node scripts/check-invariants.cjs`,
@@ -235,9 +259,10 @@ A change is done when:
    tool that implied a score would replace the question a survivor asks.
    *(GYM-008.)* In the Rust workspace the round is `cargo xtask mutants <crate>`
    (§1.1), and its control is certified when every viable control mutant is missed.
-   The coverage half of item 7 arrives for Rust with `cargo-llvm-cov` floors at R1.
-   Until then a Rust package's evidence names its production call path, or records
-   that there is none.
+   The coverage half of item 7 holds for Rust through `cargo xtask coverage` and
+   `xtask/coverage-floors.json` (§1.1; R1.1). A Rust package's evidence still names its
+   production call path, or records that there is none, because a floor measures what
+   tests enter, not whether the application reaches it.
 
 ## 7. Agent-specific standards
 

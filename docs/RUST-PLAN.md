@@ -54,7 +54,7 @@ the binary settle what the engine does, never a guess):
 
 ```
 Cargo.toml                 workspace; [workspace.lints]; resolver 3
-rust-toolchain.toml        pinned 1.96.0 (+ rustfmt, clippy)
+rust-toolchain.toml        pinned 1.96.0 (+ rustfmt, clippy, llvm-tools)
 clippy.toml                disallowed_methods / disallowed_types (ADR-0041 table)
 deny.toml                  licenses + advisories (cargo-deny)
 crates/
@@ -119,7 +119,10 @@ One core library. `ephesus` runs it with a window, and `ephesusd` runs it with n
    rule at R2 and the token rule for `eph-ui` at R4.
 6. `xtask deps`: every direct dependency is listed in `RUST-CRATES.md`.
 7. From R1 on: coverage floors per crate (`cargo-llvm-cov`), ratcheted with the
-   project's existing rules (three runs per platform, never a lowered floor).
+   project's existing rules (three runs per platform, never a lowered floor). Built in
+   R1.1 as `xtask coverage`, over production lines only, with the floors in
+   `xtask/coverage-floors.json` and raised by `xtask coverage ratchet` from CI artifacts
+   (ENGINEERING-STANDARDS §1.1).
 
 CI runs the chain on `ubuntu-latest`, `windows-latest` and `macos-latest` in a new
 `rust` job (Architect, 2026-10-19). It uses first-party actions only, and cargo tools
@@ -168,12 +171,17 @@ fails a planted violation by file and line.
   every persisted schema, each redesigned from first principles with today's used only
   as a checklist of what must be covered, and each departure stated with its reason.
   It goes to the Architect for one approval before R1.1 starts. No code.
-- **R1.1** `eph-schema`: the persisted models, built to R1.0's approved design, and the
-  Rust coverage floors (`cargo-llvm-cov`, measured on all three CI platforms) starting
-  with this first crate.
+- **R1.1** `eph-schema`: the persisted models R1 needs, built to R1.0's approved design.
+  That means the primitives (versions, time, ids, refs), the home's settings and policy
+  files, `triggers.json` and `breaker-stops.json`, the registry, the task ledger, the
+  message, the log line and its degradation rows. Every other model is typed by the
+  phase that builds its subsystem, against SDD-RUST §4 (Architect, 2026-10-20). It also
+  starts the Rust coverage floors (`cargo-llvm-cov`): one floor per crate, the lowest of
+  the three CI platforms, ratcheted only from CI artifacts and never lowered.
 - **R1.2** `eph-fs`: `write_atomic`, the append-only JSONL writer (seq recovery, torn-tail
   tolerance), the home layout and first-boot seeding (`gate-policy.json`,
-  `authority.json`: only when absent, reported).
+  `authority.json`: only when absent, reported), and a home marker, so a TypeScript-era
+  home is reported once as one (Architect, 2026-10-20).
 - **R1.3** `eph-git`: the single committer (queue, retry and backoff, stale `index.lock`,
   startup reconcile, foreground housekeeping, literal pathspecs, hermetic config) and
   worktrees (FR-1.5's vacancy rule: nothing is deleted to make room).

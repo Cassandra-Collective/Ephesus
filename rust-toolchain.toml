@@ -2,5 +2,7 @@
 # without a commit that says so (RUST-PLAN R0.1). Bumping it is a reviewed change.
 [toolchain]
 channel = "1.96.0"
-components = ["rustfmt", "clippy"]
+# llvm-tools: cargo-llvm-cov reads its coverage through them, for the gate's
+# coverage step (RUST-PLAN §4 item 7; R1.1).
+components = ["rustfmt", "clippy", "llvm-tools"]
 profile = "minimal"

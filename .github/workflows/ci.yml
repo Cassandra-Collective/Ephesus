@@ -142,14 +142,34 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/bin/cargo-deny
             ~/.cargo/bin/cargo-deny.exe
+            ~/.cargo/bin/cargo-llvm-cov
+            ~/.cargo/bin/cargo-llvm-cov.exe
             target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-cargo-deny-0.20.2
+          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-cargo-deny-0.20.2-cargo-llvm-cov-0.9.1
       - name: cargo-deny 0.20.2 (approved, RUST-CRATES.md)
         run: cargo deny --version || cargo install cargo-deny --version 0.20.2 --locked
+      - name: cargo-llvm-cov 0.9.1 (approved, RUST-CRATES.md)
+        run: cargo llvm-cov --version || cargo install cargo-llvm-cov --version 0.9.1 --locked
       # Through the alias, which carries --locked: a stale Cargo.lock fails here
       # instead of being rewritten (R0.1 §6).
       - name: cargo xtask gate
         run: cargo xtask gate
+      # The measurement the coverage floors are raised from (R1.1,
+      # xtask/src/coverage.rs). It is kept even when the gate is red, because a
+      # crate stays red until its floor is seeded from these very artifacts. A
+      # run that never reached the coverage step leaves no fresh report, so emit
+      # refuses and nothing is kept. The name carries the attempt: the three
+      # runs per platform a raise needs are three attempts of one run.
+      - name: Emit the coverage measurement
+        if: always()
+        run: cargo xtask coverage emit > rust-coverage.json || rm -f rust-coverage.json
+      - name: Keep the coverage measurement
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage-${{ matrix.os }}-attempt-${{ github.run_attempt }}
+          path: rust-coverage.json
+          if-no-files-found: warn
 
   attribution:
     name: Commit attribution
