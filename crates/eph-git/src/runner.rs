@@ -819,7 +819,9 @@ pub(crate) mod tests {
 
     #[test]
     fn a_git_past_its_deadline_is_stopped_and_says_so() {
-        let dir = scratch("deadline");
+        // Windows keeps a descendant's working directory open until it exits.
+        // This fixture uses no files, so it needs no temporary directory to remove.
+        let dir = std::env::temp_dir();
         let started = Instant::now();
         let result = git()
             .with_timeout(Duration::from_millis(300))
@@ -837,12 +839,11 @@ pub(crate) mod tests {
             took < Duration::from_secs(3),
             "a grandchild holding the pipes cannot hold the call: {took:?}"
         );
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn output_that_never_arrives_is_a_failure_not_an_empty_success() {
-        let dir = scratch("output-lost");
+        let dir = std::env::temp_dir();
         let started = Instant::now();
         // git exits well inside its deadline, even on a loaded machine; the
         // backgrounded sleep keeps its pipes open well past deadline and grace.
@@ -865,7 +866,6 @@ pub(crate) mod tests {
             started.elapsed() < Duration::from_secs(6),
             "deadline plus grace, not the sleep"
         );
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
