@@ -477,3 +477,42 @@ Darwin cross-Clippy passed with the liveness probe, and all nine Linux
 process tests passed in the guest. The Windows gate passed both test
 builds and reached the two pending coverage floors. The frozen-tree
 checks passed.
+
+The [native proof on `68cfe77`](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45122195861/job/137518281696)
+passed all 12 process and 22 PTY tests on Darwin 25.6.0 ARM64 with Rust
+1.96.0. The mutation tool ran 33 candidates. All 30 viable changes
+failed Rust tests. The compiler rejected three changes because
+`Instant` cannot be multiplied by a `Duration`, let chains cannot use
+`||`, and `ExitStatus` has no `Default` implementation. No mutations
+survived or timed out. All nine control mutations missed with zero
+tests running. The hashes of all 82 tracked Rust inputs matched.
+The [proof artifact](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45122195861/artifacts/14794112535)
+contains the baseline, round, control and hashes.
+
+### Corroborated coverage floors
+
+[CI run 45122195829](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45122195829)
+passed the plain and coverage-instrumented workspace suites on Linux,
+macOS and Windows in each of its first three attempts. The Rust gates
+reported only the two unseeded floors. All nine receipts name
+`68cfe77ae31c7e93871ea52f44399753c993d538`, tree
+`fnv1a64:24b271b44e7dc27b` and `cargo-llvm-cov 0.9.1`. The artifact
+names, platform and attempt identities matched, and every report listed
+zero untested modules.
+
+`cargo xtask coverage ratchet` generated the floor record from all nine
+receipts. The new rows show the minimum measured coverage on each
+platform.
+
+| Crate | Floor | Linux | macOS | Windows |
+| --- | ---: | ---: | ---: | ---: |
+| `eph-process` | 94.88% | 94.88% | 95.15% | 95.70% |
+| `eph-pty` | 94.94% | 95.04% | 95.04% | 94.94% |
+
+The ratchet also raised `eph-agora` to 98.84%, `eph-git` to 99.55% and
+`xtask` to 98.29%. No floor fell.
+
+The final local `cargo xtask gate` passed through `cmd.exe` on Windows.
+The coverage check reported success across seven crates and 45
+production files. The Windows figures for `eph-process` and `eph-pty`
+matched their CI receipts at 95.70% and 94.94%.

@@ -453,7 +453,7 @@ requirements and the thirteen invariants do not change. The order, phase by phas
 [`docs/RUST-PLAN.md`](./docs/RUST-PLAN.md). Phase R0 builds the gates first, so every
 later phase is checked from its first line.
 
-<!-- landed: R1.0 R1.1 R1.2 R1.3 R1.4a R1.4b
+<!-- landed: R2.1
      Checked by scripts/check-readme-current.cjs against the register (docs/PROGRESS.md
      and the milestones archived in docs/progress/): every package of the milestone or
      phase holding the most recent tick must be listed here, and listing one is a claim
@@ -462,6 +462,21 @@ later phase is checked from its first line.
      this section two milestones stale at M8.4 and three packages stale again by M8.9.
      It cannot catch someone editing this line without writing the sentence, and is not
      meant to. -->
+**R2.1, native terminal sessions, is complete on its feature branch**
+(2026-11-23).
+
+- `eph-pty` launches the supplied program with its exact directory and
+  environment. It handles input, interrupts, resizing and PATH lookup,
+  and redacts credentials across output chunks and through rotation.
+- Windows owns the child in a Job Object from creation. Linux and macOS
+  stop the owned process group, with descendants that move to another
+  group outside that guarantee. macOS PTY polling reports unconfirmed
+  shutdown after 500 ms and retains ownership for later polls.
+- The same native ownership boundary handles Git deadlines. The
+  [proof record](./docs/implementations/2026-11-20-r2-1-guard-proof.md)
+  covers real subprocess tests, controlled mutations and coverage
+  measurements across the three CI platforms.
+
 **R1, the home and the book of record, is done** (2026-10-25):
 
 - **R1.0, the design.** Every file the harness stores was redesigned from first
