@@ -457,3 +457,23 @@ All nine Linux process tests passed in the guest with the Rust fixture,
 and Darwin cross-Clippy accepted both test packages. The Windows gate
 through `cmd.exe` passed both test builds and stopped at the two
 unseeded floors. The updated workflow passed Bash's syntax check.
+
+### Observe Darwin process liveness separately from terminal output
+
+The [first native run of the Rust fixture](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45119534055/job/137509881721)
+reproduced the two early output completions. The new diagnostic recorded
+`Ok(Ok(()))`, so the reader had reached EOF rather than returning a read
+error. The 500 ms timeout and recovery regression passed again.
+
+The [XNU session-leader exit path](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/kern/kern_exit.c#L2093)
+can revoke its controlling terminal. The Darwin regression now observes
+the actual descendant with [libproc's short BSD query](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/kern/proc_info.c#L2046).
+It requires a live member of the owned group after the root exits and
+verifies that the member stops after the production shutdown step.
+It still requires a piped fixture to hold stdout open before shutdown.
+On a PTY, terminal EOF and process liveness are distinct assertions.
+
+Darwin cross-Clippy passed with the liveness probe, and all nine Linux
+process tests passed in the guest. The Windows gate passed both test
+builds and reached the two pending coverage floors. The frozen-tree
+checks passed.

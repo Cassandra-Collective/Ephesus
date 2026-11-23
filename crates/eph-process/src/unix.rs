@@ -789,7 +789,9 @@ mod tests {
         clippy::disallowed_methods,
         reason = "process: leave a live owned output holder after the group root exits"
     )]
-    fn group_with_a_live_member(terminal: bool) -> (Child, mpsc::Receiver<io::Result<()>>) {
+    fn group_with_a_live_member(
+        terminal: bool,
+    ) -> (Child, mpsc::Receiver<io::Result<()>>, libc::pid_t) {
         use std::io::Read;
 
         let mut command = Command::new(env::current_exe().unwrap());
@@ -840,18 +842,77 @@ mod tests {
         }
         // SAFETY: getpgid observes membership without signaling the process.
         assert_eq!(unsafe { libc::getpgid(pid) }, group);
-        let early = eof.try_recv();
+        #[cfg(target_os = "macos")]
         assert!(
-            matches!(early, Err(mpsc::TryRecvError::Empty)),
-            "fixture output ended before group shutdown: {early:?}"
+            darwin_member_is_live(pid, group),
+            "fixture descendant {pid} exited before group shutdown (terminal={terminal})"
         );
-        (child, eof)
+        // Darwin can revoke the controlling terminal at session leader
+        // exit while another group member is still alive.
+        if !terminal || !cfg!(target_os = "macos") {
+            let early = eof.try_recv();
+            assert!(
+                matches!(early, Err(mpsc::TryRecvError::Empty)),
+                "fixture output ended before group shutdown (terminal={terminal}): {early:?}"
+            );
+        }
+        (child, eof, pid)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn darwin_member_is_live(pid: libc::pid_t, group: libc::pid_t) -> bool {
+        let mut info = MaybeUninit::<libc::proc_bsdshortinfo>::zeroed();
+        let size = size_of::<libc::proc_bsdshortinfo>() as libc::c_int;
+        // SAFETY: the buffer is valid for the short BSD process information
+        // query. The zero argument excludes zombies. This sends no signal.
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDT_SHORTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        if read == 0 {
+            let error = io::Error::last_os_error();
+            assert_eq!(
+                error.raw_os_error(),
+                Some(libc::ESRCH),
+                "process query failed: {error}"
+            );
+            return false;
+        }
+        assert_eq!(read, size);
+        // SAFETY: the full structure was populated by proc_pidinfo.
+        let info = unsafe { info.assume_init() };
+        if info.pbsi_status == libc::SZOMB {
+            return false;
+        }
+        assert_eq!(info.pbsi_pid, pid as u32);
+        assert_eq!(
+            info.pbsi_pgid, group as u32,
+            "the fixture escaped its group"
+        );
+        true
+    }
+
+    #[cfg(target_os = "macos")]
+    fn wait_for_darwin_member_exit(pid: libc::pid_t, group: libc::pid_t) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while darwin_member_is_live(pid, group) {
+            assert!(
+                Instant::now() < deadline,
+                "fixture descendant {pid} survived shutdown"
+            );
+            thread::sleep(Duration::from_millis(2));
+        }
     }
 
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn terminal_root_collection_stops_the_remaining_output_holder() {
-        let (mut child, eof) = group_with_a_live_member(true);
+        let (mut child, eof, _) = group_with_a_live_member(true);
         assert_eq!(
             child.try_wait().unwrap(),
             Some(ExitStatus::Signal(libc::SIGKILL.to_string()))
@@ -863,7 +924,7 @@ mod tests {
     #[test]
     fn darwin_shutdown_retries_before_collecting_the_root() {
         for terminal in [false, true] {
-            let (mut child, eof) = group_with_a_live_member(terminal);
+            let (mut child, eof, pid) = group_with_a_live_member(terminal);
             if !terminal {
                 // Model an accepted group signal with a stale snapshot.
                 child.shutdown_started = Some(Instant::now() - SHUTDOWN_GRACE);
@@ -872,6 +933,7 @@ mod tests {
             assert_eq!(child.try_wait().unwrap(), None);
             assert!(child.shutdown_started.is_some());
             assert!(exit_pending(group).unwrap(), "the root must stay unreaped");
+            wait_for_darwin_member_exit(pid, group);
             eof.recv_timeout(Duration::from_secs(3))
                 .expect("the shutdown poll must close the live member's output")
                 .unwrap();
@@ -890,7 +952,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn darwin_terminal_timeout_keeps_the_group_owned_until_a_later_poll() {
-        let (mut child, eof) = group_with_a_live_member(true);
+        let (mut child, eof, pid) = group_with_a_live_member(true);
         child.shutdown_started = Some(Instant::now() - SHUTDOWN_GRACE);
         let group = child.group.unwrap();
         assert_eq!(
@@ -902,6 +964,7 @@ mod tests {
             exit_pending(group).unwrap(),
             "the timeout must retain the root"
         );
+        wait_for_darwin_member_exit(pid, group);
         eof.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -924,7 +987,7 @@ mod tests {
     #[test]
     fn darwin_background_reaping_retries_the_owned_group_signal() {
         for terminal in [false, true] {
-            let (mut child, eof) = group_with_a_live_member(terminal);
+            let (mut child, eof, pid) = group_with_a_live_member(terminal);
             child.shutdown_started = Some(if terminal {
                 Instant::now() - SHUTDOWN_GRACE
             } else {
@@ -933,6 +996,7 @@ mod tests {
             let group = child.group.unwrap();
             child.reap();
             assert!(exit_pending(group).is_err(), "the root must be collected");
+            wait_for_darwin_member_exit(pid, group);
             eof.recv_timeout(Duration::from_secs(3))
                 .expect("reaping must retry the signal before freeing the group id")
                 .unwrap();
