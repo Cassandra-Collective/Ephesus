@@ -166,6 +166,43 @@ proposed*, in §4.13.
 
 Everything else in the tree keeps today's name and place.
 
+## 3. The terminal plane
+
+R2.1 implements FR-1.1 in `eph-pty` over the native `eph-process` boundary.
+The launch and shutdown guarantees are in
+[ADR-0042](../adr/ADR-0042-owned-process-group-shutdown.md) and
+[ADR-0043](../adr/ADR-0043-preserve-the-terminal-spawn-plan.md).
+
+- `Session::spawn` takes a program, literal arguments, working directory,
+  exact environment and geometry. A bare program uses the plan's PATH. A
+  miss fails launch. A Windows npm shim can resolve to the executable it
+  names. The checked batch fallback runs its system interpreter in the
+  same job and rejects arguments that need interpreter expansion or operators.
+- `write` and `interrupt` send bytes through the terminal's line discipline.
+  The engine adapter supplies the interrupt sequence. `resize` applies
+  geometry in cells. `kill` returns the scope to which termination was
+  requested. `try_wait` observes the root exit separately from output.
+- On macOS, PTY polling retains the root until it can confirm shutdown of
+  its owned group. The 500 ms confirmation interval starts at the first
+  forced shutdown request or when polling first observes natural root
+  exit. If shutdown is still unconfirmed on a poll after that interval,
+  the poll returns a timeout error. The session keeps ownership so later
+  polls can retry and collect the status. Dropping the session hands
+  cleanup to its worker for a separate bounded 500 ms attempt. If the
+  worker ends its retries with shutdown still unconfirmed, it waits
+  for and collects the root without sending further group signals.
+  The worker has no caller to report that outcome to.
+- The output worker applies ADR-0010 before bytes enter the bounded queue.
+  The consumer must drain this queue as the session runs and continue to
+  EOF after root exit. The worker flushes any held prefix at EOF. Initial
+  credential values remain covered through exit alongside current broker
+  values. Session disposal closes the input and terminal and drops any unread
+  redacted output.
+- `eph-git` retains process ownership while it collects pipes. If the root
+  exits and descendants hold pipes past the deadline and output grace, the
+  call fails and gets a separate bounded cleanup interval. POSIX keeps the
+  root unreaped until it no longer needs to signal the group.
+
 ## 4. Persisted formats
 
 ### 4.0 Rules every format follows
@@ -373,6 +410,7 @@ the code that holds it and the test that proves it.
 | **Only the committer's refusal stops a boot.** `Agora::open` fails only when the committer refuses: another one holds the Agora, or `git init` failed. Every later step that goes wrong becomes a condition, and the boot goes on | `Agora::open` | `a_held_agora_is_refused_in_the_committers_words`, `a_file_the_boot_cannot_write_is_reported_and_the_boot_goes_on`, `a_reconcile_that_cannot_commit_is_reported_and_the_boot_goes_on` |
 | **The boot keeps crash residue out of history.** Its order is the book's replay (a read), the committer, the `.gitignore` render, the reconcile (skipped for a repository this boot made over an empty directory), then what the boot found so far onto the degradation channel, the `PROTOCOL.md` render, the seeds, then one commit when anything was written, the book included (R1.4b), named for what it holds: `SEED_SUBJECT` or `RECORD_SUBJECT`, each prefixed by the reconcile's when the reconcile failed. No line this boot writes enters the reconcile, which is the last run's | `Agora::open` | `the_ignore_file_is_rendered_before_the_reconcile_so_crash_residue_stays_out`, `when_the_reconcile_fails_a_rendered_ignore_file_is_still_committed`, `a_boot_that_changes_nothing_commits_nothing`, `the_boots_conditions_stay_out_of_the_reconcile_and_land_in_one_commit` |
 | **A `git init` a kill left unfinished is finished** (Architect, 2026-10-25). When `.git` has no `HEAD`, open, holding the committer's lock, waits over the retry schedule while any lock file other than its own and `index.lock` sits directly in `.git` (a killed init's `config.lock`), removes those left, runs `git init`, and names them; the boot reports them as `agora/init-lock`. Otherwise the next `git init` refuses the lock, and so would every boot after it | `Committer::open`, `Agora::open` | `a_git_init_a_kill_left_holding_its_locks_is_finished_and_named`, `open_lets_a_live_init_finish_with_its_lock`, `a_repository_with_a_head_keeps_its_lock_files`, `an_agora_that_cannot_be_made_says_why` (a real deadline-killed init), `a_git_init_a_kill_left_unfinished_is_reported_and_the_boot_goes_on` |
+| **Recover an interrupted commit's known ref locks** (Architect, 2026-11-16). Holding the committer lock, open waits over the existing retry schedule for `.git/HEAD.lock` and `.git/refs/heads/main.lock`. It removes only those regular files still present, skips redirected refs directories, and leaves the actual refs and other locks in place. Agora boot collects removed and stuck lock conditions before reconcile and reports them afterward as `agora/ref-lock` | `Committer::open`, `Agora::open` | `recovery_removes_only_the_known_ref_locks_and_keeps_the_refs`, `ref_lock_recovery_waits_for_git_to_finish`, `a_ref_lock_under_redirected_refs_is_left_in_place`, `a_boot_recovers_known_ref_locks_and_reconciles_the_interrupted_work`, `boot_reports_a_ref_lock_that_is_not_a_regular_file_and_keeps_it` |
 | **A killed harness loses nothing it wrote.** Open waits out a live git's `index.lock`, then removes a stale one; the reconcile commits what was left, before the boot writes anything | `Committer::open`, `Agora::open` | `a_harness_killed_at_each_point_of_a_commit_loses_nothing`, `a_harness_killed_at_random_during_commits_loses_nothing` (R1.3), `what_a_killed_harness_left_is_reconciled_under_its_own_subject_first` |
 | **Retention loses no task.** The whole ledger is validated before anything moves. Done tasks past the threshold are appended to the archive before the trimmed ledger is written, so a write cut short leaves a task in both, never in neither; an archive that cannot be written leaves the ledger as it was; and no kept task loses a dependency | `eph_agora::retention::split`, `Agora::write_tasks` | `a_done_task_a_kept_task_depends_on_stays_however_far_back_the_chain_runs`, `a_ledger_past_its_threshold_archives_the_old_done_first_then_trims`, `a_ledger_write_validates_the_whole_ledger_before_it_archives`, `an_archive_that_cannot_be_written_leaves_the_ledger_as_it_was` |
 | **Every degradation is visible.** A failure short of the committer at boot (a stale or stuck `index.lock`, a killed `git init`'s lock files, a repository made over existing files, a damaged roster or ledger, a render, seed, reconcile or commit that fails, a torn, unreadable or unwritable book) is returned as a condition in the degradation grammar, never a silent default (invariant 7), and carried on the degradation channel (R1.4b) | `Agora::open`'s `Booted::conditions`, `eph_agora::degradations::Degradations` | `a_stale_index_lock_is_removed_at_open_and_reported`, `a_repository_made_over_existing_files_says_its_history_is_gone`, `a_damaged_roster_or_ledger_is_reported_and_left_as_evidence`, `a_reconcile_that_cannot_commit_is_reported_and_the_boot_goes_on`, `a_seed_that_cannot_commit_is_reported_and_stays_on_disk`, `a_torn_book_is_reported_at_boot_and_its_line_left_as_evidence`, `a_book_the_boot_cannot_read_or_write_is_reported_and_the_boot_goes_on` |

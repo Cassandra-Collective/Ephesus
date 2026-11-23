@@ -1,0 +1,13 @@
+[package]
+name = "r2-1-pty-tree-probe"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+
+# A standalone experiment. R2.1's production crate follows the shutdown decision.
+[workspace]
+
+[dev-dependencies]
+portable-pty = "=0.9.0"
+tempfile = "=3.27.0"

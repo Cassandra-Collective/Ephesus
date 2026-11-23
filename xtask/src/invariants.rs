@@ -148,6 +148,14 @@ pub const POLICIES: &[Policy] = &[
         banned_paths: &[],
     },
     Policy {
+        name: "eph-process",
+        workspace_deps: None,
+        external_deps: None,
+        io: true,
+        exemptions: &[Category::Process],
+        banned_paths: &[],
+    },
+    Policy {
         name: "eph-engines",
         workspace_deps: None,
         external_deps: None,
@@ -253,13 +261,11 @@ pub fn check(workspace: &Workspace) -> Vec<Violation> {
 
 fn lints(member: &Member, out: &mut Vec<Violation>) {
     let opted_in = match member.manifest.parse::<toml::Table>() {
-        Ok(table) => {
-            table
-                .get("lints")
-                .and_then(|lints| lints.get("workspace"))
-                .and_then(toml::Value::as_bool)
-                == Some(true)
-        }
+        Ok(table) => table.get("lints").is_some_and(|lints| {
+            lints.get("workspace").and_then(toml::Value::as_bool) == Some(true)
+                || (member.name == "eph-process"
+                    && ffi_lints_match(include_str!("../../Cargo.toml"), lints))
+        }),
         Err(error) => {
             out.push(Violation {
                 rule: "lints",
@@ -271,17 +277,46 @@ fn lints(member: &Member, out: &mut Vec<Violation>) {
         }
     };
     if !opted_in {
+        let fix = if member.name == "eph-process" {
+            "Match the workspace lint table with only unsafe_code set to deny, per ADR-0042"
+        } else {
+            "Add [lints] with workspace = true (ADR-0041's invariant table)"
+        };
         out.push(Violation {
             rule: "lints",
             file: member.manifest_path.clone(),
             line: 1,
             message: format!(
-                "`{}` does not opt into the workspace lints, so invariants 1 and 7 do not reach it. \
-                 Add `[lints]` with `workspace = true` (ADR-0041's invariant table)",
+                "`{}` does not opt into the workspace lints, so invariants 1 and 7 do not reach it. {fix}",
                 member.name
             ),
         });
     }
+}
+
+fn ffi_lints_match(workspace_manifest: &str, actual: &toml::Value) -> bool {
+    let Ok(workspace) = workspace_manifest.parse::<toml::Table>() else {
+        return false;
+    };
+    let Some(mut expected) = workspace
+        .get("workspace")
+        .and_then(|item| item.get("lints"))
+        .cloned()
+    else {
+        return false;
+    };
+    let Some(rust) = expected
+        .as_table_mut()
+        .and_then(|lints| lints.get_mut("rust"))
+        .and_then(toml::Value::as_table_mut)
+    else {
+        return false;
+    };
+    rust.insert(
+        "unsafe_code".to_owned(),
+        toml::Value::String("deny".to_owned()),
+    );
+    &expected == actual
 }
 
 fn dep_shape(member: &Member, policy: &Policy, out: &mut Vec<Violation>) {
@@ -987,6 +1022,36 @@ mod tests {
         let violations = run(vec![member("eph-agora", "[package\n", &[])]);
         assert_eq!(rules(&violations), [("lints", 1)]);
         assert!(violations[0].message.contains("cannot parse"));
+    }
+
+    #[test]
+    fn only_the_named_ffi_boundary_can_locally_relax_unsafe_from_forbid_to_deny() {
+        let ffi = include_str!("../../crates/eph-process/Cargo.toml");
+        assert!(run(vec![member("eph-process", ffi, &[])]).is_empty());
+        for (name, manifest) in [
+            ("eph-pty", ffi.to_owned()),
+            (
+                "eph-process",
+                ffi.replace("unsafe_code = \"deny\"", "unsafe_code = \"allow\""),
+            ),
+            (
+                "eph-process",
+                ffi.replace("panic = \"deny\"", "panic = \"allow\""),
+            ),
+        ] {
+            assert_eq!(
+                rules(&run(vec![member(name, &manifest, &[])])),
+                [("lints", 1)]
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_or_malformed_workspace_lint_table_cannot_grant_an_exception() {
+        let local = toml::Value::Table("unsafe_code = \"deny\"".parse().unwrap());
+        for manifest in ["invalid = {", "", "[workspace.lints]\nrust = false"] {
+            assert!(!ffi_lints_match(manifest, &local), "{manifest}");
+        }
     }
 
     // ---- dep-shape ------------------------------------------------------

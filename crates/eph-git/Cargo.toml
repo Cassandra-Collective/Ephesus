@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 eph-fs = { path = "../eph-fs" }
+eph-process = { path = "../eph-process" }
 
 [lints]
 workspace = true

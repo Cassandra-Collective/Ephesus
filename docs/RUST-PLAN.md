@@ -60,9 +60,10 @@ deny.toml                  licenses + advisories (cargo-deny)
 crates/
   eph-schema/    pure data models + validators, every persisted type `Versioned`
   eph-fs/        write_atomic, append-only JSONL, home layout + first-boot seeding
+  eph-process/   native launch, terminal IO and owned shutdown (ADR-0042, ADR-0043)
   eph-git/       THE single committer + worktrees (the only crate that runs git)
   eph-agora/     registry, ledger, board, the book of record, degradations, state stores
-  eph-pty/       PTY manager on portable-pty; PATH resolution; output redaction
+  eph-pty/       PTY sessions; PATH resolution; output redaction
   eph-engines/   EngineAdapter trait; claude (reference); codex, gemini (conformance only)
   eph-hooks/     events.sock endpoint; per-spawn tokens; recall answering
   eph-hermes/    mail routing, hop cap, bounce, wake watchdog, Stop-hook decisioning
@@ -97,6 +98,10 @@ fewer than one package's worth of code is folded into its neighbour until it gro
   binary again as the harness they kill, and in `eph-git` a Windows junction made with
   `mklink /J` (GYM-014, Architect, 2026-10-25).
 - Only `eph-fs` may write a file another process reads.
+- [ADR-0042](./adr/ADR-0042-owned-process-group-shutdown.md) confines the native
+  lifecycle operations to `eph-process`. The boundary starts the caller's
+  resolved program and does not construct agent or Git commands. Its process
+  exemption covers the real descendant test fixtures.
 
 ### 3.3 Process model
 
@@ -344,7 +349,7 @@ re-read for TypeScript-specific mechanisms before its first package.
 | Risk | Mitigation |
 |---|---|
 | Terminal fidelity below xterm.js (wide chars, mouse modes, bracketed paste, the engine's TUI) | Built at R4, before most of the domain. Measured against the real `claude` TUI, not a fixture. |
-| ConPTY quirks on Windows (resize races, exit codes, CRLF) | `portable-pty` is WezTerm's layer. R2's exit runs a real engine on win32 and linux. |
+| Native PTY quirks (resize races, exit codes, CRLF) | The native boundary and real-process tests in [SDD-RUST §3](./sdd/SDD-RUST.md#3-the-terminal-plane) cover R2.1. R2's exit runs a real engine. |
 | egui accessibility below the web renderer's | AccessKit is built into egui. NFR-15 is an R13 exit criterion, measured, not assumed. |
 | The verification discipline lost in the move | `cargo-mutants` with a control, `cargo-llvm-cov` floors and `egui_kittest` are in the vetted set. Every gate is refuted before it closes. |
 | The crate graph grows unseen (egui and wgpu pull many transitive crates) | `cargo deny` over the whole graph. `xtask deps` holds direct dependencies to the memo. |
@@ -367,6 +372,8 @@ re-read for TypeScript-specific mechanisms before its first package.
 - R2: whether `portable-pty`'s process-tree kill suffices on Windows or a job object (an
   FFI boundary crate) is needed. *Asked 2026-10-25:* measured first, by a probe that opens
   R2.1; the question returns with the figure (DECISIONS-LOG 2026-10-25, R2).
+  *Answered 2026-11-16:* [ADR-0042](./adr/ADR-0042-owned-process-group-shutdown.md)
+  adopts Job Objects at Windows process creation and dedicated-group shutdown on POSIX.
 - R6: the OS keychain crate, a separate memo (`keyring` is the candidate).
 - R10 and R12: the HTTP, WebSocket and audio crates, a separate memo each.
 - R12: whether the Herald is wired into the app this time (M6.9).

@@ -37,8 +37,11 @@ operational rules the workspace's first packages established (R0.1, R0.2).
   stopping at the first red step (RUST-PLAN §4). It runs through the `cargo xtask` alias,
   which carries `--locked`, so a stale `Cargo.lock` fails instead of being rewritten.
   CI's `rust` job runs the same chain on Linux, Windows and macOS.
-- **Lints.** Every crate opts into `[workspace.lints]` (`[lints] workspace = true`), and
-  `xtask invariants` refuses one that does not. A disallowed method is exempted only by
+- **Lints.** Crates opt into `[workspace.lints]` (`[lints] workspace = true`).
+  [ADR-0042](./adr/ADR-0042-owned-process-group-shutdown.md) gives `eph-process`
+  the same table with `unsafe_code = "deny"` so the native boundary can use
+  explicit `#[expect(unsafe_code, reason = "...")]`. `xtask invariants` enforces
+  both forms. A disallowed method is exempted only by
   `#[expect(clippy::disallowed_methods, reason = "<category>: …")]`, where the category
   is `process:`, `git:` or `fs-write:`. The exemption sits on the fn, impl, module or
   file it covers, in a crate RUST-PLAN §3.2 allows that category. `#[allow]` is refused,
@@ -60,7 +63,9 @@ operational rules the workspace's first packages established (R0.1, R0.2).
   tree. `cargo xtask coverage` fails:
   - a crate below its floor, a crate with no floor, and a floor with no crate;
   - a production file no test enters, including one the report never names that holds
-    a function body;
+    a function body. A file with only `#![cfg(unix)]` as its file-level cfg is
+    required on Linux and macOS. A file with only `#![cfg(windows)]` is required
+    on Windows. All other file-level cfg forms keep the ordinary check;
   - a platform more than the recorded lag above its own figure;
   - a measurement taken with a tool other than the floors';
   - code under `#[cfg(not(test))]`, which no test can run. Give the test build the same

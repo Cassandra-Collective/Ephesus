@@ -24,6 +24,8 @@ pub const APPROVED: &[&str] = &[
     "uuid",
     "tokio",
     "portable-pty",
+    "windows-sys",
+    "libc",
     "notify",
     "rusqlite",
     "egui",

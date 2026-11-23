@@ -148,12 +148,13 @@ pub const SLOW_READ: std::time::Duration = std::time::Duration::from_millis(50);
 /// *R1.4b — Architect decisions, fourth round*, item 3). A cause the boot
 /// checks only sometimes, such as the board's prompt override, read only when
 /// the board is seeded, is not among them.
-pub const BOOT_CHECKED: [&str; 14] = [
+pub const BOOT_CHECKED: [&str; 15] = [
     "agora/log-torn",
     "agora/log-unreadable",
     "agora/log-unwritable",
     "agora/index-lock",
     "agora/init-lock",
+    "agora/ref-lock",
     "agora/history-lost",
     "agora/render:.gitignore",
     "agora/render:PROTOCOL.md",
@@ -248,6 +249,21 @@ impl Agora {
                     opened.init_locks.join(", ")
                 ),
             ));
+        }
+        if !opened.ref_locks.is_empty() {
+            let detail = opened
+                .ref_locks
+                .into_iter()
+                .map(|lock| {
+                    let name = lock.name;
+                    match lock.error {
+                        Some(reason) => format!(".git/{name} could not be removed ({reason})"),
+                        None => format!(".git/{name} was removed after waiting for Git"),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(". ");
+            conditions.push(condition("ref-lock", None, detail));
         }
         if opened.initialized && held {
             conditions.push(condition(
@@ -1101,6 +1117,66 @@ mod tests {
             "{}",
             booted.conditions[0].detail
         );
+        drop(booted);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_boot_recovers_known_ref_locks_and_reconciles_the_interrupted_work() {
+        let dir = scratch("ref-locks");
+        let root = dir.join("agora");
+        drop(open(&root));
+        let dot_git = root.join(".git");
+        for name in ["HEAD.lock", "refs/heads/main.lock", "refs/heads/other.lock"] {
+            write(&dot_git.join(name), "");
+        }
+        write(&root.join("interrupted.txt"), "keep this work\n");
+        let booted = open(&root);
+        assert_eq!(causes(&booted), ["agora/ref-lock"]);
+        let detail = &booted.conditions[0].detail;
+        for name in ["HEAD.lock", "refs/heads/main.lock"] {
+            assert!(
+                detail.contains(&format!(".git/{name} was removed")),
+                "{detail}"
+            );
+            assert!(!dot_git.join(name).exists());
+        }
+        assert!(dot_git.join("refs/heads/other.lock").is_file());
+        assert!(tracked(&root, "interrupted.txt"));
+        assert!(subjects(&root).contains(&RECONCILE_SUBJECT.to_string()));
+        drop(booted);
+        let again = open(&root);
+        assert!(!causes(&again).contains(&"agora/ref-lock".to_string()));
+        assert!(
+            !again
+                .agora
+                .degradations()
+                .has(&"agora/ref-lock".parse().unwrap())
+        );
+        drop(again);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn boot_reports_a_ref_lock_that_is_not_a_regular_file_and_keeps_it() {
+        let dir = scratch("ref-lock-directory");
+        let root = dir.join("agora");
+        drop(open(&root));
+        let lock = root.join(".git/HEAD.lock");
+        fs::create_dir(&lock).unwrap();
+        let booted = open(&root);
+        let recovery = booted
+            .conditions
+            .iter()
+            .find(|condition| condition.cause.to_string() == "agora/ref-lock")
+            .unwrap();
+        assert!(
+            recovery
+                .detail
+                .contains(".git/HEAD.lock could not be removed"),
+            "{recovery:?}"
+        );
+        assert!(lock.is_dir());
         drop(booted);
         fs::remove_dir_all(&dir).unwrap();
     }
