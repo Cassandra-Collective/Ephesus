@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "seededFrom": 1,
+  "grants": [
+    {
+      "class": "route",
+      "domains": ["*"]
+    },
+    {
+      "class": "task",
+      "domains": ["*"]
+    },
+    {
+      "class": "memo",
+      "domains": ["test-code", "docs"]
+    }
+  ]
+}

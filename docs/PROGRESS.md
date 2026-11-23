@@ -21,21 +21,23 @@ recorded.
 
 ## Resume here
 
-*As of 2026-10-20: R0.1 is merged as #102 and R0.2 is PR #104. R0.3 (`feature/r0-3-standards-learn-rust`), R1.0 (`feature/r1-0-home-design`) and R1.1 (`feature/r1-1-eph-schema`) are stacked on it, pushed, and get their PRs as the one below each merges. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
+*As of 2026-10-20: R0.1 is merged as #102 and R0.2 is PR #104. R0.3 (`feature/r0-3-standards-learn-rust`), R1.0 (`feature/r1-0-home-design`), R1.1 (`feature/r1-1-eph-schema`) and R1.2 (`feature/r1-2-eph-fs`) are stacked on it, pushed, and get their PRs as the one below each merges. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
 
 **Ephesus is being rewritten in Rust (ADR-0041, the Architect's direction of
 2026-10-19), and the rewrite comes before everything below.** The Architect
 approved [`RUST-PLAN.md`](./RUST-PLAN.md), crate Set A in
 [`RUST-CRATES.md`](./RUST-CRATES.md), GYM-013's thresholds and the SRS wording on
 2026-10-19. **R0 is DONE** (verdict below, 2026-10-19). **R1.0, the design, is approved**
-(2026-10-20: `docs/sdd/SDD-RUST.md` §2 and §4), and **R1.1 is done** (2026-10-20):
-`eph-schema` and the per-crate coverage floors, seeded from CI. **The next build step
-is R1.2, `eph-fs`**: atomic writes, the append-only log, the home and its seeding, and
-the home marker the Architect asked for after R1.1's review, so a TypeScript-era home
-is reported once. Two constraints carry forward. A new crate's first push is red at the
-coverage step until its floor is seeded from that push's CI runs (ENGINEERING-STANDARDS
-§1.1). And R1.4's retention of done tasks must keep any task another depends on
-(SDD-RUST §4.5). A later
+(2026-10-20: `docs/sdd/SDD-RUST.md` §2 and §4). **R1.1 is done** (2026-10-20):
+`eph-schema` and the per-crate coverage floors, seeded from CI. **R1.2 is done**
+(2026-10-20): `eph-fs`, the one write path, the append-only log, and a home marked
+`home.json` that leaves a TypeScript-era home untouched. **The next build step is R1.3,
+`eph-git`**: the single committer and worktrees, with hermetic git in every test. Three
+constraints carry forward. A new crate's first push is red at the coverage step until
+its floor is seeded from that push's CI runs (ENGINEERING-STANDARDS §1.1). R1.4's
+retention of done tasks must keep any task another depends on (SDD-RUST §4.5). And a
+`.tmp` file left by a crash before its rename is a recorded residual until the boot that
+runs ADR-0034's probe (R7). A later
 phase still starts only when he approves its package list, through AskUserQuestion.
 Silence is not a yes. The TypeScript tree is frozen as
 the behavioural reference and is deleted at R14 (parity). The rewrite is measured by
@@ -82,7 +84,7 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1.0 (the design) approved and R1.1 (`eph-schema`, the coverage floors) done 2026-10-20; R1.2 next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1.0 (the design) approved, and R1.1 (`eph-schema`, the coverage floors) and R1.2 (`eph-fs`) done, 2026-10-20; R1.3 next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 
@@ -412,7 +414,24 @@ and opens when #104 merges.
     tree `fnv1a64:9c42f0f107e84a79`. CI run 39406446582 on the commit carrying the
     floors is green on every job, including all seven gate steps on all three platforms.
     [`2026-10-20-r1-1-eph-schema.md`](./implementations/2026-10-20-r1-1-eph-schema.md)
-  - [ ] **R1.2 `eph-fs`** — atomic writes, the append-only log, the home and its seeding.
+  - [x] **R1.2 `eph-fs`** — atomic writes, the append-only log, the home and its seeding.
+    *Evidence (2026-10-20):* `crates/eph-fs` is the one crate that writes a file another
+    process reads. `write_atomic` syncs a temporary file and renames it over the target,
+    waiting out the two refusals Windows was measured to give (OS errors 5 and 32) over a
+    fixed 500 ms schedule. `AppendLog` syncs every line (1.02 ms against 0.22 ms,
+    measured), recovers `seq` at open, leaves a torn tail alone and returns a skipped
+    rotation. `home::open` marks and seeds a missing path or an empty directory, and
+    refuses anything else byte for byte untouched, including a TypeScript-era home (the
+    Architect's three R1.2 decisions). Mutation rounds with controls: `eph-fs` round 1
+    INVALID on 3 timeouts in a clock-bounded retry, which became the fixed schedule;
+    round 2 ROUND OK (82 of 82 viable), one exclusion recorded with its reason;
+    `eph-schema` ROUND OK (271 of 271). The floor was seeded by `cargo xtask coverage
+    ratchet` from CI run 39418850906's three attempts on all three platforms: `eph-fs`
+    97.07% (the Windows figure; POSIX runs the directory sync, 97.66%), and `eph-schema`
+    raised to 98.87%, on tree `fnv1a64:9f6380dea039ffec`. CI run 39422475429 on the
+    commit carrying the floor is green on every job, including all seven gate steps on
+    all three platforms.
+    [`2026-10-20-r1-2-eph-fs.md`](./implementations/2026-10-20-r1-2-eph-fs.md)
   - [ ] **R1.3 `eph-git`** — the single committer and worktrees; hermetic git in every
     git-running test.
   - [ ] **R1.4 `eph-agora`** — registry, ledger, board, the book of record, degradations,

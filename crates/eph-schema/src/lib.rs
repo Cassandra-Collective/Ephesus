@@ -24,6 +24,7 @@ pub mod document;
 pub mod error;
 pub mod gates;
 pub mod github_app;
+pub mod home;
 pub mod id;
 pub mod json;
 pub mod known_targets;

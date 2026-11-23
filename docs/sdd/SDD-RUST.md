@@ -112,6 +112,7 @@ proposed*, in §4.13.
 
 ```
 <home>/                       ~/.ephesus, or $EPH_HOME (unchanged)
+  home.json                   NEW: marks a home this build made (§4.4); written first
   config.json                 the Architect's settings and the company's mode and consent (§4.1)
   gate-policy.json            the gate policy (FR-11.1, FR-1.9, FR-11.7)
   authority.json              Artemis's delegated authority (FR-5.5)
@@ -153,6 +154,7 @@ proposed*, in §4.13.
 | `PROTOCOL.md` is rendered at every boot | Same defect. A protocol change today never reaches a company that has already booted once |
 | `index/fts.sqlite` is rebuilt when damaged | SDD §10 promised it and the TypeScript build never did it (P9). Derived state needs no rescue (ADR-0027 §5) |
 | The Agora's `.gitignore` excludes `inbox/.inflight/` | A message in flight is a transient state the book of record already logs. Committing every move doubled commit traffic with no audit value. `.done/` and `.rejected/` stay committed: they are the record |
+| `home.json` marks a Rust home (Architect, 2026-10-20) | The TypeScript build keeps running from `~/.ephesus` until R14, and six of its files are formats this build cannot read. An existing directory without the marker is never written to: a TypeScript-era home is reported once, with the fix (`EPH_HOME`), and left exactly as it is. Only a path that does not exist, or an empty directory, becomes a new home, and the marker is its first file |
 | `cursor.json` removed (Architect, 2026-10-20) | It had no reader (P7). Idempotency comes from the state directories, as it already did. FR-3.6 and NFR-6 are amended and ADR-0003 and ADR-0013 get clause notes (§4.13) |
 
 Everything else in the tree keeps today's name and place.
@@ -243,6 +245,7 @@ from them.
 | `usage/<agentId>.json` | Today's fields with times per rule 2. Written by the Rust `eph-usage` through `write_atomic` | The writer gains the Windows rename retry today's `.mjs` copy lacks (P10) |
 | `prompts/` | Overrides only. The bundled prompt is used unless `prompts/<same path>` exists | P6. An unreadable override is reported, and the bundled prompt is used |
 | `profiles/<name>/triggers/*.json` | Gain `schemaVersion` | The one bundle file without one (P1) |
+| `home.json` | NEW: `{schemaVersion, createdAt}`, written once, when this build creates the home, before anything else. Absent from an existing non-empty directory: the directory is not this build's, and nothing is written to it. Damaged: the same, reported with the repair | The TypeScript build shares the path (§2) |
 | `instances/`, `tools/`, `scratch/`, `DIAGNOSIS.md` | Unchanged | Frozen copies, Architect-owned directories, read-only checkouts, and a human-facing render: nothing about them was wrong |
 
 ### 4.5 The Agora: registry, ledger, board, book of record, mail

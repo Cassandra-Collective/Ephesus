@@ -1,0 +1,15 @@
+[package]
+name = "eph-fs"
+version = "0.0.0"
+description = "The file layer: atomic writes, the append-only log, and the harness home (SDD-RUST §2, §4.0 rule 5)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+eph-schema = { path = "../eph-schema" }
+
+[lints]
+workspace = true
