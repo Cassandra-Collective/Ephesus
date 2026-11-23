@@ -27,10 +27,11 @@ recorded.
 2026-10-19), and the rewrite comes before everything below.** The Architect
 approved [`RUST-PLAN.md`](./RUST-PLAN.md), crate Set A in
 [`RUST-CRATES.md`](./RUST-CRATES.md), GYM-013's thresholds and the SRS wording on
-2026-10-19. **R0 is DONE** (verdict below, 2026-10-19). **The next build step is R1.0, the design
-of the home and every persisted schema, as a new SDD section put to the Architect for
-one approval before R1.1 starts.** The Architect approved R1's package list on
-2026-10-19, with every format redesigned from first principles (DECISIONS-LOG). A later
+2026-10-19. **R0 is DONE** (verdict below, 2026-10-19). **R1.0, the design, is approved**
+(2026-10-20: `docs/sdd/SDD-RUST.md` §2 and §4). **The next build step is R1.1,
+`eph-schema`, built to that design, with the first Rust coverage floors.** Its first
+commit applies the approved §4.13 amendments (FR-3.1, FR-3.6, NFR-6 and the ADR-0003
+and ADR-0013 clause notes). A later
 phase still starts only when he approves its package list, through AskUserQuestion.
 Silence is not a yes. The TypeScript tree is frozen as
 the behavioural reference and is deleted at R14 (parity). The rewrite is measured by
@@ -77,7 +78,7 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1 approved, R1.0 (the design) next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1.0 (the design) approved 2026-10-20; R1.1 next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 
@@ -383,8 +384,13 @@ and opens when #104 merges.
 ### R1 to R14
 
 - [ ] **R1** The home and the book of record (package list approved 2026-10-19)
-  - [ ] **R1.0 The design** — the new SDD section for the home and every persisted
+  - [x] **R1.0 The design** — the new SDD section for the home and every persisted
     schema, redesigned from first principles; one Architect approval before R1.1.
+    *Evidence (2026-10-20):* `docs/sdd/SDD-RUST.md` §2 and §4, built from an inventory of
+    every persisted file, with each of the 36 schema modules mapped to a row. Approved
+    by the Architect with its §4.13 amendments, the cursor's removal, and SDD-RUST as the
+    Rust tree's SDD (DECISIONS-LOG 2026-10-20).
+    [`2026-10-20-r1-0-home-design.md`](./implementations/2026-10-20-r1-0-home-design.md)
   - [ ] **R1.1 `eph-schema`** — the models to the approved design, and the first Rust
     coverage floors.
   - [ ] **R1.2 `eph-fs`** — atomic writes, the append-only log, the home and its seeding.
