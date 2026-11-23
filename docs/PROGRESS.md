@@ -81,8 +81,15 @@ The Architect approved publishing `5c88a65`. Its
 produced three measurements each on Windows and Linux and two on macOS.
 The third macOS run passed its plain suite, then an instrumented Git shutdown
 test timed out waiting for its pipes after root exit. The ratchet refused the
-incomplete set. Investigate the native shutdown before collecting the
-remaining evidence and closing R2.1.
+incomplete set. The Architect approved the diagnostic push. Its
+[native macOS job](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45058609883/job/137319291123)
+found a live `sleep` in the exited root's owned group. A second group
+signal closed the pipe while the root remained unreaped. A local repair
+retries before collecting the root. The Architect approved a 500 ms
+macOS PTY confirmation interval and continued ownership on timeout.
+Prove the repair on native macOS and collect three matching CI measurements
+per platform to seed the coverage floors. See the
+[R2.1 proof record](./implementations/2026-11-20-r2-1-guard-proof.md).
 A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
 `.gitignore`, rendered at every boot, keeps `write_atomic`'s temporaries out of history

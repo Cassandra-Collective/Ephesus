@@ -587,9 +587,13 @@ fn environment_block(vars: &[(OsString, OsString)]) -> io::Result<Vec<u16>> {
     let mut sorted = Vec::with_capacity(vars.len());
     // Stable sorting keeps the last declaration first among aliases.
     for (key, value) in vars.iter().rev() {
-        if key.is_empty() || key.as_encoded_bytes().contains(&b'=') {
+        let name = key.as_encoded_bytes();
+        // A custom Win32 environment block must carry per-drive working
+        // directories itself. cmd.exe exposes them as names such as "=C:".
+        let drive_directory = matches!(name, [b'=', b'A'..=b'Z' | b'a'..=b'z', b':']);
+        if !drive_directory && (name.is_empty() || name.contains(&b'=')) {
             return Err(invalid(
-                "Windows spawn environment names must be nonempty and contain no equals sign",
+                "Windows spawn environment names must be nonempty and may only use '=' in drive directory entries",
             ));
         }
         sorted.push((wide_terminated(key)?, value));
@@ -677,15 +681,17 @@ mod tests {
     fn environment_names_follow_windows_ordinal_order_and_last_alias_wins() {
         let encoded = environment_block(&[
             ("ENV_é".into(), "first".into()),
+            ("=c:".into(), r"C:\previous".into()),
             ("Zebra".into(), "last key".into()),
             ("case".into(), "old case".into()),
             ("CASE".into(), "new case".into()),
+            ("=C:".into(), r"C:\working directory".into()),
             ("ENV_É".into(), "last alias".into()),
         ])
         .unwrap();
         assert_eq!(
             String::from_utf16(&encoded).unwrap(),
-            "CASE=new case\0ENV_É=last alias\0Zebra=last key\0\0"
+            "=C:=C:\\working directory\0CASE=new case\0ENV_É=last alias\0Zebra=last key\0\0"
         );
     }
 
@@ -975,7 +981,9 @@ mod tests {
         assert!(dimensions(10, u16::MAX).is_err());
         assert!(wide_terminated(OsStr::new("broken\0path")).is_err());
         assert!(quote(&mut Vec::new(), OsStr::new("broken\0arg")).is_err());
-        assert!(environment_block(&[("name=injected".into(), "value".into())]).is_err());
+        for name in ["", "name=injected", "=extra", "=1:", "=C::"] {
+            assert!(environment_block(&[(name.into(), "value".into())]).is_err());
+        }
         assert_eq!(environment_block(&[]).unwrap(), [0, 0]);
     }
 

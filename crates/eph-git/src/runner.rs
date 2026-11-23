@@ -931,6 +931,7 @@ pub(crate) mod tests {
             #[cfg(unix)]
             child.exit_pending().unwrap()
         }
+        #[cfg(not(target_os = "macos"))]
         fn actually_stopped(child: &mut native::Child) -> bool {
             let exited = actually_exited(child);
             #[cfg(windows)]
@@ -938,13 +939,7 @@ pub(crate) mod tests {
             #[cfg(unix)]
             exited
         }
-        let live_alias = if cfg!(target_os = "macos") {
-            // Record Git's PID and group before the shell starts sleep.
-            r#"alias.held=!group=$(/bin/ps -o pgid= -p "$PPID"); printf 'native-ready %s %s\n' "$PPID" "$group"; sleep 10"#
-        } else {
-            "alias.held=!echo native-ready; sleep 10"
-        };
-        let mut cases = vec![(false, live_alias)];
+        let mut cases = vec![(false, "alias.held=!echo native-ready; sleep 10")];
         #[cfg(windows)]
         cases.push((
             true,
@@ -967,21 +962,6 @@ pub(crate) mod tests {
                 line.clear();
                 assert_ne!(output.read_line(&mut line).unwrap(), 0);
             }
-            #[cfg(target_os = "macos")]
-            let group = {
-                let mut ids = line
-                    .strip_prefix("native-ready ")
-                    .expect("the fixture reports its native process group")
-                    .split_whitespace()
-                    .map(str::parse::<u32>);
-                let root = ids.next().unwrap().unwrap();
-                let group = ids.next().unwrap().unwrap();
-                assert!(
-                    root > 1 && root == group,
-                    "unexpected fixture identity: {line}"
-                );
-                group
-            };
             let deadline = Instant::now() + Duration::from_secs(3);
             while actually_exited(&mut child) != root_exited {
                 assert!(
@@ -1001,53 +981,27 @@ pub(crate) mod tests {
             };
             let observed_exit = child.root_exited().unwrap();
             let observed_shutdown = child.shutdown_confirmed().unwrap();
-            #[cfg(windows)]
-            child.terminate().unwrap();
-            #[cfg(unix)]
-            child.terminate_group().unwrap();
-            let deadline = Instant::now() + Duration::from_secs(3);
-            while !actually_stopped(&mut child) {
-                assert!(
-                    Instant::now() < deadline,
-                    "native cleanup was not confirmed"
-                );
-                thread::sleep(POLL);
-            }
             #[cfg(target_os = "macos")]
-            for (stream, ended) in [("stdout", drain(output)), ("stderr", drain(stderr))] {
-                match ended.recv_timeout(Duration::from_secs(3)) {
-                    Ok(result) => {
-                        result.unwrap();
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        // Keep the dead root unreaped until after examining its
-                        // group and attempting cleanup of any remaining members.
-                        let members = git().with_timeout(Duration::from_secs(2)).run(
-                            &dir,
-                            &[
-                                "-c",
-                                r#"alias.group-state=!f() { /bin/ps -A -o pid= -o pgid= -o state= -o ucomm= | /usr/bin/awk -v group="$1" '$2 == group'; }; f"#,
-                                "group-state",
-                                &group.to_string(),
-                            ],
-                        );
-                        let repeated = child.terminate_group();
-                        let eof = ended.recv_timeout(DRAIN_GRACE).map(|read| read.map(|_| ()));
-                        let root = child.try_wait();
-                        panic!(
-                            "{stream} stayed open after owned shutdown; group {group} members \
-                             before a second signal: {members:?}; second signal: {repeated:?}; \
-                             pipe after second signal: {eof:?}; root: {root:?}"
-                        );
-                    }
-                    Err(error) => panic!("{stream} drain worker disconnected: {error}"),
+            stop_owned(&mut child, Instant::now() + DRAIN_GRACE).unwrap();
+            #[cfg(not(target_os = "macos"))]
+            {
+                #[cfg(windows)]
+                child.terminate().unwrap();
+                #[cfg(unix)]
+                child.terminate_group().unwrap();
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while !actually_stopped(&mut child) {
+                    assert!(
+                        Instant::now() < deadline,
+                        "native cleanup was not confirmed"
+                    );
+                    thread::sleep(POLL);
                 }
             }
             assert!(child.try_wait().unwrap().is_some());
             let final_status = child.root_status().unwrap();
             let final_exit = child.root_exited().unwrap();
             let final_shutdown = child.shutdown_confirmed().unwrap();
-            #[cfg(not(target_os = "macos"))]
             for ended in [drain(output), drain(stderr)] {
                 ended.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
             }

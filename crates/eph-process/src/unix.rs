@@ -14,10 +14,20 @@ use std::{
     ptr::null_mut,
     sync::{Mutex, MutexGuard},
 };
+#[cfg(target_os = "macos")]
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
 // openpty returns non-CLOEXEC descriptors. Serialize this short window with
 // other launches in the process boundary so they cannot inherit those fds.
 static SPAWN: Mutex<()> = Mutex::new(());
+
+#[cfg(target_os = "macos")]
+const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
+#[cfg(target_os = "macos")]
+const SHUTDOWN_POLL: Duration = Duration::from_millis(2);
 
 /// A child root and its dedicated process group. The root is owned
 /// exclusively so a group id cannot be reused between observing it and
@@ -27,6 +37,8 @@ pub struct Child {
     root: process::Child,
     group: Option<libc::pid_t>,
     terminal: bool,
+    #[cfg(target_os = "macos")]
+    shutdown_started: Option<Instant>,
 }
 
 /// The root's exit status, retaining either its code or its signal.
@@ -78,6 +90,8 @@ pub fn spawn_piped(command: &mut Command) -> io::Result<Piped> {
         root,
         group: Some(group),
         terminal: false,
+        #[cfg(target_os = "macos")]
+        shutdown_started: None,
     };
     let Some((stdout, stderr)) = pipes else {
         child.terminate_group()?;
@@ -169,6 +183,8 @@ pub fn spawn_terminal(mut command: Command, cols: u16, rows: u16) -> io::Result<
             root,
             group: Some(group),
             terminal: true,
+            #[cfg(target_os = "macos")]
+            shutdown_started: None,
         },
         input,
         output,
@@ -218,6 +234,25 @@ impl Child {
     /// Wait for the root after a shutdown request, on a detached cleanup worker.
     /// This consumes the owner and can block until the system reports exit.
     pub fn reap(mut self) {
+        #[cfg(target_os = "macos")]
+        if let Some(started) = self.shutdown_started {
+            // Disposal of a terminal gets its own bounded attempt after
+            // the worker takes ownership. A Git worker uses the time left
+            // from the original request.
+            let started = if self.terminal {
+                let now = Instant::now();
+                self.shutdown_started = Some(now);
+                now
+            } else {
+                started
+            };
+            let until = started + SHUTDOWN_GRACE;
+            while let Some(left) = until.checked_duration_since(Instant::now())
+                && let Ok(None) = self.try_wait()
+            {
+                thread::sleep(left.min(SHUTDOWN_POLL));
+            }
+        }
         let _reaped = self.root.wait();
     }
 
@@ -230,13 +265,18 @@ impl Child {
         let group = self
             .group
             .ok_or_else(|| io::Error::other("the process-group owner has already been reaped"))?;
-        // SAFETY: only this Child can reap the root. Its unreaped PID is the
-        // id assigned to the dedicated group at creation, never zero or init.
-        let result = unsafe { libc::kill(-group, libc::SIGKILL) };
-        if result != 0 {
-            return self.group_signal_failure(group, io::Error::last_os_error());
+        #[cfg(target_os = "macos")]
+        {
+            self.shutdown_started.get_or_insert_with(Instant::now);
         }
-        Ok(())
+        self.signal_group(group)
+            .or_else(|error| self.group_signal_failure(group, error))
+    }
+
+    fn signal_group(&self, group: libc::pid_t) -> io::Result<()> {
+        // SAFETY: the callers take the group from this Child before reaping
+        // the root. Its unreaped PID pins the dedicated group id above init.
+        checked(unsafe { libc::kill(-group, libc::SIGKILL) })
     }
 
     fn group_signal_failure(&self, _group: libc::pid_t, error: io::Error) -> io::Result<()> {
@@ -257,15 +297,68 @@ impl Child {
             && group_contains_only_root(group)
     }
 
+    #[cfg(target_os = "macos")]
+    fn macos_ready_to_reap(&mut self) -> io::Result<bool> {
+        let Some(group) = self.group else {
+            return Ok(true);
+        };
+        if !self.terminal && self.shutdown_started.is_none() {
+            return Ok(true);
+        }
+        let ready = if self.exit_pending()? {
+            self.shutdown_started.get_or_insert_with(Instant::now);
+            // Darwin signals a snapshot of the group. Keep the exited root
+            // pinned and signal again while other members may remain.
+            match self.signal_group(group) {
+                Ok(()) => false,
+                Err(error) => match error.raw_os_error() {
+                    Some(libc::ESRCH) => true,
+                    // EPERM can also mean the group contains zombies.
+                    // Only the unreaped root is already known to be dead.
+                    Some(libc::EPERM) => group_contains_only_root(group),
+                    _ => return Err(error),
+                },
+            }
+        } else {
+            false
+        };
+        if !ready
+            && self.terminal
+            && self
+                .shutdown_started
+                .is_some_and(|started| SHUTDOWN_GRACE.saturating_sub(started.elapsed()).is_zero())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the macOS terminal process group did not confirm shutdown within 500 ms",
+            ));
+        }
+        Ok(ready)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn terminal_ready_to_reap(&mut self) -> io::Result<bool> {
+        if self.terminal && self.group.is_some() {
+            if !self.exit_pending()? {
+                return Ok(false);
+            }
+            self.terminate_group()?;
+        }
+        Ok(true)
+    }
+
     /// Read the root's exit status when available. For a PTY, shut down any
     /// remaining group members before collecting the root. For a piped
     /// command the caller decides when to request group shutdown.
+    /// On macOS, a terminal shutdown timeout leaves the group owned so a
+    /// later poll can retry and collect the status.
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        if self.terminal && self.group.is_some() {
-            if !self.exit_pending()? {
-                return Ok(None);
-            }
-            self.terminate_group()?;
+        #[cfg(target_os = "macos")]
+        let ready = self.macos_ready_to_reap()?;
+        #[cfg(not(target_os = "macos"))]
+        let ready = self.terminal_ready_to_reap()?;
+        if !ready {
+            return Ok(None);
         }
         let status = self.root.try_wait()?.map(|status| {
             if let Some(signal) = status.signal() {
@@ -421,6 +514,14 @@ mod tests {
                 }
             }
         });
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(child.try_wait().unwrap(), None);
+            assert_eq!(
+                child.shutdown_started, None,
+                "the terminal is still running"
+            );
+        }
         console.resize(97, 29).unwrap();
         input.write_all(b"sample\r").unwrap();
         assert_eq!(
@@ -512,6 +613,8 @@ mod tests {
         assert_eq!(child.try_wait().unwrap(), None);
         assert!(!child.exit_pending().unwrap());
         child.terminate_group().unwrap();
+        #[cfg(target_os = "macos")]
+        assert!(child.shutdown_started.is_some());
         let deadline = Instant::now() + Duration::from_secs(2);
         let status = loop {
             if let Some(status) = child.try_wait().unwrap() {
@@ -623,7 +726,18 @@ mod tests {
             "the escaped root is outside the guarantee"
         );
         child.root.kill().unwrap();
-        assert!(!child.root.wait().unwrap().success());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert_eq!(status, ExitStatus::Signal(libc::SIGKILL.to_string()));
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the escaped fixture did not exit"
+            );
+            thread::sleep(Duration::from_millis(2));
+        }
         recipient.terminate_group().unwrap();
         recipient.reap();
         drop(reader);
@@ -668,5 +782,164 @@ mod tests {
         assert!(!group_contains_only_root(group));
         drop(reader);
         drop(stderr);
+    }
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "process: leave a live owned output holder after the group root exits"
+    )]
+    fn group_with_a_live_member(terminal: bool) -> (Child, mpsc::Receiver<io::Result<usize>>) {
+        use std::io::Read;
+
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "trap '' HUP; /bin/sleep 10 & printf '%s\\n' \"$!\"; wait",
+        ]);
+        let (mut child, output): (_, Box<dyn Read + Send>) = if terminal {
+            let Terminal { child, output, .. } = spawn_terminal(command, 80, 24).unwrap();
+            (child, Box::new(output))
+        } else {
+            let Piped { child, stdout, .. } = spawn_piped(&mut command).unwrap();
+            (child, Box::new(stdout))
+        };
+        let (ready, member) = mpsc::sync_channel(1);
+        let (finished, eof) = mpsc::sync_channel(1);
+        let _drain = thread::spawn(move || {
+            let mut reader = BufReader::new(output);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            ready.send(line).unwrap();
+            let mut rest = String::new();
+            let read = reader.read_to_string(&mut rest);
+            let end = match read {
+                Err(error) if terminal && terminal_eof(&error) => Ok(rest.len()),
+                other => other,
+            };
+            finished.send(end).unwrap();
+        });
+        let pid = member
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .trim()
+            .parse::<libc::pid_t>()
+            .unwrap();
+        let group = child.group.unwrap();
+        // SAFETY: getpgid only observes the disposable fixture's child.
+        assert_eq!(unsafe { libc::getpgid(pid) }, group);
+
+        // Signal only the root so the same-group child holds the output
+        // open when we start to observe the root's exit.
+        child.root.kill().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !child.exit_pending().unwrap() {
+            assert!(Instant::now() < deadline, "the fixture root did not exit");
+            thread::sleep(Duration::from_millis(2));
+        }
+        // SAFETY: getpgid observes membership without signaling the process.
+        assert_eq!(unsafe { libc::getpgid(pid) }, group);
+        assert!(matches!(eof.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        (child, eof)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn terminal_root_collection_stops_the_remaining_output_holder() {
+        let (mut child, eof) = group_with_a_live_member(true);
+        assert_eq!(
+            child.try_wait().unwrap(),
+            Some(ExitStatus::Signal(libc::SIGKILL.to_string()))
+        );
+        assert_eq!(
+            eof.recv_timeout(Duration::from_secs(3)).unwrap().unwrap(),
+            0
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn darwin_shutdown_retries_before_collecting_the_root() {
+        for terminal in [false, true] {
+            let (mut child, eof) = group_with_a_live_member(terminal);
+            if !terminal {
+                // Model an accepted group signal with a stale snapshot.
+                child.shutdown_started = Some(Instant::now() - SHUTDOWN_GRACE);
+            }
+            let group = child.group.unwrap();
+            assert_eq!(child.try_wait().unwrap(), None);
+            assert!(child.shutdown_started.is_some());
+            assert!(exit_pending(group).unwrap(), "the root must stay unreaped");
+            assert_eq!(
+                eof.recv_timeout(Duration::from_secs(3)).unwrap().unwrap(),
+                0,
+                "the shutdown poll must close the live member's output"
+            );
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert_eq!(status, ExitStatus::Signal(libc::SIGKILL.to_string()));
+                    break;
+                }
+                assert!(Instant::now() < deadline, "shutdown remained unconfirmed");
+                thread::sleep(Duration::from_millis(2));
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn darwin_terminal_timeout_keeps_the_group_owned_until_a_later_poll() {
+        let (mut child, eof) = group_with_a_live_member(true);
+        child.shutdown_started = Some(Instant::now() - SHUTDOWN_GRACE);
+        let group = child.group.unwrap();
+        assert_eq!(
+            child.try_wait().unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert_eq!(child.group, Some(group));
+        assert!(
+            exit_pending(group).unwrap(),
+            "the timeout must retain the root"
+        );
+        assert_eq!(
+            eof.recv_timeout(Duration::from_secs(3)).unwrap().unwrap(),
+            0
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    assert_eq!(status, ExitStatus::Signal(libc::SIGKILL.to_string()));
+                    assert_eq!(child.group, None);
+                    break;
+                }
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => {}
+                result => panic!("unexpected shutdown poll: {result:?}"),
+            }
+            assert!(Instant::now() < deadline, "shutdown remained unconfirmed");
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn darwin_background_reaping_retries_the_owned_group_signal() {
+        for terminal in [false, true] {
+            let (mut child, eof) = group_with_a_live_member(terminal);
+            child.shutdown_started = Some(if terminal {
+                Instant::now() - SHUTDOWN_GRACE
+            } else {
+                Instant::now()
+            });
+            let group = child.group.unwrap();
+            child.reap();
+            assert!(exit_pending(group).is_err(), "the root must be collected");
+            assert_eq!(
+                eof.recv_timeout(Duration::from_secs(3)).unwrap().unwrap(),
+                0,
+                "reaping must retry the signal before freeing the group id"
+            );
+        }
     }
 }

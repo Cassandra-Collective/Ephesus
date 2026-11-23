@@ -56,7 +56,7 @@ jobs:
           args=(--package eph-process --package eph-pty
             --test-package eph-process --test-package eph-pty
             --file crates/eph-process/src/unix.rs
-            --re 'Child::terminate_group|Child::group_signal_failure|Child::is_macos_zombie_group|group_contains_only_root|is_only_root'
+            --re 'Child::(reap|terminate_group|signal_group|group_signal_failure|is_macos_zombie_group|macos_ready_to_reap|try_wait)|group_contains_only_root|is_only_root'
             --no-shuffle)
           unset CARGO_TARGET_DIR
           set +e

@@ -173,6 +173,8 @@ impl Session {
 
     /// Check for root exit without blocking on terminal output. After observing
     /// exit, schedule close while the output worker can still drain the terminal.
+    /// On macOS, an unconfirmed shutdown can return a timeout error while the
+    /// session still owns the process group. Later polls can finish cleanup.
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         if let Some(backend) = &mut self.backend
             && let Some(exit) = backend.poll_exit()?

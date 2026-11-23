@@ -182,6 +182,16 @@ The launch and shutdown guarantees are in
   The engine adapter supplies the interrupt sequence. `resize` applies
   geometry in cells. `kill` returns the scope to which termination was
   requested. `try_wait` observes the root exit separately from output.
+- On macOS, PTY polling retains the root until it can confirm shutdown of
+  its owned group. The 500 ms confirmation interval starts at the first
+  forced shutdown request or when polling first observes natural root
+  exit. If shutdown is still unconfirmed on a poll after that interval,
+  the poll returns a timeout error. The session keeps ownership so later
+  polls can retry and collect the status. Dropping the session hands
+  cleanup to its worker for a separate bounded 500 ms attempt. If the
+  worker ends its retries with shutdown still unconfirmed, it waits
+  for and collects the root without sending further group signals.
+  The worker has no caller to report that outcome to.
 - The output worker applies ADR-0010 before bytes enter the bounded queue.
   The consumer must drain this queue as the session runs and continue to
   EOF after root exit. The worker flushes any held prefix at EOF. Initial

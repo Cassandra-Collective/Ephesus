@@ -300,3 +300,131 @@ The plain stage preceded the final macOS-only readiness check. The
 instrumented stage included it and emitted fingerprint
 `fnv1a64:4ad973daec75238a` with zero untested modules. The five frozen
 TypeScript checks passed.
+
+A disposable i686 Linux guest ran Git 2.49.1 through the same alias launch
+shape. The shell reported parent PID 31, which matched the launched Git PID
+and PGID. The probe then modeled a stale membership snapshot by signaling
+only the root and alias shell after an additional member had joined. That
+member remained live in group 31 and held the pipe. A second group signal
+closed the pipe while the exited root still pinned the group. The probe
+passed one test and exited 0. This checks the alias assumption and
+demonstrates the mechanism under a controlled signal list.
+
+The Architect approved publishing diagnostic commit `f1fdd58`. Native
+execution is tracked in
+[CI run 45058609883](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45058609883).
+Those runs exercise the diagnostic revision and use its separate
+`fnv1a64:4ad973daec75238a` fingerprint.
+
+### Native macOS finding
+
+The [first diagnostic macOS job](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45058609883/job/137319291123)
+reproduced the stdout timeout in the plain Git suite. The group snapshot
+contained the unreaped Git root, PID 18968 in state `Z`, and a live
+`sleep`, PID 18974 in state `S`. Both had PGID 18968. The second signal
+through the original owner succeeded, stdout reached EOF, and collection
+reported root signal 9. The original timeout still failed the test and
+prevented coverage emission. This proves that root exit did not establish
+shutdown of the owned group in this case. The trace does not time the
+descendant's fork relative to the kernel's member snapshot.
+
+The downloaded macOS job log has SHA-256
+`307e7ba3921d28014501252fae3ba8536bc34f83a4a173286b5c22e075cc1f68`.
+The Windows and Linux jobs passed the plain and coverage-instrumented test
+suites and reached the missing new-crate coverage floors. The TypeScript,
+docs integrity and attribution jobs passed.
+
+Apple's [Darwin group signal source](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/kern/kern_sig.c#L1576)
+uses [a member snapshot](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/kern/kern_proc.c#L4058)
+that it releases before delivering signals. This mechanism is consistent
+with the observed survivor. The trace itself establishes the survivor's
+membership and liveness after the first request.
+
+### Local repair verification
+
+The local repair keeps the macOS root unreaped while shutdown polling checks
+the group. A successful group signal leaves confirmation pending. After root
+exit, a missing group or an exact lone-root observation confirms shutdown.
+Git uses its existing deadlines. A deterministic macOS regression sends the
+first signal only to the fixture root, verifies that a live member in the
+same group still holds stdout, and checks that the first poll issues another
+signal while the root is still unreaped. A second regression covers detached
+reaping under the same conditions. Native execution remains pending.
+
+Darwin Clippy passed with the process, terminal and Git tests compiled for
+`aarch64-apple-darwin`. A disposable Linux guest passed the eight process
+tests and both focused Git shutdown tests. The first local Windows pass
+completed 119 Git, 16 native process and 23 PTY tests.
+
+The follow-up Windows gate, launched through `cmd.exe`, exposed another
+launch case. The Agora failed to start Git because the native environment
+encoder rejected a name containing `=`. A temporary Rust program enumerated
+only unusual inherited names and observed `=C:` under `cmd.exe`.
+[CreateProcessW](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessw#remarks)
+documents these per-drive directory entries in custom environment blocks.
+The encoder now accepts exactly that drive-name shape and retains validation
+for ordinary entries. The ordinal encoding test checks the last alias and
+its position in the block. The same Git assertion under `cmd.exe` went from
+no exit code before the fix to Git's expected exit code after it.
+
+All 93 `eph-agora` tests passed when rerun through `cmd.exe`. The focused
+Windows `cargo-mutants 27.1.0` round caught all six environment encoder
+mutations. Both viable control mutations missed with zero tests running.
+Both baselines passed, there were no timeouts, and all 82 tracked Rust
+inputs had unchanged hashes. The PowerShell gate passed its first six
+steps and the instrumented suites, then reported only the two missing
+coverage floors.
+
+The full Windows `cargo xtask gate` rerun through `cmd.exe` reached the
+same boundary. Both test builds passed, all existing coverage floors held,
+and the only two findings were the unseeded `eph-process` and `eph-pty`
+floors. These local measurements do not seed the floors.
+
+The focused Linux guest round selected the shared `Child::terminate_group`,
+`Child::signal_group`, and `Child::group_signal_failure` bodies. The
+eight-test baseline passed. Each of the five viable mutations failed one
+Rust test with exit code 101. The two viable control mutations both missed
+with zero tests running. There were no unviable mutations or timeouts, and
+all 82 tracked Rust inputs had unchanged hashes.
+
+The Darwin workflow now selects the shared `Child::try_wait` guard that
+permits root collection. Linux's terminal-specific readiness checks are
+separate, so the Darwin selection has 31 candidates and omits Linux-only
+branches. Bash accepted the workflow step. Its validator accepted the
+recorded Linux round and control, and rejected copies with a failed
+baseline, a survivor, a timeout, a control catch, or a wrong control exit
+status. This exercises the workflow checks locally. Native Darwin
+execution remains pending.
+
+The Linux regression leaves a same-group descendant ignoring hangup after
+the terminal root exits. The real wait path stops that descendant and the
+terminal output reaches EOF. All nine process tests and both focused Git
+shutdown tests passed in the guest. The reap-guard round caught all six
+viable mutations through Rust test failures. One mutation did not compile
+because `ExitStatus` has no `Default` implementation. Both controls missed
+with zero tests running, there were no timeouts, and the hashes of all 82
+tracked Rust inputs matched. Darwin cross-Clippy passed on the same guard
+and fixture changes.
+
+### Approved macOS confirmation interval
+
+On 2026-11-23 the Architect approved reporting an unconfirmed PTY shutdown
+after 500 ms while retaining ownership for later polls. The interval starts
+at the first forced request or first observation of natural root exit.
+The timeout test starts with an expired interval and a live output holder.
+It requires a timeout, an unreaped root, EOF after another owned-group
+signal, and the original root status from a later poll. A running terminal
+with no shutdown request accrues no cleanup time. The detached PTY
+regression also enters disposal with an expired foreground interval and
+checks that the worker retries before collecting the root. A detached Git
+worker uses the remaining time from the original request.
+
+`cargo clippy --locked --target aarch64-apple-darwin -p eph-process -p eph-pty -p eph-git --tests -- -D warnings`
+passed with the new regressions compiled. The expanded Darwin workflow
+lists 33 mutation candidates. Native tests and the native mutation round
+remain required.
+
+The Windows gate through `cmd.exe` passed formatting, Clippy, the plain
+and instrumented workspace suites, dependency review and invariant
+checks on the approved repair. The five frozen-tree checks passed. The
+gate reported only the two missing CI-seeded coverage floors.
