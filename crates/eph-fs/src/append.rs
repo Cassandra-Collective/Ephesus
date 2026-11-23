@@ -24,6 +24,11 @@
 //! The line's format is not this crate's: a `seq_of` function reads the `seq`
 //! from a line, and the caller renders each line given its `seq`. One process
 //! writes a log (ADR-0004); `&mut self` keeps one writer per handle.
+//!
+//! [`append_line`] is the same append for a file whose lines carry no `seq` and
+//! which never rotates, such as the task archive (SDD-RUST §4.5). It keeps the
+//! first two rules and reads only the file's last byte, so its cost does not
+//! grow with the file (Architect, 2026-10-25).
 
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -138,14 +143,7 @@ impl AppendLog {
             return Err(AppendError::Multiline);
         }
         let rotation = self.rotate_if_due();
-        let torn = ends_mid_line(&self.live).map_err(AppendError::Io)?;
-        let mut text = String::with_capacity(line.len() + 2);
-        if torn {
-            text.push('\n');
-        }
-        text.push_str(&line);
-        text.push('\n');
-        append_bytes(&self.live, text.as_bytes()).map_err(AppendError::Io)?;
+        write_line(&self.live, &line).map_err(AppendError::Io)?;
         self.last_seq = seq;
         Ok(Appended { seq, rotation })
     }
@@ -179,6 +177,34 @@ impl AppendLog {
             Err(error) => Rotation::Skipped(format!("cannot seal the live file: {error}")),
         }
     }
+}
+
+/// Appends `line` to the append-only file at `path` as one line, synced before
+/// it returns, for a file whose lines carry no `seq` and which never rotates.
+/// A torn last line is left as it is and `line` starts on a fresh one. Creates
+/// the file, not its directory. A `line` holding a line break is refused with
+/// [`io::ErrorKind::InvalidInput`], and nothing is written.
+pub fn append_line(path: &Path, line: &str) -> io::Result<()> {
+    if line.contains('\n') || line.contains('\r') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the line holds a line break, which would make it two lines",
+        ));
+    }
+    write_line(path, line)
+}
+
+/// Appends `line` and a newline, after a newline of its own when the file ends
+/// mid-line.
+fn write_line(path: &Path, line: &str) -> io::Result<()> {
+    let torn = ends_mid_line(path)?;
+    let mut text = String::with_capacity(line.len() + 2);
+    if torn {
+        text.push('\n');
+    }
+    text.push_str(line);
+    text.push('\n');
+    append_bytes(path, text.as_bytes())
 }
 
 #[expect(
@@ -443,6 +469,51 @@ mod tests {
         ));
         assert!(!dir.join("log.jsonl").exists(), "nothing was written");
         assert_eq!(log.next_seq(), 1, "no seq was spent");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_line_with_no_seq_is_appended_whole_after_a_torn_tail() {
+        let dir = scratch("line");
+        let file = dir.join("archive.jsonl");
+        append_line(&file, "{\"a\":1}").unwrap();
+        append_line(&file, "{\"b\":2}").unwrap();
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "{\"a\":1}\n{\"b\":2}\n",
+            "an absent file is created, and each line ends with a newline"
+        );
+        write_atomic(&file, b"{\"a\":1}\n{\"b\"").unwrap();
+        append_line(&file, "{\"c\":3}").unwrap();
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "{\"a\":1}\n{\"b\"\n{\"c\":3}\n",
+            "the torn bytes stay exactly as they were"
+        );
+        write_atomic(&file, b"").unwrap();
+        append_line(&file, "{\"d\":4}").unwrap();
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "{\"d\":4}\n",
+            "an empty file is not torn"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_line_with_a_line_break_or_no_directory_writes_nothing() {
+        let dir = scratch("line-refused");
+        let file = dir.join("archive.jsonl");
+        for line in ["two\nlines", "carriage\rreturn"] {
+            let error = append_line(&file, line).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{line:?}");
+        }
+        assert!(!file.exists(), "nothing was written");
+        assert!(
+            append_line(&dir.join("absent").join("archive.jsonl"), "{}").is_err(),
+            "the directory is not created"
+        );
+        assert!(!dir.join("absent").exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 

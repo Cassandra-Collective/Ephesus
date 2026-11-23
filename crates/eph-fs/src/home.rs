@@ -20,6 +20,9 @@
 //!   changed. A file with no `seededFrom` was made by hand and is not compared.
 //!   `config.json` is created as `{schemaVersion}` when absent, which means every
 //!   default (§4.1).
+//! - **`prompts/` holds overrides only** (SDD-RUST §4.4). Nothing is copied
+//!   into it; [`prompt`] uses the bundled text unless the home holds a file at
+//!   the same path, and reports one that cannot be read.
 //!
 //! Every condition is returned to the caller, which reports it (invariant 7).
 //! Nothing here decides how a boot proceeds on a refused home: that is the
@@ -303,6 +306,52 @@ fn seed(
         )),
     }
     Ok(())
+}
+
+/// A shipped prompt as this home uses it (SDD-RUST §4.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prompt {
+    /// The override when there is one that can be read, else the bundled text.
+    pub text: String,
+    /// Set when an override exists and cannot be read.
+    pub condition: Option<Condition>,
+}
+
+/// The prompt at `path` (`/`-separated, as under the repository's `prompts/`)
+/// with the home's override applied (SDD-RUST §4.4): `<prompts>/<path>`
+/// replaces `bundled` when it exists. One that exists and cannot be read as
+/// text is reported, and `bundled` is used. A link to nothing exists, so it is
+/// reported too, never read as no override.
+pub fn prompt(prompts: &Path, path: &str, bundled: &str) -> Prompt {
+    let file = path
+        .split('/')
+        .fold(prompts.to_path_buf(), |dir, part| dir.join(part));
+    let unreadable = match fs::symlink_metadata(&file) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => Some(error),
+        Ok(_) => match fs::read_to_string(&file) {
+            Ok(text) => {
+                return Prompt {
+                    text,
+                    condition: None,
+                };
+            }
+            Err(error) => Some(error),
+        },
+    };
+    Prompt {
+        text: bundled.to_string(),
+        condition: unreadable.map(|error| {
+            condition(
+                "prompt-unreadable",
+                Some(path),
+                format!(
+                    "the override {} cannot be read ({error}); the bundled prompt is used until it is repaired or removed",
+                    file.display()
+                ),
+            )
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -624,5 +673,71 @@ mod tests {
             ["home/unreadable-policy:authority.json"]
         );
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_prompt_override_replaces_the_bundled_text_and_a_bad_one_is_reported() {
+        let dir = scratch("prompts");
+        let file = dir.join("agora").join("PROTOCOL.md");
+        let bundled = "the bundled protocol\n";
+        assert_eq!(
+            prompt(&dir, "agora/PROTOCOL.md", bundled),
+            Prompt {
+                text: bundled.to_string(),
+                condition: None
+            },
+            "no override, and no prompts directory at all"
+        );
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        write_atomic(&file, b"the Architect's protocol\n").unwrap();
+        assert_eq!(
+            prompt(&dir, "agora/PROTOCOL.md", bundled),
+            Prompt {
+                text: "the Architect's protocol\n".to_string(),
+                condition: None
+            }
+        );
+        write_atomic(&file, &[0xff, 0xfe]).unwrap();
+        let bad = prompt(&dir, "agora/PROTOCOL.md", bundled);
+        assert_eq!(bad.text, bundled, "bytes that are not text");
+        let why = bad.condition.unwrap();
+        assert_eq!(
+            why.cause.to_string(),
+            "home/prompt-unreadable:agora/PROTOCOL.md"
+        );
+        assert!(
+            why.detail
+                .ends_with("the bundled prompt is used until it is repaired or removed"),
+            "{}",
+            why.detail
+        );
+        fs::remove_file(&file).unwrap();
+        fs::create_dir_all(&file).unwrap();
+        assert!(
+            prompt(&dir, "agora/PROTOCOL.md", bundled)
+                .condition
+                .is_some(),
+            "a directory where the override goes"
+        );
+        // A path the OS refuses to look up is an error other than "not found".
+        let refused = prompt(&dir, "agora/PRO\0TOCOL.md", bundled);
+        assert_eq!(refused.text, bundled);
+        assert!(refused.condition.is_some());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_prompt_override_that_links_to_nothing_is_reported() {
+        let dir = scratch("prompt-link");
+        fs::create_dir_all(dir.join("agora")).unwrap();
+        std::os::unix::fs::symlink(dir.join("gone"), dir.join("agora").join("board.md")).unwrap();
+        let linked = prompt(&dir, "agora/board.md", "seed\n");
+        assert_eq!(linked.text, "seed\n");
+        assert!(
+            linked.condition.is_some(),
+            "a link to nothing is not absent"
+        );
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

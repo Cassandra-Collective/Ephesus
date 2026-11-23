@@ -3,8 +3,8 @@
 //! Contract: [`parse`] reads a document in four steps, and each refuses with
 //! its own [`SchemaError`]:
 //!
-//! 1. the text, strictly: not JSON, or an object naming a key twice, is refused
-//!    ([`crate::json`]);
+//! 1. the text, strictly: not JSON, a leading byte-order mark ([`BOM`]), or an
+//!    object naming a key twice, is refused ([`crate::json`]);
 //! 2. the version, read before the shape, so a file from another build is
 //!    reported as newer or older rather than as a pile of unknown fields;
 //! 3. the shape, strict (unknown fields are refused);
@@ -32,8 +32,20 @@ pub trait Versioned: Serialize + DeserializeOwned {
     fn validate(&self) -> Result<(), SchemaError>;
 }
 
+/// Why a document that begins with a byte-order mark is refused, with the fix.
+pub const BOM: &str = "it begins with a byte-order mark (U+FEFF), which strict JSON refuses: save it as UTF-8 without one";
+
 /// Parses and validates `text` as a `T`. See the module contract.
 pub fn parse<T: Versioned>(text: &str) -> Result<T, SchemaError> {
+    // An editor that saves "UTF-8 with BOM" makes a file serde_json reports as
+    // an error at line 1 column 1, which names nothing the Architect can fix
+    // (R1.4a review, 2026-10-20).
+    if text.starts_with('\u{feff}') {
+        return Err(SchemaError::NotJson {
+            file: T::FILE,
+            detail: BOM.to_string(),
+        });
+    }
     let value = crate::json::strict_value(text).map_err(|error| {
         if error.classify() == serde_json::error::Category::Data {
             SchemaError::Shape {
@@ -148,6 +160,15 @@ mod tests {
                 ..
             })
         ));
+        let bom = parse::<Probe>("\u{feff}{\"schemaVersion\":2,\"n\":1}").unwrap_err();
+        assert_eq!(
+            bom.to_string(),
+            format!("probe.json: not JSON ({BOM}); the file is damaged")
+        );
+        assert!(
+            parse::<Probe>("{\"schemaVersion\":2,\"n\":1}").is_ok(),
+            "the same document without the mark reads"
+        );
         assert!(matches!(
             parse::<Probe>("{\"n\":1}"),
             Err(SchemaError::NoVersion {

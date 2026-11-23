@@ -185,8 +185,15 @@ fails a planted violation by file and line.
 - **R1.3** `eph-git`: the single committer (queue, retry and backoff, stale `index.lock`,
   startup reconcile, foreground housekeeping, literal pathspecs, hermetic config) and
   worktrees (FR-1.5's vacancy rule: nothing is deleted to make room).
-- **R1.4** `eph-agora`: registry, ledger, board, the log with publish and subscribe, its
-  readers, the degradation channel, `StateStore` (absent ≠ damaged), `DIAGNOSIS.md`.
+- **R1.4a** `eph-agora`, the stores: `Store<T>` (absent ≠ damaged, an on-damaged policy
+  per record), the registry, the task ledger with its retention, the board, seeding the
+  Agora (`PROTOCOL.md`, `.gitignore`), and the boot order. Split from R1.4 by the
+  Architect (2026-10-20).
+- **R1.4b** `eph-agora`, the book of record: the log writer, its readers across rotation,
+  publish and subscribe, the degradation channel, and the reader half of killed
+  mid-append. `DIAGNOSIS.md` moves to R7 (Architect, 2026-10-20): its inputs (the crew,
+  the consent, armed triggers) arrive in R2, R7 and R9, and its timer, quit path and
+  `status` verb are R7's.
 
 *Exit:* FR-4.1, FR-4.2, FR-4.4 and NFR-7 by test. Killed mid-append and mid-commit,
 nothing is lost or torn on reopen. A mutation round with a control. Every test that runs
@@ -254,7 +261,7 @@ pacing, ceilings settable from the app, telemetry spans.
 The orchestrator's lifecycle and reserved seat, respawn with memory, delegated
 authority, the ledger endpoint, `control.sock` and `ephctl`, the consent gate
 (ADR-0032), one harness per home (ADR-0034), the restore order (ADR-0027), the quit
-sequence.
+sequence, and `DIAGNOSIS.md` (moved from R1.4, Architect, 2026-10-20).
 *Exit:* a two-agent company directed through `ephctl` with no window (UC-02, FR-15.6).
 SRS §6 criterion 6 (blackout) passes. GYM-013's headless checkpoint is measured.
 
