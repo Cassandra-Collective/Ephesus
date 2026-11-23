@@ -164,8 +164,13 @@ fails a planted violation by file and line.
 
 ### R1 — The home and the book of record
 
-- **R1.1** `eph-schema`: the persisted models, redesigned where the clean break allows,
-  each specified in the new SDD §4 first.
+- **R1.0** The design (approved 2026-10-19): a new SDD section for the harness home and
+  every persisted schema, each redesigned from first principles with today's used only
+  as a checklist of what must be covered, and each departure stated with its reason.
+  It goes to the Architect for one approval before R1.1 starts. No code.
+- **R1.1** `eph-schema`: the persisted models, built to R1.0's approved design, and the
+  Rust coverage floors (`cargo-llvm-cov`, measured on all three CI platforms) starting
+  with this first crate.
 - **R1.2** `eph-fs`: `write_atomic`, the append-only JSONL writer (seq recovery, torn-tail
   tolerance), the home layout and first-boot seeding (`gate-policy.json`,
   `authority.json`: only when absent, reported).
@@ -176,7 +181,11 @@ fails a planted violation by file and line.
   readers, the degradation channel, `StateStore` (absent ≠ damaged), `DIAGNOSIS.md`.
 
 *Exit:* FR-4.1, FR-4.2, FR-4.4 and NFR-7 by test. Killed mid-append and mid-commit,
-nothing is lost or torn on reopen. A mutation round with a control.
+nothing is lost or torn on reopen. A mutation round with a control. Every test that runs
+git does so under a hermetic config: `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL` at an
+empty file, and the config-value environment variables cleared. A host's git config
+then cannot change a verdict. That is the lesson of PR #75, closed with the TypeScript
+tree.
 
 ### R2 — The terminal plane and the engine seam
 
@@ -326,8 +335,16 @@ re-read for TypeScript-specific mechanisms before its first package.
 
 ## 9. Decisions still owed (asked at their phase, not before)
 
-- R0: ~~the CI matrix~~ (answered 2026-10-19: Linux, Windows and macOS), and whether
-  `cargo xtask gate` replaces the `npm` commands in CLAUDE.md now or at parity.
+- R0: ~~the CI matrix~~ (answered 2026-10-19: Linux, Windows and macOS), and ~~whether
+  `cargo xtask gate` replaces the `npm` commands in CLAUDE.md now or at parity~~
+  (settled by the R0.3 gate decision, DECISIONS-LOG 2026-10-19: a Rust package runs
+  both, so CLAUDE.md lists both, labelled, until R14).
+- At R0's close: an R phase stays in `PROGRESS.md` instead of moving to
+  `docs/progress/` until the archive learns the cross-track build order (M8c → R0 …
+  R14 → M9). `check-readme-current.cjs` accepts only `M<n>[letter].md` there, so an
+  `R0.md` archived before then is refused as a stray file. That refusal is the rule
+  teaching itself. Whether to build the cross-track archive is asked with R1's
+  package list.
 - R1: each redesigned schema (new SDD §4), field by field, where it departs from today's.
 - R2: whether `portable-pty`'s process-tree kill suffices on Windows or a job object (an
   FFI boundary crate) is needed.

@@ -7,7 +7,9 @@ description: Verify an Ephesus milestone's exit criteria before declaring it don
 
 1. Identify the milestone under review from `docs/PROGRESS.md`.
 2. Read its section in `docs/IMPLEMENTATION.md` and list its **exit criteria** and
-   **named scenario suites** (S-*) verbatim.
+   **named scenario suites** (S-*) verbatim. **An R phase of the Rust rewrite**
+   (ADR-0041) closes the same way, and its exit criteria are in `docs/RUST-PLAN.md` §5.
+   Its Rust evidence includes the CI `rust` job green on Linux, Windows and macOS.
 3. For each exit criterion: verify it *by running it*, not by reading code. Record the
    command and observed result. A criterion nobody ran is unmet.
 4. Run the milestone's S-suites (specs in `docs/TEST-STRATEGY.md` §3). All must pass.

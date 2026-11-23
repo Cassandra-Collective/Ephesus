@@ -21,15 +21,18 @@ recorded.
 
 ## Resume here
 
-*As of 2026-10-19, on `main` @ `9269eaf`: R0.1 is PR #102 (`feature/r0-1-workspace-skeleton`). R0.2 is `feature/r0-2-gate-chain`, stacked on it. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
+*As of 2026-10-19, on `main` @ `9269eaf`: R0.1 is PR #102 (`feature/r0-1-workspace-skeleton`). R0.2 (`feature/r0-2-gate-chain`) and R0.3 (`feature/r0-3-standards-learn-rust`) are stacked on it, pushed, and get their PRs as the one below each merges. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
 
 **Ephesus is being rewritten in Rust (ADR-0041, the Architect's direction of
 2026-10-19), and the rewrite comes before everything below.** The Architect
 approved [`RUST-PLAN.md`](./RUST-PLAN.md), crate Set A in
 [`RUST-CRATES.md`](./RUST-CRATES.md), GYM-013's thresholds and the SRS wording on
-2026-10-19. The next build step is **the first unticked R0 box below**. A phase after
-R0 starts only when the Architect has approved its package list, through
-AskUserQuestion. Silence is not a yes. The TypeScript tree is frozen as
+2026-10-19. **R0 is DONE** (verdict below, 2026-10-19). **The next build step is R1.0, the design
+of the home and every persisted schema, as a new SDD section put to the Architect for
+one approval before R1.1 starts.** The Architect approved R1's package list on
+2026-10-19, with every format redesigned from first principles (DECISIONS-LOG). A later
+phase still starts only when he approves its package list, through AskUserQuestion.
+Silence is not a yes. The TypeScript tree is frozen as
 the behavioural reference and is deleted at R14 (parity). The rewrite is measured by
 [GYM-013](./gymnasium/proposals/GYM-013-the-rust-rewrite-is-measured.md). The
 packages are in *The Rust rewrite* section below.
@@ -74,61 +77,7 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; R0 in progress. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
-
----
-
-## The Rust rewrite — R0 to R14 (ADR-0041; plan approved 2026-10-19)
-
-The order and each phase's exit criteria are in [`RUST-PLAN.md`](./RUST-PLAN.md) §5.
-A phase's packages are listed here when the Architect approves them at that phase's
-start. R0's were approved with the plan. A ticked box carries its evidence, the same
-as every M package.
-
-### R0 — The workspace and its gates
-
-- [x] **R0.1 Workspace skeleton** — `Cargo.toml`, `rust-toolchain.toml` (1.96.0),
-  `[workspace.lints]`, `clippy.toml`, `deny.toml`, `target/` ignored, and
-  `CARGO_TARGET_DIR` outside OneDrive documented. *Evidence (2026-10-19, win32,
-  toolchain 1.96.0):* `cargo xtask gate` all steps green (9 unit + 5 integration tests;
-  cargo-deny advisories, bans, licenses, sources ok). 13 of 13 planted lint violations
-  refused by their own rule. An MPL-2.0 crate and a `*` version were each refused by
-  cargo-deny. Mutation round: 31 mutants, 26 caught, 5 unviable, 0 missed. Its control
-  (unit tests only) reports 12 missed. A stale `Cargo.lock` refused (exit 101, lockfile
-  unchanged) after a review found the first alias rewrote it and reported green. Linux
-  and Windows CI not yet run (R0.2).
-  [`2026-10-19-r0-1-workspace-skeleton.md`](./implementations/2026-10-19-r0-1-workspace-skeleton.md)
-- [x] **R0.2 The gate chain** — `xtask` with `gate`, `invariants` and `deps`, and the
-  `rust` CI job on Linux and Windows. Each rule fails a planted violation by file and
-  line. *Evidence (2026-10-19):* gate all six steps green on win32 (76 unit + 8
-  integration tests), and fmt, clippy, tests, invariants and deps green on Linux (WSL2).
-  Every rule refused its plants by file and line in a scratch workspace: 10
-  invariants violations and 3 deps plants, offline, lockfile unchanged. `cargo xtask
-  mutants xtask` round 3: ROUND OK, 225 mutants, 211 caught, 0 missed, 14 unviable;
-  control 55/55 missed; sources unchanged. Rounds 1 (34 survivors, each answered) and
-  2 (baseline failed in the copy) are in the doc. CI run 39312750826 at `970ac0b`: the
-  Rust gate succeeded on ubuntu, windows and macos, and every TypeScript check passed.
-  [`2026-10-19-r0-2-the-gate-chain.md`](./implementations/2026-10-19-r0-2-the-gate-chain.md)
-- [ ] **R0.3 The standards learn Rust** — the Rust edition of ENGINEERING-STANDARDS and
-  BUILD-PROMPT §3 (ADR-0041's table), `check-readme-current.cjs` learning the `R`
-  prefix, and the skills learning the R-order and the Rust gate.
-
-### R1 to R14
-
-- [ ] **R1** The home and the book of record
-- [ ] **R2** The terminal plane and the engine seam
-- [ ] **R3** The event plane
-- [ ] **R4** The first window
-- [ ] **R5** Hermes
-- [ ] **R6** The Watch
-- [ ] **R7** Artemis, the control surface, the headless company
-- [ ] **R8** The Library
-- [ ] **R9** The Odeon, the org and the profiles
-- [ ] **R10** The Harbor
-- [ ] **R11** The Gymnasium, the Stoa and company modes
-- [ ] **R12** The Herald
-- [ ] **R13** The floor and the full window
-- [ ] **R14** Parity: the TypeScript tree deleted, the ruleset switched, M9 asked
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19; **R0 done**; R1 approved, R1.0 (the design) next. Runs before M9 | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 
@@ -371,6 +320,93 @@ restarted at M6.9 or M7b. Every figure above is quoted from the package's own re
 **nothing was re-run to produce this entry**, and no box was ticked that its
 implementation doc did not already evidence. See
 [the status snapshot](status/2026-09-15-status.md).
+
+## The Rust rewrite — R0 to R14 (ADR-0041; plan approved 2026-10-19)
+
+The order and each phase's exit criteria are in [`RUST-PLAN.md`](./RUST-PLAN.md) §5.
+A phase's packages are listed here when the Architect approves them at that phase's
+start. R0's were approved with the plan. A ticked box carries its evidence, the same
+as every M package.
+
+### R0 — The workspace and its gates
+
+- [x] **R0.1 Workspace skeleton** — `Cargo.toml`, `rust-toolchain.toml` (1.96.0),
+  `[workspace.lints]`, `clippy.toml`, `deny.toml`, `target/` ignored, and
+  `CARGO_TARGET_DIR` outside OneDrive documented. *Evidence (2026-10-19, win32,
+  toolchain 1.96.0):* `cargo xtask gate` all steps green (9 unit + 5 integration tests;
+  cargo-deny advisories, bans, licenses, sources ok). 13 of 13 planted lint violations
+  refused by their own rule. An MPL-2.0 crate and a `*` version were each refused by
+  cargo-deny. Mutation round: 31 mutants, 26 caught, 5 unviable, 0 missed. Its control
+  (unit tests only) reports 12 missed. A stale `Cargo.lock` refused (exit 101, lockfile
+  unchanged) after a review found the first alias rewrote it and reported green. Linux
+  and Windows CI not yet run (R0.2).
+  [`2026-10-19-r0-1-workspace-skeleton.md`](./implementations/2026-10-19-r0-1-workspace-skeleton.md)
+- [x] **R0.2 The gate chain** — `xtask` with `gate`, `invariants` and `deps`, and the
+  `rust` CI job on Linux and Windows. Each rule fails a planted violation by file and
+  line. *Evidence (2026-10-19):* gate all six steps green on win32 (76 unit + 8
+  integration tests), and fmt, clippy, tests, invariants and deps green on Linux (WSL2).
+  Every rule refused its plants by file and line in a scratch workspace: 10
+  invariants violations and 3 deps plants, offline, lockfile unchanged. `cargo xtask
+  mutants xtask` round 3: ROUND OK, 225 mutants, 211 caught, 0 missed, 14 unviable;
+  control 55/55 missed; sources unchanged. Rounds 1 (34 survivors, each answered) and
+  2 (baseline failed in the copy) are in the doc. CI run 39312750826 at `970ac0b`: the
+  Rust gate succeeded on ubuntu, windows and macos, and every TypeScript check passed.
+  [`2026-10-19-r0-2-the-gate-chain.md`](./implementations/2026-10-19-r0-2-the-gate-chain.md)
+- [x] **R0.3 The standards learn Rust** — the Rust edition of ENGINEERING-STANDARDS and
+  BUILD-PROMPT §3 (ADR-0041's table), `check-readme-current.cjs` learning the `R`
+  prefix, and the skills learning the R-order and the Rust gate. *Evidence
+  (2026-10-19):* see [`2026-10-19-r0-3-standards-learn-rust.md`](./implementations/2026-10-19-r0-3-standards-learn-rust.md)
+  §6. The README check sees the R track and named R0.1 and R0.2 as undescribed on the
+  real tree before the README learned them. Its four new cases pass, and its mutation
+  round is in the doc. The SRS amendments to FR-1.1, NFR-8 and NFR-16 are applied.
+
+**R0 verdict (2026-10-19): DONE.** RUST-PLAN §5's exit criteria, verified by execution:
+
+| Criterion | Evidence | Tier |
+|---|---|---|
+| The chain is green on win32 | `cargo xtask gate` all six steps green at R0.2's and R0.3's heads | A |
+| …and on CI on Linux and Windows (macOS too, by the Architect's matrix) | Run 39312750826 at `970ac0b` (R0.2) and run 39317331295 at `b88da94` (R0.3): `Rust gate` success on ubuntu, windows and macos; every TypeScript check passed | B |
+| Each `xtask` rule fails a planted violation by file and line | R0.1: 13 of 13 lints. R0.2: 10 invariants violations and 3 deps plants on a real scratch workspace. R0.3: the README check named R0.1 and R0.2 on the real tree before the README described them | A |
+| Gate-shaped changes carry a mutation round with a control | R0.1: 26 caught, 5 unviable, control 12 missed. R0.2 round 3: ROUND OK, 225 mutants, control 55/55. R0.3: `mutate.cjs` ROUND OK, 11 of 11, control survived | A |
+
+Debt carried forward, none of it blocking:
+
+- the skills' new text takes effect in a session only after R0.3 merges and the main
+  checkout pulls;
+- Rust coverage floors start with R1.1's first crate (Architect, 2026-10-19);
+- R phases stay in this file, not `docs/progress/`, until the archive learns the
+  cross-track order (deferred by the Architect, 2026-10-19).
+
+Merged so far: R0.1 as #102 (`f484a33`). Open: R0.2 as #104. R0.3 is stacked on R0.2
+and opens when #104 merges.
+
+### R1 to R14
+
+- [ ] **R1** The home and the book of record (package list approved 2026-10-19)
+  - [ ] **R1.0 The design** — the new SDD section for the home and every persisted
+    schema, redesigned from first principles; one Architect approval before R1.1.
+  - [ ] **R1.1 `eph-schema`** — the models to the approved design, and the first Rust
+    coverage floors.
+  - [ ] **R1.2 `eph-fs`** — atomic writes, the append-only log, the home and its seeding.
+  - [ ] **R1.3 `eph-git`** — the single committer and worktrees; hermetic git in every
+    git-running test.
+  - [ ] **R1.4 `eph-agora`** — registry, ledger, board, the book of record, degradations,
+    state stores, `DIAGNOSIS.md`.
+- [ ] **R2** The terminal plane and the engine seam
+- [ ] **R3** The event plane
+- [ ] **R4** The first window
+- [ ] **R5** Hermes
+- [ ] **R6** The Watch
+- [ ] **R7** Artemis, the control surface, the headless company
+- [ ] **R8** The Library
+- [ ] **R9** The Odeon, the org and the profiles
+- [ ] **R10** The Harbor
+- [ ] **R11** The Gymnasium, the Stoa and company modes
+- [ ] **R12** The Herald
+- [ ] **R13** The floor and the full window
+- [ ] **R14** Parity: the TypeScript tree deleted, the ruleset switched, M9 asked
+
+---
 
 ## M9 — The harness is the product (plan drafted and APPROVED FOR PLANNING 2026-10-02; build NOT started)
 

@@ -15,6 +15,7 @@ description: Execute the next Ephesus work package from BUILD-PROMPT.md — resu
 3. Read only the docs BUILD-PROMPT §2 maps to this package.
 4. Execute the working loop (BUILD-PROMPT §4). Hard rules:
    - `npm run typecheck && npm run lint && node scripts/check-invariants.cjs && npm run test:coverage && node scripts/check-coverage.cjs` green before any commit — BUILD-PROMPT §4's TEST line (since M8.0 the suite runs once, under coverage, and the seam rule's two checks run with it).
+   - **A Rust package (R0 → R14, ADR-0041)** runs BUILD-PROMPT §4's Rust TEST line instead: `cargo xtask gate`, then the frozen tree's `prettier --check .`, `eslint . --max-warnings 0`, `check-invariants`, `check-readme-current` and `check-attribution` (ENGINEERING-STANDARDS §1.1). A gate-shaped package adds `cargo xtask mutants <crate>`, which must say ROUND OK. Set `CARGO_TARGET_DIR` outside OneDrive. The package's branch is `feature/r<phase>-<n>-<slug>`, one PR per package.
    - Tests owed by the package (TEST-STRATEGY §2 mapping) are part of the package.
    - Evidence (command + observed result) goes in the commit description.
    - 3 failed distinct attempts on a blocker → stop, record it, report (don't hack around).

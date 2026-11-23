@@ -1,6 +1,6 @@
 ---
 name: goal
-description: Drive the current milestone's goal run end-to-end — resolve the milestone from the Resume here block of docs/PROGRESS.md (M9, not yet authorised to start, as of 2026-10-11), enforce the Architect's sole git authorship and a properly named feature branch before any commit, then loop the /build-package cycle through the milestone's packages and close with /milestone-review. Use when asked to run the milestone, start "the M<x> run", or invoked as /goal.
+description: Drive the current milestone's goal run end-to-end — resolve the milestone from the Resume here block of docs/PROGRESS.md (as of 2026-10-19 the Rust rewrite, R0 → R14 of docs/RUST-PLAN.md, which runs before M9; M9 itself is still not authorised to start), enforce the Architect's sole git authorship and a properly named feature branch before any commit, then loop the /build-package cycle through the milestone's packages and close with /milestone-review. Use when asked to run the milestone, start "the M<x> run", or invoked as /goal.
 ---
 
 # Run the current milestone goal
@@ -31,12 +31,18 @@ BUILD-PROMPT wins.
 2. **Green baseline.** `npm ci` (or confirm node_modules is current), then
    `npm run typecheck && npm run lint && node scripts/check-invariants.cjs`
    must pass before you write a line. A red baseline is a blocker to report,
-   not to absorb.
+   not to absorb. **For a Rust package (R0 → R14)** the baseline is `cargo xtask
+   gate` (with `CARGO_TARGET_DIR` outside OneDrive), plus the frozen tree's
+   `check-invariants`, `check-readme-current` and `check-attribution`. Its full
+   `npm` gate is CI's job while nothing under `src/`, `test/` or `shims/` changes
+   (Architect, 2026-10-19).
 
 ## 1. Resolve the milestone
 
 Open `docs/PROGRESS.md` and read its **Resume here** block: it names the current
-milestone, its next package, and what waits on the Architect. **If the block says the
+milestone, its next package, and what waits on the Architect. **As of 2026-10-19 that
+is the Rust rewrite** (ADR-0041, `docs/RUST-PLAN.md`). Its plan is approved, and each
+phase after R0 starts only when the Architect has approved its package list. **If the block says the
 milestone's build is not yet authorised — M9 and every Phase 9 milestone, as of
 2026-10-11 — ask the Architect through AskUserQuestion whether it may start, and stop
 there on anything but a yes.** The milestone's goal doc is the handover once it may
@@ -50,7 +56,10 @@ those decisions are already made — do not re-litigate them.
 
 - Cut each work package's branch from up-to-date `main`, named
   `feature/m<x>-<n>-<slug>` after the package it carries
-  (e.g. `feature/m3-1-secret-broker`, `feature/m3-6-floor-layout-v2`).
+  (e.g. `feature/m3-1-secret-broker`, `feature/m3-6-floor-layout-v2`). A Rust
+  package's branch is `feature/r<phase>-<n>-<slug>`
+  (e.g. `feature/r0-2-gate-chain`). Each one is stacked on the previous package's
+  branch until that one merges, with one PR per package (Architect, 2026-10-19).
   Bug-fix-only branches use `fix/<topic>`.
 - Never commit directly to `main`; never reuse a branch whose work has merged;
   never rewrite history on a pushed branch.
@@ -69,7 +78,9 @@ branch. Hard rules, restated because milestone runs tempt shortcuts:
 - `npm run typecheck && npm run lint && node scripts/check-invariants.cjs &&
   npm run test:coverage && node scripts/check-coverage.cjs` green before every
   commit (BUILD-PROMPT §4's TEST line since M8.0). Never proceed on red; never weaken a
-  test to pass it.
+  test to pass it. A Rust package runs that line's Rust form instead: `cargo xtask
+  gate` plus the frozen tree's cheap checks, and `cargo xtask mutants <crate>` for a
+  gate-shaped package (ENGINEERING-STANDARDS §1.1).
 - The package's owed tests (its *Tests:* line in PROGRESS.md) are part of the
   package, not a follow-up.
 - Tick the package in `docs/PROGRESS.md` with a one-line evidence note in the
