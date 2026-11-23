@@ -2,8 +2,11 @@
 
 **Status:** §2 and §4 APPROVED by the Architect on 2026-10-20 (R1.0; DECISIONS-LOG), and
 §10 on 2026-10-25 (R1.4a). R1.4b's edits to §4.5 and §10 apply the Architect's answers
-of 2026-10-25 (DECISIONS-LOG, *R1.4b — Architect decisions*, three rounds). The other
-sections are written, and approved, by the phases that build them.
+of 2026-10-25 (DECISIONS-LOG, *R1.4b — Architect decisions*, three rounds). §3 is
+written, not yet approved: R2.1 wrote its terminal half to ADR-0042, ADR-0043 and the
+Architect's R2.1 decisions (DECISIONS-LOG, 2026-11-16 to 2026-11-23). R2.2 adds the
+engine-adapter half, and §3 then goes to the Architect for one approval (DECISIONS-LOG,
+2026-11-23). The other sections are written, and approved, by the phases that build them.
 
 **Scope and precedence (approved 2026-10-20).** This document governs the Rust
 workspace (`crates/`, `xtask/`). `docs/sdd/SDD.md` keeps governing the frozen
@@ -17,7 +20,7 @@ TypeScript SDD's, and they are written by the phases that build them.
 |---|---|---|
 | 1 | Process architecture | ADR-0041 states it; written out at R7 (the headless core) |
 | 2 | The harness home: on-disk layout | **R1.0** |
-| 3 | The engine adapter surface | R2 |
+| 3 | The terminal plane and the engine adapter surface | R2.1 (the terminal plane), R2.2 (the engine adapter surface) |
 | 4 | Persisted formats: every schema, and what absent and damaged mean | **R1.0** |
 | 5 | The command and event surface (`eph-api`) | R4 |
 | 6 | The avatar state machine | R3 |

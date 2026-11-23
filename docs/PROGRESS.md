@@ -21,7 +21,7 @@ recorded.
 
 ## Resume here
 
-*As of 2026-10-25: R0.1 is merged as #102 and R0.2 as #104 (`9aa30bd`). R0.3 (`feature/r0-3-standards-learn-rust`), R1.0 (`feature/r1-0-home-design`), R1.1 (`feature/r1-1-eph-schema`), R1.2 (`feature/r1-2-eph-fs`), R1.3 (`feature/r1-3-eph-git`), R1.4a (`feature/r1-4a-agora-store`) and R1.4b (`feature/r1-4b-book-of-record`) are stacked, pushed, and get their PRs as the one below each merges; R0.3's is next. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
+*As of 2026-11-23: every package from R0.1 to R2.1 is merged to `main`. R0.1 is #102, R0.2 #104 (`9aa30bd`), R0.3 #105, R1.0 #106, R1.1 to R1.4b #108 to #112, and R2.1 #107 (`45dcff9`), the last to merge. R2.2 is next, on `feature/r2-2-eph-engines` cut from `main` (DECISIONS-LOG, 2026-11-23). A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
 
 **Ephesus is being rewritten in Rust (ADR-0041, the Architect's direction of
 2026-10-19), and the rewrite comes before everything below.** The Architect
@@ -93,9 +93,14 @@ tests running. [CI run 45122195829](https://github.com/Cassandra-Collective/Ephe
 provided three matching measurements per platform. The official ratchet
 seeded both new floors and the local Windows gate passed. See the
 [R2.1 proof record](./implementations/2026-11-20-r2-1-guard-proof.md).
-The R1.4b integration passed the Rust gate on Linux, macOS, and Windows.
-[Integration CI](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45169255063)
-**The next package in the approved sequence is R2.2, `eph-engines`.**
+The R1.4b integration passed the Rust gate on Linux, macOS and Windows in
+[integration CI run 45169255063](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45169255063).
+R2.1 merged as #107 (`45dcff9`) on 2026-11-23, and
+[CI run 45196366436](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45196366436)
+on that commit is green on every job.
+**The next package in the approved sequence is R2.2, `eph-engines`.** It opens
+by writing SDD-RUST §3's engine-adapter half, and §3 then goes to the
+Architect for one approval (DECISIONS-LOG, 2026-11-23).
 A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
 `.gitignore`, rendered at every boot, keeps `write_atomic`'s temporaries out of history
@@ -447,8 +452,8 @@ Debt carried forward, none of it blocking:
 - R phases stay in this file, not `docs/progress/`, until the archive learns the
   cross-track order (deferred by the Architect, 2026-10-19).
 
-Merged so far: R0.1 as #102 (`f484a33`). Open: R0.2 as #104. R0.3 is stacked on R0.2
-and opens when #104 merges.
+Merged: R0.1 as #102 (`f484a33`, 2026-10-19), R0.2 as #104 (`9aa30bd`, 2026-10-25)
+and R0.3 as #105 (`dc5b6ea`, 2026-11-23).
 
 ### R1 to R14
 
@@ -634,10 +639,12 @@ and opens when #104 merges.
   R2 starts only once he approves its package list.
 - [ ] **R2** The terminal plane and the engine seam (package list approved 2026-10-25)
   - [x] **R2.1 `eph-pty`** — native spawn, write, resize, interrupt, kill, PATH
-    resolution and streaming redaction. The PTY and Git deadline paths passed
-    real-subprocess tests and controlled mutations. Three matching CI
-    measurements per platform seeded both coverage floors. The local gate
-    passed. [Proof record](./implementations/2026-11-20-r2-1-guard-proof.md).
+    resolution and streaming redaction. *Evidence (2026-11-23):* the PTY and
+    Git deadline paths passed real-subprocess tests and controlled mutations.
+    Three CI measurements per platform, with identical covered and total line
+    counts, seeded both coverage floors. The local gate passed. Merged as #107 (`45dcff9`): CI run
+    45196366436 and the Darwin guard run 45197694980 on that commit are green.
+    [Proof record](./implementations/2026-11-20-r2-1-guard-proof.md).
   - [ ] **R2.2 `eph-engines`** — the adapter trait, the `claude` adapter, `codex` and
     `gemini` as conformance subjects.
   - [ ] **R2.3 The agent manager** — spawn ordering, the install offer, the exit unwind,

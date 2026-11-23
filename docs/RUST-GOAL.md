@@ -1,13 +1,15 @@
 # The Rust rewrite goal prompt — a handover
 
 Paste the block under [The prompt](#the-prompt), whole, as one `/goal` command, in a
-session whose working tree has the branch named below checked out: on 2026-10-25,
-`feature/r1-4b-book-of-record` (R1's tip), in the worktree `sharp-wescoff-0dc72f`. The
-app's guard refuses edits in any worktree other than the session's own. So a session that
-starts somewhere else first asks the Architect how to move the branch, as the 2026-10-25
-sessions did: detach the old worktree, then check the branch out in the new one
-(DECISIONS-LOG 2026-10-25, *R1.4a — Architect decisions*, item 4, and *R1.4b — Architect
-decisions, second round*, item 8).
+session whose working tree has the branch named below checked out: on 2026-11-23,
+`feature/r2-2-eph-engines`. That branch does not exist yet. The stack each package was
+cut from has merged, so R2.2's branch is cut from `main` at `45dcff9` or later, in the
+session's own worktree (DECISIONS-LOG 2026-11-23, item 1). That answer is cited, not
+re-asked. The app's guard refuses edits in any worktree other than the session's own. So
+a session that needs a branch checked out somewhere else first asks the Architect how to
+move it, as the 2026-10-25 sessions did: detach the old worktree, then check the branch
+out in the new one (DECISIONS-LOG 2026-10-25, *R1.4a — Architect decisions*, item 4, and
+*R1.4b — Architect decisions, second round*, item 8).
 
 This is a **handover**, like [`M9-GOAL.md`](./M9-GOAL.md): it says where the rewrite
 stands, what is already decided, and what comes next. The block is the **condition** the
@@ -19,7 +21,8 @@ session, `docs/GOAL.md`, is on the pushed and unmerged branch `docs/standing-goa
 
 *Written 2026-10-20 at R1.4a's pause; rewritten 2026-10-25 when R1.4a closed, again the
 same day when R1 closed, and updated when the Architect approved R2's list and paused
-the session before R2.1's probe.*
+the session before R2.1's probe. Updated again on 2026-11-23, when every package
+through R2.1 had merged to `main`.*
 
 ---
 
@@ -27,64 +30,82 @@ the session before R2.1's probe.*
 
 | Package | State | Where |
 |---|---|---|
-| R0.1 workspace skeleton | Merged | #102 |
-| R0.2 the gate chain | Merged | #104 (`9aa30bd`, 2026-10-25) |
-| R0.3, R1.0, R1.1, R1.2, R1.3, R1.4a | Done, pushed, stacked on R0.2; each gets its PR as the one below it merges, R0.3's next | `feature/r0-3-standards-learn-rust` … `feature/r1-4a-agora-store` @ `3fe7490` |
-| R1.4b `eph-agora`, the book of record | **Done and ticked**, pushed. CI run 40206703962 on `237aa31` and 40207561007 on `512cf21` are green on every job | `feature/r1-4b-book-of-record`, cut from `3fe7490` |
-| **R1** the home and the book of record | **DONE** (2026-10-25), its verdict in PROGRESS | the same branch |
-| R2 the terminal plane and the engine seam | Package list **approved** (2026-10-25); R2.1 not started | — |
+| R0.1, R0.2, R0.3 | Merged | #102, #104 (`9aa30bd`), #105 |
+| R1.0 to R1.4b | Merged. **R1 is DONE** (2026-10-25), its verdict in PROGRESS | #106, #108 to #112 |
+| R2.1 `eph-pty` | **Done, ticked and merged** (2026-11-23). CI run 45196366436 on `45dcff9` is green on every job | #107 (`45dcff9`), the last to merge |
+| **R2.2 `eph-engines`** | **Next.** Not started: no branch and no code | — |
+| R2.3 the agent manager | Not started | — |
 
-R1.4b's close is recorded in PROGRESS (its tick, its evidence and R1's verdict), in
-[`2026-10-25-r1-4b-book-of-record.md`](./implementations/2026-10-25-r1-4b-book-of-record.md),
-and in seven DECISIONS-LOG entries of 2026-10-25. Its reviews changed earlier packages,
-each on the Architect's answer:
-- **Two R1.3 defects.** One agent's `git init` in its own directory stopped every Agora
-  commit, and one with a commit hid its work as a gitlink. The committer now keeps a
-  nested repository out through its own block of `.git/info/exclude` and names it.
-- **An R1.4a defect.** The rendered `.gitignore` hid any directory named like a
-  `write_atomic` temporary, with everything in it; it now re-includes such directories.
+R2.1's close is recorded in PROGRESS (its tick and the resume block), in the
+[probe](./implementations/2026-11-16-r2-1-pty-tree-probe.md) and
+[proof](./implementations/2026-11-20-r2-1-guard-proof.md) records, in
+[ADR-0042](./adr/ADR-0042-owned-process-group-shutdown.md) and
+[ADR-0043](./adr/ADR-0043-preserve-the-terminal-spawn-plan.md), and in the
+DECISIONS-LOG entries of 2026-11-16 to 2026-11-23. Beyond its own crate:
+- **A new FFI crate, `eph-process`,** holds every native lifecycle call: Windows Job
+  Objects at creation (`windows-sys` 0.61) and owned POSIX process groups (`libc` 0.2).
+- **R1.3's deadline-kill residual is answered.** Git runs under the same owned shutdown,
+  so a git past its deadline gets a bounded cleanup of its owned group.
+- **The Agora recovers two known ref locks at open.** `HEAD.lock` and
+  `refs/heads/main.lock` are removed under the committer lock and reported as
+  `agora/ref-lock`.
+- **Two new floors:** `eph-process` 94.88% and `eph-pty` 94.94%, seeded from CI run
+  45122195829, whose three attempts reported identical line counts on every platform.
 
-## Next: R2, the terminal plane and the engine seam
+## Next: R2.2, the engine seam
 
-1. **Already answered (DECISIONS-LOG 2026-10-25, *R2 — Architect decisions*), cite it:**
-   R2's package list is approved as RUST-PLAN §5 lists it: R2.1 `eph-pty` (spawn, write,
-   resize, interrupt, kill; PATH resolution; the redaction filter), R2.2 `eph-engines`
-   (the adapter trait, the `claude` adapter, `codex` and `gemini` as conformance
-   subjects), R2.3 the agent manager. RUST-PLAN §9's tree-kill question is **measured
-   first**. R2.1 has not started: no branch and no code exist yet (the session paused on
-   2026-10-25 at the start of the probe).
-2. **R2.1's first step is the probe.** It is a scratch project outside the repository,
-   with its own target directory, on `portable-pty` 0.9.0 (Set A). A parent runs in a
-   PTY and starts a grandchild, as `claude` starts its tools: `node` on win32 (v24 is
-   installed), `sh -c 'sleep 120 & echo $! > pid; sleep 120'` in WSL2, which has no node.
-   It records the grandchild's pid, and checks whether the grandchild is still alive
-   after `Child::kill()`, and again after the PTY's master is dropped.
-   - The expected mechanism, to measure rather than assume: POSIX sends SIGHUP to the
-     session when the session leader dies; ConPTY's close sends console processes
-     CTRL_CLOSE_EVENT.
-   - Then put the question back to the Architect with the figures and their condition:
-     `portable-pty`'s kill alone, or memos for `windows-sys` (job objects) and `libc`
-     (process groups) in a named FFI boundary crate. The answer also settles R1.3's
-     deadline-kill residual for git.
-3. **Then R2.1's open choices, before its code**, read against the TypeScript reference:
-   - `src/main/pty.ts`: one PTY per id, the plan's env as the whole environment;
-   - `src/main/pty-stream.ts`: the redacted outbound edge, the 4 KiB "last words";
-   - `src/main/which.ts`: PATH and PATHEXT, and npm's `.cmd` shim unwrapped past
-     `cmd.exe`'s 8,191-character cap;
-   - `src/shared/redaction.ts`: a held tail across chunks, the visible mask
-     `•••eph-masked•••`, values under 4 characters never masked.
+1. **Already answered, cite them:**
+   - R2's package list (DECISIONS-LOG 2026-10-25, *R2 — Architect decisions*): R2.2
+     `eph-engines` is the adapter trait, the `claude` adapter, and `codex` and `gemini`
+     as conformance subjects. Each package's open choices are asked before its code.
+   - R2.2's branch is `feature/r2-2-eph-engines`, cut from `main`. SDD-RUST §3 is
+     approved whole once R2.2 has written its engine-adapter half (DECISIONS-LOG
+     2026-11-23, items 1 and 3).
+   - An engine adapter may not match on output this repository has never seen
+     (DECISIONS-LOG 2026-09-04).
+2. **R2.2's first step is the design.** SDD-RUST's table gives §3's engine-adapter half
+   to R2.2. Read the TypeScript reference before designing anything (RUST-PLAN §6):
+   `src/main/engines/types.ts` (the adapter surface), `claude.ts`, `codex.ts`,
+   `gemini.ts`, `engine-home.ts`, `settings-install.ts`, `spawn-env.ts`, `tool-grants.ts`
+   and `index.ts`, with their tests. RUST-PLAN §5 names what the `claude` adapter carries:
+   the spawn plan, the per-agent config directory (ADR-0026), workspace trust (ADR-0021,
+   ADR-0025), autonomy (ADR-0031), attribution suppression (FR-1.8), no self-upgrade
+   (ADR-0028) and prompts declared in advance (ADR-0035). `codex` and `gemini` are
+   unregistered conformance subjects (ADR-0024), and the conformance table is checked in
+   both directions (FR-1.10). Record the installed CLIs' real output as fixtures before
+   writing any matcher. Then the whole of §3 goes to the Architect for one approval.
+3. **Then R2.2's open choices, before its code.** The 2026-11-23 audit named three
+   candidates, none of them decided:
+   - which CLI versions the fixtures pin;
+   - whether conformance needs the `codex` and `gemini` binaries installed, or recorded
+     output is enough;
+   - how `eph-engines`' version probes start their process: RUST-PLAN §3.2 allows them,
+     and ADR-0042 confines native lifecycle calls to `eph-process`.
 
-   Then consult the advisor on the approach. R2.1's branch is `feature/r2-1-eph-pty`, cut
-   from `feature/r1-4b-book-of-record`'s tip. A new crate's first push is red at the
+   Then consult the advisor on the approach. A new crate's first push is red at the
    coverage step until its floor is seeded from three CI attempts with `cargo xtask
    coverage ratchet`.
-3. **Carried into R2:** GYM-014's metric 3 is measured at R2's close (no `process:`
+4. **R2.3, the agent manager, follows R2.2.** Its reference is `src/main/agents.ts` and
+   `src/main/respawn.ts`. One open choice is already visible: RUST-PLAN §3.1 names no
+   crate for it, and `eph-core` holds no domain logic.
+5. **R2's exit** (RUST-PLAN §5): a real `claude` runs in a PTY under a headless test
+   binary, with its own config directory and suppressed attribution; the conformance
+   table is green for every subject in both directions; FR-1.1 to FR-1.10. The live run
+   needs an installed, signed-in CLI, so it runs on the Architect's machine (tier A), not
+   in CI. Parts of FR-1.3, FR-1.4 and FR-1.9 are built by R4, R3 and R6. R1's verdict
+   met the same problem with a column naming what later phases owe.
+6. **Carried into R2:** GYM-014's metric 3 is measured at R2's close (no `process:`
    exemption in `eph-agora` outside test-only code); `.git/` is outside an agent's grant
    and R2.3's grants keep an agent out of it; a symbolic link is committed as the link,
    for R2.3 to decide; the prompt-literal rule arrives with R2's first prompt (R0.2's
    decision); `BOOT_CHECKED`'s fourteen causes are proved to clear end to end for two
-   only, so R2's boot work should cover the rest.
-4. **Each package closes** the way R1.4b did: its owed tests; a design-fidelity review and
+   only, so R2's boot work should cover the rest. R2.1 adds three residuals:
+   - on POSIX, descendants that move to another process group are outside the shutdown
+     guarantee (ADR-0042);
+   - on macOS, a dropped session's cleanup worker has no caller to report an
+     unconfirmed shutdown to (SDD-RUST §3);
+   - the excluded removal of `Attributes::drop` rests on code review, not a runtime proof.
+7. **Each package closes** the way R1.4b did: its owed tests; a design-fidelity review and
    a refutation pass, both read-only; `cargo xtask mutants` over every crate whose sources
    changed, with no TIMEOUT and an honest control; 10 plain and 10 instrumented runs on
    win32 and on WSL2 Linux, on a copy hashed against its commit; push and CI green on all
@@ -132,17 +153,37 @@ each on the Architect's answer:
   - A boot clears the boot causes it no longer finds.
   - The channel is the one writer of degradation lines; links are recorded, not named.
   - R1.4b's SDD-RUST edits are approved; one equivalent mutant is excluded; the branch is pushed for CI.
+- **2026-11-16 to 2026-11-23, R2.1**
+  - ADR-0042: Windows Job Objects at creation and owned POSIX process groups, in `eph-process`, with `windows-sys` 0.61 and `libc` 0.2.
+  - ADR-0043: the exact spawn plan is kept through native `openpty`; launch values stay in the redactor until exit; a Windows batch shim runs through a checked interpreter in the job.
+  - Each native backend is required on the CI platforms that compile it.
+  - `HEAD.lock` and `refs/heads/main.lock` are recovered at open and reported as `agora/ref-lock`.
+  - Equivalent flag mutants and the removal of `Attributes::drop` are excluded; the Darwin guards are proven on macOS by a manually dispatched workflow.
+  - Resize is proven through native terminal-size observation behind a `test-support` feature.
+  - On macOS, unconfirmed PTY shutdown is reported after 500 ms and ownership is kept.
+- **2026-11-23, the record fix**
+  - R2.2 is cut from `main`.
+  - `toleranceReason` was corrected by hand, once; otherwise the floors file changes only through the ratchet.
+  - SDD-RUST §3 is approved whole at R2.2.
+  - The TypeScript fix PR stays owed.
 
 ## Waiting on the Architect
 
-- **Open R0.3's PR**, next in the stack now that #104 has merged. Each stacked branch then
-  gets its PR in turn. Each one hits the DECISIONS-LOG append-against-append conflict;
-  resolve it main-first.
+- **Pull the main checkout.** On 2026-11-23 the repository root's checkout was at
+  `8a3a3a7` (2026-10-11), 134 commits behind `origin/main`. R0's carried debt says the
+  skills' new text reaches a session only once that checkout pulls. Check it is clean
+  first:
 
   ```bash
-  gh pr create --base main --head feature/r0-3-standards-learn-rust --title "R0.3: the standards learn Rust" --body-file <the body file>
+  git -C "C:/Users/senso/OneDrive/Masaüstü/Cassandra-Collective/ephesus" status -sb
   ```
-- **Open the TypeScript fix PR.** Its body was drafted outside the tree. If that draft is
+
+  ```bash
+  git -C "C:/Users/senso/OneDrive/Masaüstü/Cassandra-Collective/ephesus" pull --ff-only
+  ```
+- **Open the TypeScript fix PR** (kept owed, DECISIONS-LOG 2026-11-23, item 4).
+  `fix/worktree-untracked-files` is two commits ahead of a `main` that has moved since
+  2026-10-20, so trial-merge it before opening. Its body was drafted outside the tree. If that draft is
   gone, redraft it from `docs/implementations/2026-10-20-worktree-untracked-files.md`,
   which is on that branch only.
 
