@@ -92,7 +92,10 @@ fewer than one package's worth of code is folded into its neighbour until it gro
   module it must not use), and on nothing else of ours.
 - Only `eph-git` constructs a `git` command. Only `eph-pty`, `eph-engines` (version
   probes), `eph-library` (MemPalace) and `eph-harbor` (`gh`) may construct any other
-  process, each named in `clippy.toml`'s allowlist with its reason.
+  process, each named in `clippy.toml`'s allowlist with its reason. `eph-git` and
+  `eph-agora` also claim `process:`, in their tests only: kill tests that run the test
+  binary again as the harness they kill, and in `eph-git` a Windows junction made with
+  `mklink /J` (GYM-014, Architect, 2026-10-25).
 - Only `eph-fs` may write a file another process reads.
 
 ### 3.3 Process model
@@ -362,7 +365,8 @@ re-read for TypeScript-specific mechanisms before its first package.
   package list.
 - R1: each redesigned schema (new SDD §4), field by field, where it departs from today's.
 - R2: whether `portable-pty`'s process-tree kill suffices on Windows or a job object (an
-  FFI boundary crate) is needed.
+  FFI boundary crate) is needed. *Asked 2026-10-25:* measured first, by a probe that opens
+  R2.1; the question returns with the figure (DECISIONS-LOG 2026-10-25, R2).
 - R6: the OS keychain crate, a separate memo (`keyring` is the candidate).
 - R10 and R12: the HTTP, WebSocket and audio crates, a separate memo each.
 - R12: whether the Herald is wired into the app this time (M6.9).

@@ -35,6 +35,14 @@ exclude_re = [
   # cases either side of the window (output that arrives, output that never
   # does) are tested (R1.3 eph-git round 2, 2026-10-20).
   'replace \+ with - in drain_until',
+  # eph-agora's book reader skips a sealed segment the cursor has passed without
+  # opening it, as the TypeScript build's reader did ("segment skipping, with no
+  # I/O"). At the one boundary, a cursor exactly at a segment's end, `>=` opens
+  # that segment and reads nothing from it: the same answer and one open more.
+  # A test could see it only by making the file unopenable, which eph-agora may
+  # not do (`OpenOptions::open` is refused outside eph-fs), and the open changes
+  # no answer (R1.4b round 1, 2026-10-25; the Architect chose the exclusion).
+  'replace > with >= in Book::since',
 ]
 
 # Build without debug info ([profile.mutants] in Cargo.toml): a round relinks

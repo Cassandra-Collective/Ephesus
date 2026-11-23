@@ -1,7 +1,7 @@
 [package]
 name = "eph-agora"
 version = "0.0.0"
-description = "The Agora: the validated store, the registry and the task ledger, the board, and the boot that seeds and reconciles it (SDD-RUST §4.0 rule 6, §4.5)"
+description = "The Agora: the validated store, the registry and the task ledger, the board, the book of record and the degradation channel, and the boot that seeds and reconciles it (SDD-RUST §4.0 rule 6, §4.5)"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -12,6 +12,7 @@ publish.workspace = true
 eph-fs = { path = "../eph-fs" }
 eph-git = { path = "../eph-git" }
 eph-schema = { path = "../eph-schema" }
+serde_json.workspace = true
 
 [dev-dependencies]
 serde.workspace = true

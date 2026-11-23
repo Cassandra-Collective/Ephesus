@@ -92,6 +92,7 @@ dependencies = [
  "eph-git",
  "eph-schema",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

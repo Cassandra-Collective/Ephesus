@@ -129,6 +129,16 @@ pub const POLICIES: &[Policy] = &[
         exemptions: &[Category::Git, Category::Process],
         banned_paths: &[],
     },
+    // Its kill tests run the test binary again as the writer they kill, as
+    // eph-git's do; nothing else in it starts a process (GYM-014).
+    Policy {
+        name: "eph-agora",
+        workspace_deps: None,
+        external_deps: None,
+        io: true,
+        exemptions: &[Category::Process],
+        banned_paths: &[],
+    },
     Policy {
         name: "eph-pty",
         workspace_deps: None,
@@ -1129,7 +1139,7 @@ mod tests {
     #[test]
     fn a_crate_may_claim_only_the_categories_its_policy_allows() {
         let src = "#[expect(clippy::disallowed_methods, reason = \"process: runs a tool\")]\nfn f() { let _ = std::process::Command::new(\"tool\"); }\n";
-        let v = exemption_violations("eph-agora", src);
+        let v = exemption_violations("eph-hermes", src);
         assert_eq!(rules(&v), [("exemption", 1)]);
         assert!(v[0].message.contains("may not claim `process:`"));
         assert!(v[0].message.contains("none"));
@@ -1137,6 +1147,27 @@ mod tests {
         let v = exemption_violations("eph-pty", &git);
         assert_eq!(rules(&v), [("exemption", 1)]);
         assert!(v[0].message.contains("`process:`"));
+    }
+
+    /// GYM-014, metric 1: eph-agora may start its own test binary, and the
+    /// rule still refuses the crates that may not.
+    #[test]
+    fn eph_agora_may_claim_process_and_nothing_else_and_its_neighbours_still_may_not() {
+        let process = "#[expect(clippy::disallowed_methods, reason = \"process: kills its writer\")]\nfn f() { let _ = std::process::Command::new(\"x\"); }\n";
+        assert_eq!(exemption_violations("eph-agora", process), vec![]);
+        for other in ["eph-schema", "eph-fs"] {
+            let v = exemption_violations(other, process);
+            assert!(
+                v.iter().any(
+                    |v| v.rule == "exemption" && v.message.contains("may not claim `process:`")
+                ),
+                "{other}: {v:?}"
+            );
+        }
+        for category in ["git:", "fs-write:"] {
+            let v = exemption_violations("eph-agora", &process.replace("process:", category));
+            assert_eq!(rules(&v), [("exemption", 1)], "{category}");
+        }
     }
 
     #[test]

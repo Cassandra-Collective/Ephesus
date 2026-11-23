@@ -41,6 +41,17 @@
 //!   [`Committer::commit_soon`] or a dropped [`Ticket`], is reported through
 //!   [`Hooks::reporting_to`] and kept ([`Committer::failures`], the latest
 //!   [`MAX_RECORDED_FAILURES`]) (invariant 7).
+//! - **A landing is reported too**, through [`Hooks::on_landing`], before any
+//!   ticket of its batch is answered, so a caller that waited sees what the
+//!   report did. Nothing else sees a [`Committer::commit_soon`] land, and the
+//!   degradation channel clears `agora/commit` on it (DECISIONS-LOG 2026-10-25,
+//!   *R1.4b — Architect decisions, second round*, item 4).
+//! - **Each landing lists what git ignored**, from the status the batch already
+//!   runs after staging (`--ignored=matching`), so the check costs no second
+//!   walk of the tree (item 1 of the same entry). A directory an ignore pattern
+//!   matched is listed as the directory, ending in `/`, not its files.
+//!   [`Committer::ignored`] asks the same of a tree no batch has looked at. What
+//!   the harness's own patterns ignore is the caller's to tell apart.
 //! - **Dropping the committer lands its queue first**, then releases the lock.
 //!   That can take as long as the queued gits do, each bounded by its deadline.
 //!
@@ -48,6 +59,7 @@
 //! the book of record) are R1.4's. [`Opened::initialized`] tells that boot
 //! whether this open made the repository.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt;
 use std::fs;
@@ -111,15 +123,19 @@ pub enum FaultPoint {
 
 type FaultHook = dyn Fn(FaultPoint) -> Result<(), String> + Send + Sync;
 type ReportHook = dyn Fn(&CommitFailure) + Send + Sync;
+type LandingHook = dyn Fn(&Landing) + Send + Sync;
 
-/// What a caller hangs on the committer. Production passes a reporter, for the
-/// degradation channel (R1.4); tests add faults. The fault seam is in the
-/// production path on purpose, because a seam that exists only under a mock
-/// proves nothing about the real order of the steps (TEST-STRATEGY §3).
+/// What a caller hangs on the committer. Production passes a reporter and a
+/// landing report, for the degradation channel (R1.4b); tests add faults. The
+/// fault seam is in the production path on purpose, because a seam that exists
+/// only under a mock proves nothing about the real order of the steps
+/// (TEST-STRATEGY §3). Reporters add up: each one hung on is called, in the
+/// order they were hung on, so a caller's reporter survives the Agora's.
 #[derive(Clone)]
 pub struct Hooks {
     faults: Option<Arc<FaultHook>>,
-    report: Option<Arc<ReportHook>>,
+    report: Vec<Arc<ReportHook>>,
+    landing: Vec<Arc<LandingHook>>,
 }
 
 impl Hooks {
@@ -127,7 +143,8 @@ impl Hooks {
     pub fn none() -> Hooks {
         Hooks {
             faults: None,
-            report: None,
+            report: Vec::new(),
+            landing: Vec::new(),
         }
     }
 
@@ -141,11 +158,20 @@ impl Hooks {
         self
     }
 
-    /// The same hooks reporting every failure nobody waited for to `hook`.
+    /// The same hooks also reporting every failure nobody waited for to `hook`.
     /// Reports run on the committer's thread while it is available. Contract:
     /// `hook` must not queue a commit, since a reporter that commits would recurse.
     pub fn reporting_to(mut self, hook: impl Fn(&CommitFailure) + Send + Sync + 'static) -> Hooks {
-        self.report = Some(Arc::new(hook));
+        self.report.push(Arc::new(hook));
+        self
+    }
+
+    /// The same hooks also telling `hook` of every batch that lands, on the
+    /// committer's thread, before the batch's tickets are answered. Contract:
+    /// `hook` must not queue a commit or wait on the committer, which is busy
+    /// calling it.
+    pub fn on_landing(mut self, hook: impl Fn(&Landing) + Send + Sync + 'static) -> Hooks {
+        self.landing.push(Arc::new(hook));
         self
     }
 
@@ -167,6 +193,28 @@ pub struct CommitOutcome {
     pub sha: Option<String>,
     /// How many attempts it took.
     pub attempts: u32,
+}
+
+/// A batch that landed, as [`Hooks::on_landing`] hears of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Landing {
+    /// What its tickets are answered with.
+    pub outcome: CommitOutcome,
+    /// What git ignored when it landed (see the module contract), or why the
+    /// batch's status could not say.
+    pub ignored: Result<Ignored, String>,
+}
+
+/// What git ignores in the Agora, and why some of it is out of history.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Ignored {
+    /// Every entry git ignores, as the status listed it: a file, or a
+    /// directory a pattern matched, ending in `/`.
+    pub entries: Vec<String>,
+    /// The git repositories nested in the Agora that the committer keeps out
+    /// of its history, each a path from the root with no trailing `/`. Each is
+    /// among `entries` too, as the directory.
+    pub nested: Vec<String>,
 }
 
 /// A subject whose batch did not land.
@@ -337,6 +385,7 @@ impl Committer {
             git,
             hooks,
             record: Arc::clone(&record),
+            nested: RefCell::new(Nested::load(&dot_git)),
             _lock: lock,
         };
         let index_lock = worker.settle_index_lock();
@@ -404,6 +453,15 @@ impl Committer {
     /// git cannot say, as today.
     pub fn is_dirty(&self) -> bool {
         self.ask(Query::Dirty, || false)
+    }
+
+    /// What git ignores in the working tree now, as a landing lists it (see the
+    /// module contract), without staging or committing anything: for a boot
+    /// that commits nothing.
+    pub fn ignored(&self) -> Result<Ignored, String> {
+        self.ask(Query::Ignored, || {
+            Err("the committer stopped before it answered".to_string())
+        })
     }
 
     /// The failures nobody waited for, oldest first.
@@ -530,7 +588,7 @@ fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// The failures nobody waited for, and who hears of them.
 struct Record {
     kept: Mutex<VecDeque<CommitFailure>>,
-    report: Option<Arc<ReportHook>>,
+    report: Vec<Arc<ReportHook>>,
     delivery: Mutex<()>,
     requests: Weak<Sender<Request>>,
 }
@@ -539,13 +597,13 @@ impl fmt::Debug for Record {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Record")
             .field("kept", &guard(&self.kept).len())
-            .field("reported", &self.report.is_some())
+            .field("reporters", &self.report.len())
             .finish()
     }
 }
 
 impl Record {
-    fn new(report: Option<Arc<ReportHook>>, requests: Weak<Sender<Request>>) -> Self {
+    fn new(report: Vec<Arc<ReportHook>>, requests: Weak<Sender<Request>>) -> Self {
         Self {
             kept: Mutex::new(VecDeque::new()),
             report,
@@ -580,11 +638,11 @@ impl Record {
         }
     }
 
-    /// Reports `failure`, then keeps it, dropping the oldest past
-    /// [`MAX_RECORDED_FAILURES`]. The reporter runs before the lock is taken,
-    /// so it may read [`Committer::failures`].
+    /// Reports `failure` to every reporter, then keeps it, dropping the oldest
+    /// past [`MAX_RECORDED_FAILURES`]. The reporters run before the lock is
+    /// taken, so they may read [`Committer::failures`].
     fn keep(&self, failure: CommitFailure) {
-        if let Some(report) = &self.report {
+        for report in &self.report {
             report(&failure);
         }
         let mut kept = guard(&self.kept);
@@ -614,13 +672,187 @@ enum Query {
     Drained(Sender<()>),
     Head(Sender<Option<String>>),
     Dirty(Sender<bool>),
+    Ignored(Sender<Result<Ignored, String>>),
 }
 
-/// How one attempt ended.
+/// How one attempt ended. A landing carries what the batch's status ignored.
 enum Attempt {
-    Landed,
+    Landed(Result<Ignored, String>),
     Failed(String),
     Aborted(String),
+}
+
+/// The status a batch reads after staging, and [`Committer::ignored`] reads:
+/// porcelain v2, so a gitlink says it is one, NUL-separated, so no path is
+/// quoted, and the ignored entries listed as the patterns matched them. The
+/// untracked mode is named so a repository setting
+/// (`status.showUntrackedFiles=no`) cannot hide them.
+const STATUS: [&str; 5] = [
+    "status",
+    "--porcelain=v2",
+    "-z",
+    "--ignored=matching",
+    "--untracked-files=normal",
+];
+
+/// The status that finds a nested repository no commit is in: with every
+/// untracked file listed one by one, an untracked entry that is a directory is
+/// a repository git would not descend into (measured, git 2.53).
+const UNTRACKED: [&str; 4] = ["status", "--porcelain=v2", "-z", "--untracked-files=all"];
+
+/// Where the committer lists the nested repositories it keeps out: git's own
+/// per-repository exclude file, between [`NESTED_BEGIN`] and [`NESTED_END`].
+/// Any other line in it is kept as it was.
+pub const EXCLUDE_FILE: &str = "info/exclude";
+
+/// The first line of the committer's block in [`EXCLUDE_FILE`].
+pub const NESTED_BEGIN: &str =
+    "# >>> ephesus: git repositories nested in the Agora, kept out of its history by the committer";
+
+/// The last line of the committer's block in [`EXCLUDE_FILE`].
+pub const NESTED_END: &str = "# <<< ephesus";
+
+/// What one status said.
+#[derive(Debug, PartialEq, Eq)]
+struct StatusRead {
+    /// Whether it listed anything other than ignored entries: something staged
+    /// that a commit would take, or a change made since the staging.
+    changed: bool,
+    /// Gitlinks it listed: nested repositories `add -A` staged.
+    gitlinks: Vec<String>,
+    /// The ignored entries and the nested repositories kept out, or why the
+    /// status could not say.
+    ignored: Result<Ignored, String>,
+}
+
+/// What one porcelain v2 status lists.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct StatusFields {
+    changed: bool,
+    gitlinks: Vec<String>,
+    ignored: Vec<String>,
+    untracked: Vec<String>,
+}
+
+/// Reads porcelain v2 status with `-z`. A changed entry is `1 XY sub mH mI mW
+/// hH hI path`, a rename or copy `2 … X<score> path` followed by its source
+/// path as one more field, an unmerged one `u …` with ten fields before its
+/// path, an untracked one `? path` and an ignored one `! path`. `sub` begins
+/// with `S` for a gitlink. The Agora's mail moves between state directories,
+/// which a status after `add -A` shows as renames.
+fn read_status(stdout: &str) -> StatusFields {
+    let mut read = StatusFields::default();
+    let mut fields = stdout.split('\0').filter(|field| !field.is_empty());
+    while let Some(field) = fields.next() {
+        let path = field.get(2..).unwrap_or_default();
+        let (before_path, gitlink) = match field.as_bytes().first() {
+            Some(b'!') => {
+                read.ignored.push(path.to_string());
+                continue;
+            }
+            Some(b'?') => {
+                read.untracked.push(path.to_string());
+                read.changed = true;
+                continue;
+            }
+            Some(b'#') => continue,
+            Some(b'1') => (8, is_gitlink(field)),
+            Some(b'2') => {
+                let _source = fields.next();
+                (9, is_gitlink(field))
+            }
+            _ => (10, false),
+        };
+        read.changed = true;
+        if gitlink && let Some(path) = field.splitn(before_path + 1, ' ').nth(before_path) {
+            read.gitlinks.push(path.to_string());
+        }
+    }
+    read
+}
+
+/// Whether a changed entry's `sub` field marks a gitlink.
+fn is_gitlink(field: &str) -> bool {
+    field
+        .split(' ')
+        .nth(2)
+        .is_some_and(|sub| sub.starts_with('S'))
+}
+
+/// The committer's block of [`EXCLUDE_FILE`] for `nested`, after `kept`, the
+/// lines of the file that are not its own.
+fn exclude_text(kept: &[String], nested: &[String]) -> String {
+    let mut text = String::new();
+    for line in kept {
+        text.push_str(line);
+        text.push('\n');
+    }
+    if !nested.is_empty() {
+        text.push_str(NESTED_BEGIN);
+        text.push('\n');
+        for path in nested {
+            text.push('/');
+            text.push_str(&escape_pattern(path));
+            text.push_str("/\n");
+        }
+        text.push_str(NESTED_END);
+        text.push('\n');
+    }
+    text
+}
+
+/// Splits [`EXCLUDE_FILE`]'s text into the lines that are not the
+/// committer's, and the nested repositories its block lists.
+fn read_exclude(text: &str) -> (Vec<String>, Vec<String>) {
+    let mut kept = Vec::new();
+    let mut nested = Vec::new();
+    let mut ours = false;
+    for line in text.lines() {
+        match line {
+            NESTED_BEGIN => ours = true,
+            NESTED_END => ours = false,
+            _ if ours => {
+                if let Some(path) = line
+                    .strip_prefix('/')
+                    .and_then(|rest| rest.strip_suffix('/'))
+                {
+                    nested.push(unescape_pattern(path));
+                }
+            }
+            _ => kept.push(line.to_string()),
+        }
+    }
+    (kept, nested)
+}
+
+/// `path` as an ignore pattern that matches only itself: git's wildcards and
+/// its escape character escaped. The pattern is anchored by the leading `/`
+/// the caller adds, so no other character is special.
+fn escape_pattern(path: &str) -> String {
+    let mut pattern = String::with_capacity(path.len());
+    for c in path.chars() {
+        if matches!(c, '\\' | '*' | '?' | '[') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern
+}
+
+/// The path [`escape_pattern`] escaped.
+fn unescape_pattern(pattern: &str) -> String {
+    let mut path = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\'
+            && let Some(escaped) = chars.next()
+        {
+            path.push(escaped);
+            continue;
+        }
+        path.push(c);
+    }
+    path
 }
 
 /// The thread that owns the Agora's git and the committer's lock.
@@ -629,7 +861,28 @@ struct Worker {
     git: Git,
     hooks: Hooks,
     record: Arc<Record>,
+    /// The nested repositories kept out, and the exclude file's other lines.
+    nested: RefCell<Nested>,
     _lock: Exclusive,
+}
+
+/// What the committer keeps in [`EXCLUDE_FILE`].
+#[derive(Debug, Default)]
+struct Nested {
+    /// The file's lines that are not the committer's, kept as they were.
+    kept: Vec<String>,
+    /// The nested repositories it keeps out.
+    paths: Vec<String>,
+}
+
+impl Nested {
+    /// What `dot_git`'s exclude file holds now; an absent or unreadable one
+    /// holds nothing.
+    fn load(dot_git: &Path) -> Nested {
+        let text = fs::read_to_string(dot_git.join(EXCLUDE_FILE)).unwrap_or_default();
+        let (kept, paths) = read_exclude(&text);
+        Nested { kept, paths }
+    }
 }
 
 impl Worker {
@@ -664,6 +917,9 @@ impl Worker {
             Query::Dirty(reply) => {
                 let _sent = reply.send(self.is_dirty());
             }
+            Query::Ignored(reply) => {
+                let _sent = reply.send(self.status().ignored);
+            }
         }
     }
 
@@ -675,7 +931,13 @@ impl Worker {
             .iter()
             .map(|pending| pending.subject.clone())
             .collect();
-        let landed = self.run_commit(subjects);
+        let landed = self.run_commit(subjects).map(|(outcome, ignored)| {
+            let landing = Landing { outcome, ignored };
+            for hook in &self.hooks.landing {
+                hook(&landing);
+            }
+            landing.outcome
+        });
         for pending in batch {
             let result = landed.clone().map_err(|reason| CommitFailure {
                 subject: pending.subject,
@@ -685,7 +947,10 @@ impl Worker {
         }
     }
 
-    fn run_commit(&self, subjects: Vec<String>) -> Result<CommitOutcome, String> {
+    fn run_commit(
+        &self,
+        subjects: Vec<String>,
+    ) -> Result<(CommitOutcome, Result<Ignored, String>), String> {
         let message = commit_message(&subjects);
         let mut last = String::new();
         let waits = iter::once(None).chain(RETRY_WAITS.map(Some));
@@ -695,12 +960,13 @@ impl Worker {
                 self.clear_stale_index_lock();
             }
             match self.attempt(&message) {
-                Attempt::Landed => {
-                    return Ok(CommitOutcome {
+                Attempt::Landed(ignored) => {
+                    let outcome = CommitOutcome {
                         subjects,
                         sha: self.head(),
                         attempts: attempt,
-                    });
+                    };
+                    return Ok((outcome, ignored));
                 }
                 Attempt::Failed(reason) => last = reason,
                 Attempt::Aborted(reason) => return Err(reason),
@@ -717,18 +983,39 @@ impl Worker {
         if let Err(reason) = self.hooks.check(FaultPoint::BeforeStage) {
             return Attempt::Aborted(reason);
         }
+        if let Err(reason) = self.prune_nested() {
+            return Attempt::Failed(reason);
+        }
         let staged = self.git(&["add", "-A"]);
         if !staged.ok() {
-            return Attempt::Failed(staged.stderr.trim().to_string());
+            // A repository an agent made with no commit in it fails every
+            // `add -A`, every agent's work included: keep it out, then retry.
+            let reason = staged.stderr.trim().to_string();
+            return match self.keep_out_untracked_repositories() {
+                Ok(true) => Attempt::Failed(format!(
+                    "{reason}; the nested repositories this found are now kept out of the Agora, and the next attempt stages the rest"
+                )),
+                Ok(false) => Attempt::Failed(reason),
+                Err(why) => Attempt::Failed(format!("{reason}; and {why}")),
+            };
         }
         if let Err(reason) = self.hooks.check(FaultPoint::AfterStage) {
             return Attempt::Aborted(reason);
         }
-        // Nothing staged is a landing; a status that fails is not, and the
-        // commit after it decides.
-        let status = self.git(&["status", "--porcelain"]);
-        if status.ok() && status.stdout.trim().is_empty() {
-            return Attempt::Landed;
+        // Nothing staged is a landing, whatever git ignores; a status that
+        // fails is not, and the commit after it decides.
+        let mut status = self.status();
+        if !status.gitlinks.is_empty() {
+            // A repository an agent made with a commit in it was staged as a
+            // gitlink, which keeps its files out of history: keep it out and
+            // unstage it, so its pointer never lands either.
+            if let Err(reason) = self.unstage_gitlinks(std::mem::take(&mut status.gitlinks)) {
+                return Attempt::Failed(reason);
+            }
+            status = self.status();
+        }
+        if !status.changed {
+            return Attempt::Landed(status.ignored);
         }
         if let Err(reason) = self.hooks.check(FaultPoint::BeforeCommit) {
             return Attempt::Aborted(reason);
@@ -745,7 +1032,120 @@ impl Worker {
         if let Err(reason) = self.hooks.check(FaultPoint::AfterCommit) {
             return Attempt::Aborted(reason);
         }
-        Attempt::Landed
+        // What was ignored before the commit still is: a commit takes only
+        // what was staged.
+        Attempt::Landed(status.ignored)
+    }
+
+    /// The working tree's [`STATUS`]. A status that fails changes nothing, so
+    /// its `changed` is `true`: the commit after it decides.
+    fn status(&self) -> StatusRead {
+        let status = self.git(&STATUS);
+        if !status.ok() {
+            return StatusRead {
+                changed: true,
+                gitlinks: Vec::new(),
+                ignored: Err(format!(
+                    "git status failed, so what git ignores is unknown: {}",
+                    status.stderr.trim()
+                )),
+            };
+        }
+        let read = read_status(&status.stdout);
+        StatusRead {
+            changed: read.changed,
+            gitlinks: read.gitlinks,
+            ignored: Ok(Ignored {
+                entries: read.ignored,
+                nested: self.nested.borrow().paths.clone(),
+            }),
+        }
+    }
+
+    /// Drops from the kept-out list every repository whose `.git` is gone, so
+    /// a directory that stopped being a repository is committed again.
+    fn prune_nested(&self) -> Result<(), String> {
+        let gone = self
+            .nested
+            .borrow()
+            .paths
+            .iter()
+            .any(|path| fs::symlink_metadata(self.root.join(path).join(".git")).is_err());
+        if !gone {
+            return Ok(());
+        }
+        let root = self.root.clone();
+        self.change_nested(|paths| {
+            paths.retain(|path| fs::symlink_metadata(root.join(path).join(".git")).is_ok());
+        })
+    }
+
+    /// Finds the nested repositories no commit is in, keeps the new ones out,
+    /// and says whether there were any.
+    fn keep_out_untracked_repositories(&self) -> Result<bool, String> {
+        let listed = self.git(&UNTRACKED);
+        if !listed.ok() {
+            return Err(format!(
+                "the nested repositories could not be listed: {}",
+                listed.stderr.trim()
+            ));
+        }
+        let found: Vec<String> = read_status(&listed.stdout)
+            .untracked
+            .into_iter()
+            .filter_map(|entry| entry.strip_suffix('/').map(str::to_string))
+            .collect();
+        self.keep_out(found)
+    }
+
+    /// Keeps `gitlinks` out and takes them out of the index, leaving every file
+    /// on disk.
+    fn unstage_gitlinks(&self, gitlinks: Vec<String>) -> Result<(), String> {
+        let mut args = vec!["rm", "--cached", "-f", "-q", "--ignore-unmatch", "--"];
+        args.extend(gitlinks.iter().map(String::as_str));
+        self.keep_out(gitlinks.clone())?;
+        let unstaged = self.git(&args);
+        if !unstaged.ok() {
+            return Err(format!(
+                "the nested repositories {} could not be unstaged: {}",
+                gitlinks.join(", "),
+                unstaged.stderr.trim()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Adds the paths of `found` the list does not hold, and says whether it
+    /// added any. A path a line cannot hold (a line break) is left out.
+    fn keep_out(&self, found: Vec<String>) -> Result<bool, String> {
+        let new: Vec<String> = found
+            .into_iter()
+            .filter(|path| !path.contains(['\n', '\r']))
+            .filter(|path| !self.nested.borrow().paths.contains(path))
+            .collect();
+        if new.is_empty() {
+            return Ok(false);
+        }
+        self.change_nested(|paths| paths.extend(new))?;
+        Ok(true)
+    }
+
+    /// Changes the kept-out list with `change` and writes the exclude file. The
+    /// list in memory changes only once the file holds it, so a failed write
+    /// is tried again by the next attempt rather than believed.
+    fn change_nested(&self, change: impl FnOnce(&mut Vec<String>)) -> Result<(), String> {
+        let mut nested = self.nested.borrow_mut();
+        let mut paths = nested.paths.clone();
+        change(&mut paths);
+        let dot_git = self.root.join(".git");
+        let text = exclude_text(&nested.kept, &paths);
+        fs::create_dir_all(dot_git.join("info"))
+            .and_then(|()| write_atomic(&dot_git.join(EXCLUDE_FILE), text.as_bytes()))
+            .map_err(|error| {
+                format!("the Agora's list of nested repositories could not be written: {error}")
+            })?;
+        nested.paths = paths;
+        Ok(())
     }
 
     /// Waits while `index.lock` exists, over the retry schedule, so a git left
@@ -806,7 +1206,7 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use std::process::{Child, Command, Stdio};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Instant;
 
     use super::*;
@@ -920,6 +1320,11 @@ mod tests {
         assert_eq!(
             agora_git(&root, &["branch", "--show-current"]).trim(),
             "main"
+        );
+        assert_eq!(
+            agora_git(&root, &["rev-parse", "--show-object-format"]).trim(),
+            "sha1",
+            "the empty tree the Agora reads attributes from is SHA-1's (runner::EMPTY_TREE)"
         );
         drop(committer);
         let again = Committer::open(&root, Hooks::none()).unwrap();
@@ -1718,7 +2123,7 @@ mod tests {
         let ticket = Ticket {
             receiver: Some(receiver),
             subject: "orphan".to_string(),
-            record: Arc::new(Record::new(None, Weak::new())),
+            record: Arc::new(Record::new(Vec::new(), Weak::new())),
         };
         assert_eq!(ticket.wait().unwrap_err(), stopped("orphan".to_string()));
     }
@@ -1727,7 +2132,7 @@ mod tests {
     fn a_disconnected_worker_cannot_lose_a_buffered_failure() {
         let (requests, worker) = mpsc::channel();
         let requests = Arc::new(requests);
-        let record = Arc::new(Record::new(None, Arc::downgrade(&requests)));
+        let record = Arc::new(Record::new(Vec::new(), Arc::downgrade(&requests)));
         let (reply, receiver) = mpsc::channel();
         let ticket = Ticket {
             receiver: Some(receiver),
@@ -1750,9 +2155,9 @@ mod tests {
             requests: None,
             worker: None,
             record: Arc::new(Record::new(
-                Some(Arc::new(move |failure: &CommitFailure| {
+                vec![Arc::new(move |failure: &CommitFailure| {
                     guard(&heard).push(failure.subject.clone());
-                })),
+                })],
                 Weak::new(),
             )),
         };
@@ -1766,6 +2171,10 @@ mod tests {
         );
         assert_eq!(gone.head(), None);
         assert!(!gone.is_dirty());
+        assert_eq!(
+            gone.ignored().unwrap_err(),
+            "the committer stopped before it answered"
+        );
         gone.drained();
         gone.commit_soon("dropped");
         drop(gone.commit("unread"));
@@ -1778,6 +2187,647 @@ mod tests {
         );
         assert_eq!(*guard(&reported), ["dropped", "unread"]);
         assert!(format!("{gone:?}").contains("kept: 2"), "{gone:?}");
+    }
+
+    /// Hooks recording every landing's subjects and ignored entries.
+    fn hearing_landings() -> (Hooks, Arc<Mutex<Vec<Landing>>>) {
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let into = Arc::clone(&heard);
+        let hooks = Hooks::none().on_landing(move |landing| guard(&into).push(landing.clone()));
+        (hooks, heard)
+    }
+
+    #[test]
+    fn every_landing_is_reported_before_its_tickets_are_answered() {
+        let (dir, root) = agora("landing");
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let into = Arc::clone(&heard);
+        // A slow report: answered first, the ticket would return before it,
+        // every time rather than when the thread loses a race.
+        let hooks = Hooks::none().on_landing(move |landing| {
+            thread::sleep(Duration::from_millis(200));
+            guard(&into).push(landing.clone());
+        });
+        let committer = Committer::open(&root, hooks).unwrap().committer;
+        write(&root.join("a.json"), "{}\n");
+        committer.commit_soon("soon");
+        committer.drained();
+        assert_eq!(
+            guard(&heard).len(),
+            1,
+            "a commit nobody waits for is heard landing"
+        );
+        assert_eq!(guard(&heard)[0].outcome.subjects, ["soon"]);
+        write(&root.join("b.json"), "{}\n");
+        let outcome = committer.commit("waited").wait().unwrap();
+        let landings = guard(&heard).clone();
+        assert_eq!(
+            landings.last().map(|landing| &landing.outcome),
+            Some(&outcome),
+            "the report is made before the ticket is answered"
+        );
+        let nothing = committer.commit("nothing to commit").wait().unwrap();
+        assert_eq!(
+            guard(&heard).len(),
+            3,
+            "a batch that finds nothing to commit lands too"
+        );
+        assert_eq!(nothing.sha, outcome.sha);
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_batch_that_gives_up_is_not_a_landing_and_reporters_add_up() {
+        let (dir, root) = agora("reporters");
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let (first, second, third, fourth) = (
+            Arc::clone(&heard),
+            Arc::clone(&heard),
+            Arc::clone(&heard),
+            Arc::clone(&heard),
+        );
+        let armed = Arc::new(AtomicBool::new(true));
+        let hooks = armed_at(FaultPoint::BeforeStage, "cannot commit", &armed)
+            .reporting_to(move |failure| guard(&first).push(format!("1:{}", failure.subject)))
+            .reporting_to(move |failure| guard(&second).push(format!("2:{}", failure.subject)))
+            .on_landing(move |landing| {
+                guard(&third).push(format!("3:{}", landing.outcome.subjects.join(",")));
+            })
+            .on_landing(move |landing| {
+                guard(&fourth).push(format!("4:{}", landing.outcome.subjects.join(",")));
+            });
+        let committer = Committer::open(&root, hooks).unwrap().committer;
+        committer.commit_soon("lost");
+        committer.drained();
+        assert_eq!(
+            *guard(&heard),
+            ["1:lost", "2:lost"],
+            "both reporters hear, in order, and a failure is not a landing"
+        );
+        let unread = committer.commit("unread");
+        committer.drained();
+        drop(unread);
+        committer.drained();
+        assert_eq!(
+            *guard(&heard),
+            ["1:lost", "2:lost", "1:unread", "2:unread"],
+            "both reporters also hear a completed failure dropped unread"
+        );
+        armed.store(false, Ordering::SeqCst);
+        committer.commit("found").wait().unwrap();
+        assert_eq!(
+            *guard(&heard),
+            [
+                "1:lost", "2:lost", "1:unread", "2:unread", "3:found", "4:found"
+            ],
+            "both landing reports hear, in order"
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_landing_lists_what_git_ignores_and_a_batch_of_only_that_commits_nothing() {
+        let (dir, root) = agora("ignored");
+        write(&root.join(".gitignore"), "kept-out/\n*.log\n");
+        let (hooks, heard) = hearing_landings();
+        let committer = Committer::open(&root, hooks).unwrap().committer;
+        committer.commit("ignore rules").wait().unwrap();
+        let head = committer.head();
+        write(&root.join("kept-out").join("x.json"), "{}\n");
+        write(&root.join("a.log"), "log\n");
+        write(
+            &root.join("agents").join("a1").join(".gitignore"),
+            "secret/\n",
+        );
+        write(
+            &root
+                .join("agents")
+                .join("a1")
+                .join("secret")
+                .join("plan.md"),
+            "hidden\n",
+        );
+        let outcome = committer
+            .commit("an agent's own ignore file")
+            .wait()
+            .unwrap();
+        assert_ne!(
+            outcome.sha, head,
+            "the agent's .gitignore itself is committed"
+        );
+        assert!(tracked(&root, "agents/a1/.gitignore"));
+        let mut ignored = guard(&heard)
+            .last()
+            .unwrap()
+            .ignored
+            .clone()
+            .unwrap()
+            .entries;
+        ignored.sort();
+        assert_eq!(
+            ignored,
+            ["a.log", "agents/a1/secret/", "kept-out/"],
+            "a directory a pattern matched is listed as the directory"
+        );
+        write(&root.join("b.log"), "more\n");
+        let quiet = committer
+            .commit("only ignored files changed")
+            .wait()
+            .unwrap();
+        assert_eq!(
+            quiet.sha, outcome.sha,
+            "nothing to commit is still a landing"
+        );
+        assert!(
+            guard(&heard)
+                .last()
+                .unwrap()
+                .ignored
+                .as_ref()
+                .unwrap()
+                .entries
+                .contains(&"b.log".to_string())
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_rename_s_source_path_is_not_read_as_an_entry() {
+        let (dir, root) = agora("rename");
+        // A source path that reads as an ignored entry if the parser takes it
+        // for one: `! trap.json`.
+        write(&root.join("! trap.json"), "{\"a\":1}\n");
+        let (hooks, heard) = hearing_landings();
+        let committer = Committer::open(&root, hooks).unwrap().committer;
+        committer.commit("the trap").wait().unwrap();
+        fs::rename(root.join("! trap.json"), root.join("moved.json")).unwrap();
+        committer.commit("a move").wait().unwrap();
+        assert!(tracked(&root, "moved.json"));
+        assert_eq!(
+            guard(&heard).last().unwrap().ignored,
+            Ok(Ignored::default()),
+            "a rename's source is one field of the entry, not an entry"
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn fields(
+        changed: bool,
+        gitlinks: &[&str],
+        ignored: &[&str],
+        untracked: &[&str],
+    ) -> StatusFields {
+        let owned = |list: &[&str]| list.iter().map(|path| path.to_string()).collect();
+        StatusFields {
+            changed,
+            gitlinks: owned(gitlinks),
+            ignored: owned(ignored),
+            untracked: owned(untracked),
+        }
+    }
+
+    #[test]
+    fn status_fields_are_read_whole() {
+        let hash = "0".repeat(40);
+        assert_eq!(read_status(""), StatusFields::default());
+        assert_eq!(
+            read_status("! a.log\0! dir/\0# branch.oid x\0"),
+            fields(false, &[], &["a.log", "dir/"], &[]),
+            "ignored entries and headers alone change nothing"
+        );
+        assert_eq!(
+            read_status(&format!(
+                "2 R. N... 100644 100644 100644 {hash} {hash} R100 new name.json\0! old.json\0! a.log\0"
+            )),
+            fields(true, &[], &["a.log"], &[]),
+            "a rename's source is skipped, and a path keeps its spaces"
+        );
+        assert_eq!(
+            read_status(&format!(
+                "1 A. S... 000000 160000 160000 {hash} {hash} agents/a1/work dir\0"
+            )),
+            fields(true, &["agents/a1/work dir"], &[], &[]),
+            "a staged gitlink, by its `sub` field"
+        );
+        assert_eq!(
+            read_status(&format!(
+                "2 R. S... 160000 160000 160000 {hash} {hash} R100 agents/a1/moved\0agents/a1/work\0"
+            )),
+            fields(true, &["agents/a1/moved"], &[], &[]),
+            "a renamed gitlink, by its new path"
+        );
+        assert_eq!(
+            read_status(&format!(
+                "1 .M N... 100644 100644 100644 {hash} {hash} m.json\0! x.log\0"
+            )),
+            fields(true, &[], &["x.log"], &[]),
+            "not every changed entry is a gitlink, and none has a source"
+        );
+        assert_eq!(
+            read_status(&format!(
+                "u UU N... 100644 100644 100644 100644 {hash} {hash} {hash} u.json\0? new.json\0? agents/a1/work/\0"
+            )),
+            fields(true, &[], &[], &["new.json", "agents/a1/work/"])
+        );
+        assert_eq!(
+            read_status("!\0"),
+            fields(false, &[], &[""], &[]),
+            "a field too short to hold a path"
+        );
+    }
+
+    #[test]
+    fn a_kept_out_path_is_one_pattern_and_the_exclude_files_other_lines_stay() {
+        for path in ["agents/a1/work", "agents/a*1/[x]?\\y", "agents/a 1/#!work"] {
+            let pattern = escape_pattern(path);
+            assert_eq!(unescape_pattern(&pattern), path, "{pattern}");
+        }
+        assert_eq!(escape_pattern("a*b?c[d\\e"), "a\\*b\\?c\\[d\\\\e");
+        let kept = vec!["# the Architect's own".to_string(), "*.secret".to_string()];
+        let nested = vec!["agents/a1/work".to_string(), "agents/a*2".to_string()];
+        let text = exclude_text(&kept, &nested);
+        assert_eq!(
+            text,
+            format!(
+                "# the Architect's own\n*.secret\n{NESTED_BEGIN}\n/agents/a1/work/\n/agents/a\\*2/\n{NESTED_END}\n"
+            )
+        );
+        assert_eq!(read_exclude(&text), (kept.clone(), nested.clone()));
+        // A line written after the block, by hand, is not the committer's.
+        let (after, listed) = read_exclude(&format!("{text}*.after\n"));
+        assert_eq!(listed, nested);
+        assert_eq!(after, ["# the Architect's own", "*.secret", "*.after"]);
+        assert_eq!(
+            exclude_text(&kept, &[]),
+            "# the Architect's own\n*.secret\n",
+            "an empty list writes no block"
+        );
+        assert_eq!(read_exclude(""), (Vec::new(), Vec::new()));
+    }
+
+    #[test]
+    fn what_git_ignores_can_be_asked_without_staging_and_a_failed_status_says_so() {
+        let (dir, root) = agora("ask-ignored");
+        write(&root.join(".gitignore"), "*.log\n");
+        let committer = open(&root);
+        committer.commit("ignore rules").wait().unwrap();
+        let head = committer.head();
+        write(&root.join("a.log"), "log\n");
+        write(&root.join("new.json"), "{}\n");
+        assert_eq!(
+            committer.ignored(),
+            Ok(Ignored {
+                entries: vec!["a.log".to_string()],
+                nested: Vec::new()
+            })
+        );
+        assert_eq!(committer.head(), head, "nothing was committed");
+        assert!(!tracked(&root, "new.json"));
+        write(&root.join(".git").join("index"), "not an index");
+        let unknown = committer.ignored().unwrap_err();
+        assert!(
+            unknown.starts_with("git status failed, so what git ignores is unknown:"),
+            "{unknown}"
+        );
+        assert!(
+            committer.commit("over a broken index").wait().is_err(),
+            "a status that fails is not a landing"
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A repository an agent makes at `agents/<agent>/work`, with a file, and a
+    /// commit when `committed`.
+    fn nested_repo(root: &Path, agent: &str, committed: bool) -> PathBuf {
+        let work = root.join("agents").join(agent).join("work");
+        fs::create_dir_all(&work).unwrap();
+        must(&work, &["init", "-q", "-b", "main"]);
+        write(&work.join("plan.md"), "the plan\n");
+        if committed {
+            must(&work, &["add", "-A"]);
+            must(
+                &work,
+                &[
+                    "-c",
+                    "user.name=A",
+                    "-c",
+                    "user.email=a@example.invalid",
+                    "commit",
+                    "-qm",
+                    "inner",
+                ],
+            );
+        }
+        work
+    }
+
+    fn gitlinks(root: &Path) -> usize {
+        agora_git(root, &["ls-tree", "-r", "HEAD"])
+            .lines()
+            .filter(|line| line.starts_with("160000"))
+            .count()
+    }
+
+    /// DECISIONS-LOG 2026-10-25, *R1.4b — Architect decisions, fourth round*,
+    /// item 1: one agent's `git init` with no commit failed every `add -A`, every
+    /// other agent's work included.
+    #[test]
+    fn a_nested_repository_with_no_commit_is_kept_out_and_the_rest_lands() {
+        let (dir, root) = agora("nested-empty");
+        nested_repo(&root, "a1", false);
+        write(&root.join("agents/a2/outbox/m1.json"), "{}\n");
+        let (hooks, heard) = hearing_landings();
+        let committer = Committer::open(&root, hooks).unwrap().committer;
+        let outcome = committer.commit("deliver").wait().unwrap();
+        assert_eq!(
+            outcome.attempts, 2,
+            "the first attempt found it and kept it out"
+        );
+        assert!(
+            tracked(&root, "agents/a2/outbox/m1.json"),
+            "the rest landed"
+        );
+        assert!(!tracked(&root, "agents/a1/work/plan.md"));
+        let ignored = guard(&heard).last().unwrap().ignored.clone().unwrap();
+        assert_eq!(ignored.nested, ["agents/a1/work"]);
+        assert!(
+            ignored.entries.contains(&"agents/a1/work/".to_string()),
+            "{ignored:?}"
+        );
+        let exclude = fs::read_to_string(root.join(".git").join(EXCLUDE_FILE)).unwrap();
+        assert_eq!(
+            exclude,
+            format!("{NESTED_BEGIN}\n/agents/a1/work/\n{NESTED_END}\n")
+        );
+        drop(committer);
+        // The list outlives the committer.
+        let again = open(&root);
+        write(&root.join("agents/a2/outbox/m2.json"), "{}\n");
+        assert_eq!(again.commit("again").wait().unwrap().attempts, 1);
+        assert_eq!(again.ignored().unwrap().nested, ["agents/a1/work"]);
+        drop(again);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_nested_repository_with_a_commit_never_lands_as_a_gitlink_nor_wedges_a_batch() {
+        let (dir, root) = agora("nested-gitlink");
+        let work = nested_repo(&root, "a1", true);
+        let (hooks, heard) = hearing_landings();
+        let committer = Committer::open(&root, hooks).unwrap().committer;
+        committer.commit("a batch").wait().unwrap();
+        assert_eq!(
+            gitlinks(&root),
+            0,
+            "its pointer was unstaged before the commit"
+        );
+        assert!(!committer.is_dirty());
+        assert_eq!(
+            guard(&heard)
+                .last()
+                .unwrap()
+                .ignored
+                .clone()
+                .unwrap()
+                .nested,
+            ["agents/a1/work"]
+        );
+        // Dirty, and the batch's only change: once a wedge, now nothing to land.
+        write(&work.join("plan.md"), "the plan, changed\n");
+        let quiet = committer
+            .commit("only the nested repository changed")
+            .wait()
+            .unwrap();
+        assert_eq!(quiet.attempts, 1);
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_gitlink_already_in_history_is_taken_out_of_it_at_its_first_change() {
+        let (dir, root) = agora("nested-in-head");
+        let work = nested_repo(&root, "a1", true);
+        // Committed by hand, as a build without this check would have.
+        must(&root, &["add", "-A"]);
+        must(
+            &root,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@example.invalid",
+                "commit",
+                "-qm",
+                "a gitlink",
+            ],
+        );
+        assert_eq!(gitlinks(&root), 1);
+        let committer = open(&root);
+        // A clean gitlink shows in no status, so it stays until it changes,
+        // and its files were never in history: no worse than before.
+        committer.commit("nothing changed").wait().unwrap();
+        assert_eq!(gitlinks(&root), 1);
+        write(&work.join("plan.md"), "the plan, changed\n");
+        committer.commit("its first change").wait().unwrap();
+        assert_eq!(
+            gitlinks(&root),
+            0,
+            "the next commit records the pointer's removal"
+        );
+        assert!(
+            root.join("agents/a1/work/plan.md").is_file(),
+            "the files stay on disk"
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_directory_that_stops_being_a_repository_is_committed_again() {
+        let (dir, root) = agora("nested-gone");
+        let work = nested_repo(&root, "a1", false);
+        write(&root.join(".git").join(EXCLUDE_FILE), "*.secret\n");
+        let committer = open(&root);
+        committer.commit("first").wait().unwrap();
+        assert!(!tracked(&root, "agents/a1/work/plan.md"));
+        let exclude = fs::read_to_string(root.join(".git").join(EXCLUDE_FILE)).unwrap();
+        assert!(
+            exclude.starts_with("*.secret\n"),
+            "a line it did not write stays: {exclude}"
+        );
+        fs::remove_dir_all(work.join(".git")).unwrap();
+        committer.commit("second").wait().unwrap();
+        assert!(
+            tracked(&root, "agents/a1/work/plan.md"),
+            "its files are work again"
+        );
+        assert_eq!(committer.ignored().unwrap().nested, Vec::<String>::new());
+        assert_eq!(
+            fs::read_to_string(root.join(".git").join(EXCLUDE_FILE)).unwrap(),
+            "*.secret\n",
+            "an empty list leaves no block"
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_list_that_cannot_be_written_fails_the_batch_and_says_why() {
+        let (dir, root) = agora("nested-unwritable");
+        nested_repo(&root, "a1", false);
+        // `.git/info` is a file, so the exclude file cannot be made.
+        write(&root.join(".git").join("info"), "not a directory");
+        let committer = open(&root);
+        let failure = committer.commit("blocked").wait().unwrap_err();
+        assert!(
+            failure
+                .reason
+                .contains("list of nested repositories could not be written"),
+            "{}",
+            failure.reason
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_list_with_nothing_to_prune_is_not_rewritten() {
+        let (dir, root) = agora("nested-unchanged");
+        nested_repo(&root, "a1", false);
+        let committer = open(&root);
+        committer.commit("kept out").wait().unwrap();
+        let exclude = root.join(".git").join(EXCLUDE_FILE);
+        let written = fs::metadata(&exclude).unwrap().modified().unwrap();
+        thread::sleep(Duration::from_millis(50));
+        write(&root.join("agents/a2/m.json"), "{}\n");
+        committer.commit("another").wait().unwrap();
+        assert_eq!(
+            fs::metadata(&exclude).unwrap().modified().unwrap(),
+            written,
+            "a list whose every repository still has its .git is left alone"
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_add_that_fails_for_another_reason_says_only_why() {
+        let (dir, root) = agora("add-fails");
+        let committer = open(&root);
+        // A young lock is someone else's, so it is waited on, never removed.
+        write(&root.join(".git").join("index.lock"), "");
+        write(&root.join("m.json"), "{}\n");
+        let failure = committer.commit("blocked").wait().unwrap_err();
+        assert!(failure.reason.contains("index.lock"), "{}", failure.reason);
+        assert!(
+            !failure.reason.contains("kept out"),
+            "no nested repository was found, so none is said to be kept out: {}",
+            failure.reason
+        );
+        fs::remove_file(root.join(".git").join("index.lock")).unwrap();
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The written pattern, read by git itself: a `[` in the path is a
+    /// wildcard unless escaped (`*` and `?` cannot be in a Windows file name).
+    #[test]
+    fn a_nested_repository_whose_path_holds_a_wildcard_is_kept_out_by_git_itself() {
+        let (dir, root) = agora("nested-wildcard");
+        nested_repo(&root, "a[1]", false);
+        write(&root.join("agents/a1/work/m.json"), "{}\n");
+        let committer = open(&root);
+        let outcome = committer.commit("a batch").wait().unwrap();
+        assert_eq!(outcome.attempts, 2);
+        assert!(
+            tracked(&root, "agents/a1/work/m.json"),
+            "a path the unescaped pattern would have matched is committed"
+        );
+        assert!(!tracked(&root, "agents/a[1]/work/plan.md"));
+        write(&root.join("agents/a2/m.json"), "{}\n");
+        assert_eq!(
+            committer.commit("again").wait().unwrap().attempts,
+            1,
+            "git reads the escaped pattern as the path it names"
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_list_that_cannot_be_kept_or_pruned_fails_the_batch_and_says_why() {
+        // A gitlink to keep out, with nowhere to write the list.
+        let (dir, root) = agora("nested-keep-blocked");
+        nested_repo(&root, "a1", true);
+        write(&root.join(".git").join("info"), "not a directory");
+        let committer = open(&root);
+        let failure = committer.commit("blocked").wait().unwrap_err();
+        assert!(
+            failure
+                .reason
+                .contains("list of nested repositories could not be written"),
+            "{}",
+            failure.reason
+        );
+        assert_eq!(
+            committer.head(),
+            Some(agora_git(&root, &["rev-parse", "HEAD"]).trim().to_string())
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+        // A repository kept out that stopped being one, with nowhere to write
+        // the list without it.
+        let (dir, root) = agora("nested-prune-blocked");
+        let work = nested_repo(&root, "a1", false);
+        let committer = open(&root);
+        committer.commit("kept out").wait().unwrap();
+        fs::remove_dir_all(work.join(".git")).unwrap();
+        fs::remove_dir_all(root.join(".git").join("info")).unwrap();
+        write(&root.join(".git").join("info"), "not a directory");
+        let failure = committer.commit("blocked").wait().unwrap_err();
+        assert!(
+            failure
+                .reason
+                .contains("list of nested repositories could not be written"),
+            "{}",
+            failure.reason
+        );
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_gitlink_that_cannot_be_unstaged_at_first_is_unstaged_by_the_retry() {
+        let (dir, root) = agora("nested-unstage-retry");
+        nested_repo(&root, "a1", true);
+        let lock = root.join(".git").join("index.lock");
+        let stages = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&stages);
+        let planted = lock.clone();
+        // The first attempt's `rm --cached` meets a lock it cannot take; status,
+        // which takes no optional lock, still reads. The retry finds it gone.
+        let hooks = Hooks::none().with_faults(move |point| {
+            match point {
+                FaultPoint::AfterStage if seen.fetch_add(1, Ordering::SeqCst) == 0 => {
+                    write(&planted, "");
+                }
+                FaultPoint::BeforeStage if planted.exists() => fs::remove_file(&planted).unwrap(),
+                _ => {}
+            }
+            Ok(())
+        });
+        let committer = Committer::open(&root, hooks).unwrap().committer;
+        let outcome = committer.commit("a batch").wait().unwrap();
+        assert_eq!(outcome.attempts, 2, "the first could not unstage it");
+        assert_eq!(gitlinks(&root), 0);
+        assert!(!lock.exists());
+        drop(committer);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     // The kill tests. Each starts this test binary again, as a harness running
