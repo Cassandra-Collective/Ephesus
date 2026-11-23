@@ -2,17 +2,12 @@ name: Darwin process guard mutations
 
 on:
   workflow_dispatch:
-  # Architect-approved opt-in bootstrap before this workflow reaches main.
-  push:
-    branches: [feature/r2-1-eph-pty]
-    paths: [.github/workflows/eph-process-macos-mutants.yml]
 
 permissions:
   contents: read
 
 jobs:
   darwin-guards:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[verify-darwin]')
     name: Native Darwin guards and negative control
     runs-on: macos-latest
     timeout-minutes: 90

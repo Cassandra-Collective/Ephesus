@@ -43,8 +43,8 @@ the committer's naming of what an agent's ignore file or nested repository keeps
 history. Its reviews found two more R1.3 defects (a nested repository stopped every
 commit, or hid its work as a gitlink) and an R1.4a one (the `.gitignore` hid a directory
 named like a temporary file), each fixed on the Architect's answer. **R1 is DONE**
-(verdict below, 2026-10-25). **R2.1, `eph-pty`, is complete on
-`feature/r2-1-eph-pty`** (2026-11-23). The branch was cut from R1.4b after the
+(verdict below, 2026-10-25). **R2.1, `eph-pty`, is complete** (2026-11-23).
+Work began from R1.4b after the
 Architect approved R2's package list (R2.1 `eph-pty`, R2.2 `eph-engines`,
 R2.3 the agent manager). R2.1 began by probing `portable-pty` shutdown over
 a real process tree to resolve RUST-PLAN §9's tree-kill question and R1.3's
@@ -54,7 +54,7 @@ constraints carry forward. **R2.1's probe and decision (2026-11-16):** the
 descendants on Windows and Linux. The Architect approved the R2.1 build plan,
 [ADR-0042](./adr/ADR-0042-owned-process-group-shutdown.md) and
 [ADR-0043](./adr/ADR-0043-preserve-the-terminal-spawn-plan.md).
-The local branch connects PATH lookup, streaming redaction and native shutdown
+The implementation connects PATH lookup, streaming redaction and native shutdown
 to the PTY session and applies the same process ownership to Git deadlines.
 The [first CI run](https://github.com/Cassandra-Collective/Ephesus/actions/runs/43949500607)
 found Linux coverage fixture, Windows Git crash recovery, and macOS terminal
@@ -93,6 +93,8 @@ tests running. [CI run 45122195829](https://github.com/Cassandra-Collective/Ephe
 provided three matching measurements per platform. The official ratchet
 seeded both new floors and the local Windows gate passed. See the
 [R2.1 proof record](./implementations/2026-11-20-r2-1-guard-proof.md).
+The R1.4b integration passed the Rust gate on Linux, macOS, and Windows.
+[Integration CI](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45169255063)
 **The next package in the approved sequence is R2.2, `eph-engines`.**
 A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
@@ -145,7 +147,7 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19. **R0 and R1 are done.** R2.1 is complete on its feature branch. R2.2 is next in the approved sequence. | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19. **R0 and R1 are done.** R2.1 is complete. R2.2 is next in the approved sequence. | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 

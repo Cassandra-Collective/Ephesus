@@ -465,8 +465,7 @@ later phase is checked from its first line.
      this section two milestones stale at M8.4 and three packages stale again by M8.9.
      It cannot catch someone editing this line without writing the sentence, and is not
      meant to. -->
-**R2.1, native terminal sessions, is complete on its feature branch**
-(2026-11-23).
+**R2.1, native terminal sessions, is complete** (2026-11-23).
 
 - `eph-pty` launches the supplied program with its exact directory and
   environment. It handles input, interrupts, resizing and PATH lookup,
