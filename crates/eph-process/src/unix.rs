@@ -575,7 +575,7 @@ mod tests {
         } else {
             None
         };
-        println!("\neph group member {depth}");
+        println!("\neph group member {depth} pid={}", process::id());
         thread::sleep(Duration::from_secs(10));
         if let Some(child) = &mut child {
             assert!(child.wait().unwrap().success());
@@ -599,6 +599,7 @@ mod tests {
         let drain = thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 if let Some(depth) = line.unwrap().strip_prefix("eph group member ") {
+                    let (depth, _) = depth.split_once(" pid=").unwrap();
                     ready.send(depth.parse::<u8>().unwrap()).unwrap();
                 }
             }
@@ -788,42 +789,43 @@ mod tests {
         clippy::disallowed_methods,
         reason = "process: leave a live owned output holder after the group root exits"
     )]
-    fn group_with_a_live_member(terminal: bool) -> (Child, mpsc::Receiver<io::Result<usize>>) {
+    fn group_with_a_live_member(terminal: bool) -> (Child, mpsc::Receiver<io::Result<()>>) {
         use std::io::Read;
 
-        let mut command = Command::new("/bin/sh");
-        command.args([
-            "-c",
-            "trap '' HUP; /bin/sleep 10 & printf '%s\\n' \"$!\"; wait",
-        ]);
-        let (mut child, output): (_, Box<dyn Read + Send>) = if terminal {
+        let mut command = Command::new(env::current_exe().unwrap());
+        command.args(FIXTURE).env(FIXTURE_DEPTH, "1");
+        let (mut child, output, stderr): (_, Box<dyn Read + Send>, _) = if terminal {
             let Terminal { child, output, .. } = spawn_terminal(command, 80, 24).unwrap();
-            (child, Box::new(output))
+            (child, Box::new(output), None)
         } else {
-            let Piped { child, stdout, .. } = spawn_piped(&mut command).unwrap();
-            (child, Box::new(stdout))
+            let Piped {
+                child,
+                stdout,
+                stderr,
+            } = spawn_piped(&mut command).unwrap();
+            (child, Box::new(stdout), Some(stderr))
         };
         let (ready, member) = mpsc::sync_channel(1);
         let (finished, eof) = mpsc::sync_channel(1);
         let _drain = thread::spawn(move || {
+            let _stderr = stderr;
             let mut reader = BufReader::new(output);
             let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            ready.send(line).unwrap();
-            let mut rest = String::new();
-            let read = reader.read_to_string(&mut rest);
-            let end = match read {
-                Err(error) if terminal && terminal_eof(&error) => Ok(rest.len()),
-                other => other,
+            loop {
+                line.clear();
+                assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                if let Some(pid) = line.trim_end().strip_prefix("eph group member 2 pid=") {
+                    ready.send(pid.parse::<libc::pid_t>().unwrap()).unwrap();
+                    break;
+                }
+            }
+            let end = match io::copy(&mut reader, &mut io::sink()) {
+                Err(error) if terminal && terminal_eof(&error) => Ok(()),
+                other => other.map(|_| ()),
             };
             finished.send(end).unwrap();
         });
-        let pid = member
-            .recv_timeout(Duration::from_secs(3))
-            .unwrap()
-            .trim()
-            .parse::<libc::pid_t>()
-            .unwrap();
+        let pid = member.recv_timeout(Duration::from_secs(3)).unwrap();
         let group = child.group.unwrap();
         // SAFETY: getpgid only observes the disposable fixture's child.
         assert_eq!(unsafe { libc::getpgid(pid) }, group);
@@ -838,7 +840,11 @@ mod tests {
         }
         // SAFETY: getpgid observes membership without signaling the process.
         assert_eq!(unsafe { libc::getpgid(pid) }, group);
-        assert!(matches!(eof.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        let early = eof.try_recv();
+        assert!(
+            matches!(early, Err(mpsc::TryRecvError::Empty)),
+            "fixture output ended before group shutdown: {early:?}"
+        );
         (child, eof)
     }
 
@@ -850,10 +856,7 @@ mod tests {
             child.try_wait().unwrap(),
             Some(ExitStatus::Signal(libc::SIGKILL.to_string()))
         );
-        assert_eq!(
-            eof.recv_timeout(Duration::from_secs(3)).unwrap().unwrap(),
-            0
-        );
+        eof.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
     }
 
     #[cfg(target_os = "macos")]
@@ -869,11 +872,9 @@ mod tests {
             assert_eq!(child.try_wait().unwrap(), None);
             assert!(child.shutdown_started.is_some());
             assert!(exit_pending(group).unwrap(), "the root must stay unreaped");
-            assert_eq!(
-                eof.recv_timeout(Duration::from_secs(3)).unwrap().unwrap(),
-                0,
-                "the shutdown poll must close the live member's output"
-            );
+            eof.recv_timeout(Duration::from_secs(3))
+                .expect("the shutdown poll must close the live member's output")
+                .unwrap();
             let deadline = Instant::now() + Duration::from_secs(3);
             loop {
                 if let Some(status) = child.try_wait().unwrap() {
@@ -901,10 +902,7 @@ mod tests {
             exit_pending(group).unwrap(),
             "the timeout must retain the root"
         );
-        assert_eq!(
-            eof.recv_timeout(Duration::from_secs(3)).unwrap().unwrap(),
-            0
-        );
+        eof.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
@@ -935,11 +933,9 @@ mod tests {
             let group = child.group.unwrap();
             child.reap();
             assert!(exit_pending(group).is_err(), "the root must be collected");
-            assert_eq!(
-                eof.recv_timeout(Duration::from_secs(3)).unwrap().unwrap(),
-                0,
-                "reaping must retry the signal before freeing the group id"
-            );
+            eof.recv_timeout(Duration::from_secs(3))
+                .expect("reaping must retry the signal before freeing the group id")
+                .unwrap();
         }
     }
 }

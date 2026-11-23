@@ -59,6 +59,10 @@ jobs:
             --re 'Child::(reap|terminate_group|signal_group|group_signal_failure|is_macos_zombie_group|macos_ready_to_reap|try_wait)|group_contains_only_root|is_only_root'
             --no-shuffle)
           unset CARGO_TARGET_DIR
+          # The tool's baseline covers the mutated package. Check both
+          # packages in the unmutated tree before testing any mutants.
+          cargo test --locked --profile mutants --package eph-process --package eph-pty \
+            2>&1 | tee "$base/native-baseline.log"
           set +e
           cargo mutants "${args[@]}" --output "$base/round" > "$base/round.log" 2>&1
           round_status=$?

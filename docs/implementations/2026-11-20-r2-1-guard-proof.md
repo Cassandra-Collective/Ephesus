@@ -428,3 +428,32 @@ The Windows gate through `cmd.exe` passed formatting, Clippy, the plain
 and instrumented workspace suites, dependency review and invariant
 checks on the approved repair. The five frozen-tree checks passed. The
 gate reported only the two missing CI-seeded coverage floors.
+
+### First native baseline on the repaired code
+
+The [macOS mutation job on `6eb436b`](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45118329422/job/137506149894)
+compiled the unmodified process tests. Ten passed, including the 500 ms
+timeout and recovery test. The retry and detached cleanup tests failed
+because the old fixture's output channel was already ready after it had
+killed the root. Cargo-mutants stopped before testing any mutations. Its
+no-test control missed all nine selected mutations. The
+[regular macOS gate](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45118329351/job/137506149867)
+passed the real Git adapter test, reproduced the two fixture failures
+and produced no coverage receipt.
+
+The retry regressions now use the Rust group fixture. The descendant
+reports its own PID over the output stream. The test checks its PGID
+before and after signaling only the root, requires the output to stay
+open, then requires EOF after the production shutdown operation. It keeps
+the piped stderr handle open while observing stdout. An early output
+result now appears in the failure message.
+
+The artifact recorded an unmodified baseline for `eph-process` alone
+and selected both `eph-process` and `eph-pty` for individual control
+mutations. The workflow now checks both packages on the unmodified tree
+before running the round.
+
+All nine Linux process tests passed in the guest with the Rust fixture,
+and Darwin cross-Clippy accepted both test packages. The Windows gate
+through `cmd.exe` passed both test builds and stopped at the two
+unseeded floors. The updated workflow passed Bash's syntax check.
