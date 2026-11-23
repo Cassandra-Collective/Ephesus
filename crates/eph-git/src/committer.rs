@@ -55,7 +55,7 @@ use std::io;
 use std::iter;
 use std::path::{self, Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -141,9 +141,9 @@ impl Hooks {
         self
     }
 
-    /// The same hooks reporting every failure nobody waited for to `hook`, on
-    /// the committer's thread. Contract: `hook` must not queue a commit. The
-    /// failing path is git itself, and a reporter that commits would recurse.
+    /// The same hooks reporting every failure nobody waited for to `hook`.
+    /// Reports run on the committer's thread while it is available. Contract:
+    /// `hook` must not queue a commit, since a reporter that commits would recurse.
     pub fn reporting_to(mut self, hook: impl Fn(&CommitFailure) + Send + Sync + 'static) -> Hooks {
         self.report = Some(Arc::new(hook));
         self
@@ -255,17 +255,36 @@ pub struct Opened {
 #[must_use = "a dropped ticket's failure is only reported, never returned"]
 #[derive(Debug)]
 pub struct Ticket {
-    receiver: Receiver<Result<CommitOutcome, CommitFailure>>,
+    receiver: Option<Receiver<CommitResult>>,
     subject: String,
+    record: Arc<Record>,
 }
 
 impl Ticket {
     /// Waits until this subject's batch has landed or given up.
-    pub fn wait(self) -> Result<CommitOutcome, CommitFailure> {
-        let subject = self.subject;
+    pub fn wait(mut self) -> Result<CommitOutcome, CommitFailure> {
         self.receiver
-            .recv()
-            .unwrap_or_else(|_| Err(stopped(subject)))
+            .take()
+            .and_then(|receiver| receiver.recv().ok())
+            .unwrap_or_else(|| Err(stopped(std::mem::take(&mut self.subject))))
+    }
+}
+
+impl Drop for Ticket {
+    fn drop(&mut self) {
+        let Some(receiver) = self.receiver.take() else {
+            return;
+        };
+        let unread = {
+            let _delivery = guard(&self.record.delivery);
+            let unread = receiver.try_recv();
+            // Close the receiver before allowing the worker to send again.
+            drop(receiver);
+            unread
+        };
+        if let Ok(Err(failure)) = unread {
+            self.record.queue_report(failure);
+        }
     }
 }
 
@@ -273,7 +292,7 @@ impl Ticket {
 #[derive(Debug)]
 pub struct Committer {
     root: PathBuf,
-    requests: Option<Sender<Request>>,
+    requests: Option<Arc<Sender<Request>>>,
     worker: Option<JoinHandle<()>>,
     record: Arc<Record>,
 }
@@ -310,10 +329,9 @@ impl Committer {
                 return Err(OpenError::Init(init.stderr.trim().to_string()));
             }
         }
-        let record = Arc::new(Record {
-            kept: Mutex::new(VecDeque::new()),
-            report: hooks.report.clone(),
-        });
+        let (sender, receiver) = mpsc::channel();
+        let sender = Arc::new(sender);
+        let record = Arc::new(Record::new(hooks.report.clone(), Arc::downgrade(&sender)));
         let worker = Worker {
             root: root.clone(),
             git,
@@ -322,7 +340,6 @@ impl Committer {
             _lock: lock,
         };
         let index_lock = worker.settle_index_lock();
-        let (sender, receiver) = mpsc::channel();
         let handle = thread::Builder::new()
             .name("eph-git-committer".to_string())
             .spawn(move || worker.serve(&receiver))?;
@@ -352,7 +369,11 @@ impl Committer {
             subject: subject.clone(),
             reply: Some(reply),
         }));
-        Ticket { receiver, subject }
+        Ticket {
+            receiver: Some(receiver),
+            subject,
+            record: Arc::clone(&self.record),
+        }
     }
 
     /// Queues a commit nobody waits for. Its failure is reported and kept.
@@ -390,20 +411,15 @@ impl Committer {
         guard(&self.record.kept).iter().cloned().collect()
     }
 
-    /// Queues `request`. One the queue cannot take is answered as stopped: a
-    /// ticket's sender is dropped with it, and a commit nobody waits for is
-    /// kept as a failure rather than lost.
+    /// Queues `request`. If the queue cannot take a commit, deliver the
+    /// stopped outcome through the same path as a completed batch.
     fn send(&self, request: Request) {
         let refused = match &self.requests {
             Some(requests) => requests.send(request).err().map(|refused| refused.0),
             None => Some(request),
         };
-        if let Some(Request::Commit(Pending {
-            subject,
-            reply: None,
-        })) = refused
-        {
-            self.record.keep(stopped(subject));
+        if let Some(Request::Commit(Pending { subject, reply })) = refused {
+            self.record.deliver(reply, Err(stopped(subject)));
         }
     }
 
@@ -515,6 +531,8 @@ fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 struct Record {
     kept: Mutex<VecDeque<CommitFailure>>,
     report: Option<Arc<ReportHook>>,
+    delivery: Mutex<()>,
+    requests: Weak<Sender<Request>>,
 }
 
 impl fmt::Debug for Record {
@@ -527,6 +545,41 @@ impl fmt::Debug for Record {
 }
 
 impl Record {
+    fn new(report: Option<Arc<ReportHook>>, requests: Weak<Sender<Request>>) -> Self {
+        Self {
+            kept: Mutex::new(VecDeque::new()),
+            report,
+            delivery: Mutex::new(()),
+            requests,
+        }
+    }
+
+    fn deliver(&self, reply: Option<Sender<CommitResult>>, result: CommitResult) {
+        let unheard = match reply {
+            Some(reply) => {
+                let _delivery = guard(&self.delivery);
+                reply.send(result).err().map(|unsent| unsent.0)
+            }
+            None => Some(result),
+        };
+        if let Some(Err(failure)) = unheard {
+            self.keep(failure);
+        }
+    }
+
+    /// A ticket can outlive its committer, so it holds the request sender weakly.
+    fn queue_report(&self, failure: CommitFailure) {
+        let Some(requests) = self.requests.upgrade() else {
+            self.keep(failure);
+            return;
+        };
+        if let Err(mpsc::SendError(Request::Report(failure))) =
+            requests.send(Request::Report(failure))
+        {
+            self.keep(failure);
+        }
+    }
+
     /// Reports `failure`, then keeps it, dropping the oldest past
     /// [`MAX_RECORDED_FAILURES`]. The reporter runs before the lock is taken,
     /// so it may read [`Committer::failures`].
@@ -547,11 +600,14 @@ impl Record {
 enum Request {
     Commit(Pending),
     Query(Query),
+    Report(CommitFailure),
 }
+
+type CommitResult = Result<CommitOutcome, CommitFailure>;
 
 struct Pending {
     subject: String,
-    reply: Option<Sender<Result<CommitOutcome, CommitFailure>>>,
+    reply: Option<Sender<CommitResult>>,
 }
 
 enum Query {
@@ -587,6 +643,10 @@ impl Worker {
                         self.land(std::mem::take(&mut batch));
                         self.answer(query);
                     }
+                    Request::Report(failure) => {
+                        self.land(std::mem::take(&mut batch));
+                        self.record.keep(failure);
+                    }
                 }
             }
             self.land(batch);
@@ -621,15 +681,7 @@ impl Worker {
                 subject: pending.subject,
                 reason,
             });
-            let unheard = match pending.reply {
-                Some(reply) => reply.send(result).err().map(|unsent| unsent.0),
-                None => Some(result),
-            };
-            // A failure nobody is waiting for, whether no ticket was asked for
-            // or it was dropped, is reported and kept.
-            if let Some(Err(failure)) = unheard {
-                self.record.keep(failure);
-            }
+            self.record.deliver(pending.reply, result);
         }
     }
 
@@ -1437,8 +1489,11 @@ mod tests {
             MAX_RECORDED_FAILURES + 1,
             "every one is reported"
         );
-        // A ticket dropped unread is nobody waiting either.
-        drop(committer.commit("dropped"));
+        // The failure has already been sent when this ticket is dropped unread.
+        let unread = committer.commit("dropped");
+        committer.drained();
+        assert_eq!(guard(&reported).len(), MAX_RECORDED_FAILURES + 1);
+        drop(unread);
         committer.drained();
         assert_eq!(committer.failures().last().unwrap().subject, "dropped");
         assert_eq!(guard(&reported).last().unwrap(), "dropped");
@@ -1454,9 +1509,38 @@ mod tests {
         assert!(!committer.is_dirty());
         // A failure in the landing Drop waits for is reported too.
         armed.store(true, Ordering::SeqCst);
+        let outlived_worker = committer.commit("after quit");
+        committer.drained();
         committer.commit_soon("at quit");
         drop(committer);
         assert_eq!(guard(&reported).last().unwrap(), "at quit");
+        drop(outlived_worker);
+        assert_eq!(guard(&reported).last().unwrap(), "after quit");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_ticket_dropped_before_the_worker_can_answer_is_reported() {
+        let (dir, root) = agora("drop-before-answer");
+        let (release, permitted) = mpsc::channel();
+        let permitted = Mutex::new(permitted);
+        let hooks = Hooks::none().with_faults(move |point| {
+            assert_eq!(point, FaultPoint::BeforeStage);
+            guard(&permitted).recv_timeout(CHILD_PATIENCE).unwrap();
+            Err("refused".to_string())
+        });
+        let committer = Committer::open(&root, hooks).unwrap().committer;
+        drop(committer.commit("dropped early"));
+        release.send(()).unwrap();
+        committer.drained();
+        assert_eq!(
+            committer.failures(),
+            [CommitFailure {
+                subject: "dropped early".to_string(),
+                reason: "refused".to_string(),
+            }]
+        );
+        drop(committer);
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1632,10 +1716,29 @@ mod tests {
         let (reply, receiver) = mpsc::channel();
         drop(reply);
         let ticket = Ticket {
-            receiver,
+            receiver: Some(receiver),
             subject: "orphan".to_string(),
+            record: Arc::new(Record::new(None, Weak::new())),
         };
         assert_eq!(ticket.wait().unwrap_err(), stopped("orphan".to_string()));
+    }
+
+    #[test]
+    fn a_disconnected_worker_cannot_lose_a_buffered_failure() {
+        let (requests, worker) = mpsc::channel();
+        let requests = Arc::new(requests);
+        let record = Arc::new(Record::new(None, Arc::downgrade(&requests)));
+        let (reply, receiver) = mpsc::channel();
+        let ticket = Ticket {
+            receiver: Some(receiver),
+            subject: "unread".to_string(),
+            record: Arc::clone(&record),
+        };
+        let failure = stopped("unread".to_string());
+        record.deliver(Some(reply), Err(failure.clone()));
+        drop(worker);
+        drop(ticket);
+        assert_eq!(*guard(&record.kept), [failure]);
     }
 
     #[test]
@@ -1646,12 +1749,12 @@ mod tests {
             root: PathBuf::from("nowhere"),
             requests: None,
             worker: None,
-            record: Arc::new(Record {
-                kept: Mutex::new(VecDeque::new()),
-                report: Some(Arc::new(move |failure: &CommitFailure| {
+            record: Arc::new(Record::new(
+                Some(Arc::new(move |failure: &CommitFailure| {
                     guard(&heard).push(failure.subject.clone());
                 })),
-            }),
+                Weak::new(),
+            )),
         };
         assert_eq!(
             gone.commit("late").wait().unwrap_err(),
@@ -1665,9 +1768,16 @@ mod tests {
         assert!(!gone.is_dirty());
         gone.drained();
         gone.commit_soon("dropped");
-        assert_eq!(gone.failures(), [stopped("dropped".to_string())]);
-        assert_eq!(*guard(&reported), ["dropped"]);
-        assert!(format!("{gone:?}").contains("kept: 1"), "{gone:?}");
+        drop(gone.commit("unread"));
+        assert_eq!(
+            gone.failures(),
+            [
+                stopped("dropped".to_string()),
+                stopped("unread".to_string())
+            ]
+        );
+        assert_eq!(*guard(&reported), ["dropped", "unread"]);
+        assert!(format!("{gone:?}").contains("kept: 2"), "{gone:?}");
     }
 
     // The kill tests. Each starts this test binary again, as a harness running
