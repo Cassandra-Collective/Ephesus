@@ -153,6 +153,35 @@ replay, vetted dependencies and the prompt-literal guard.
   98.29% floor. A comparison against the mutation snapshot found
   byte-identical production engine sources. The only source differences
   were in the test modules of `grants.rs` and `probe.rs`.
+- **Tier A.** On commit `94effcc687089e01b3b02daa77aa64dff15c2ee3`,
+  Windows and WSL2 each completed ten plain and ten instrumented workspace
+  runs with exit 0. Rust was 1.96.0 and cargo-llvm-cov was 0.9.1 on both.
+  All 1,125 archived Git blobs matched that commit before and after the
+  tests on each system. The Architect approved the first push on this
+  condition, and `git ls-remote` reported that SHA on
+  `refs/heads/feature/r2-2-eph-engines`.
+- **Tier B.** GitHub completed the first attempt of
+  [CI run 45476070533](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45476070533)
+  on that pushed commit. Docs, attribution and the TypeScript job passed.
+  Windows and Linux reached the coverage gate with only the new floor
+  missing, at 95.58% (865 of 905) and 94.58% (874 of 924) respectively.
+  The downloaded Windows and Linux artifacts (14959637149 and
+  14959756351) both name attempt 1, the pushed SHA and measurement tree
+  `fnv1a64:9e1b67ed8ce20c44`.
+- **Tier B.** In the same run, the
+  [macOS job](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45476070533/job/138736541610)
+  reached the descendant-shutdown test. The probe returned exit 17 and the
+  fixture observed the readiness marker. The test then failed at
+  `UnixStream::set_read_timeout` with OS error 22 before reading EOF.
+  The gate stopped at the plain test suite and uploaded no macOS artifact.
+- **Tier A.** The approved fixture puts the EOF read in a test worker
+  and bounds its result through a channel. WSL2 passed all 28 engine tests
+  plain and instrumented, and focused Clippy. Removing the group shutdown
+  in the isolated copy made the fixture fail after two seconds at the
+  channel wait. Its zero-tests control passed. All 1,125 hashes matched
+  after restoration. Windows passed 27 engine and 140 xtask tests.
+  The source diff is confined to the probe test module. Native macOS
+  verification still needs CI.
 
 ## Read-only checks
 
@@ -174,7 +203,7 @@ to schedule detached Unix reaping still has no fixture.
 
 ## Pending
 
-- Finish the repeated checks against the committed tree. The green
-  workspace gate, cross-platform CI and floor ratchet follow a separately
-  approved push.
+- Verify the repaired macOS fixture on a separately approved push.
+  Collect three attempts on that commit for the coverage ratchet, then
+  verify the floor on all three platforms.
 - R2.3 integration and the signed-in reference-engine run at R2 exit.

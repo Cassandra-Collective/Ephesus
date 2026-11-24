@@ -490,7 +490,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_completed_probe_stops_its_descendant_after_both_pipes_close() {
-        use std::os::unix::net::UnixListener;
+        use std::{net::Shutdown, os::unix::net::UnixListener};
 
         let root = tempfile::tempdir().unwrap();
         let listener = UnixListener::bind(root.path().join("ready.sock")).unwrap();
@@ -506,10 +506,19 @@ mod tests {
             b"descendant connected"
         );
         let (mut descendant, _) = listener.accept().unwrap();
-        descendant
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        assert_eq!(descendant.read(&mut [0]).unwrap(), 0);
+        let cleanup = descendant.try_clone().unwrap();
+        let (send, receive) = mpsc::sync_channel(1);
+        let reader = thread::spawn(move || {
+            let _sent = send.send(descendant.read(&mut [0]));
+        });
+        let read = receive
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap_or_else(|error| {
+                let _shutdown = cleanup.shutdown(Shutdown::Both);
+                panic!("descendant socket did not report EOF: {error}");
+            });
+        reader.join().unwrap();
+        assert_eq!(read.unwrap(), 0);
     }
 
     #[test]

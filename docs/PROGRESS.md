@@ -104,7 +104,9 @@ on 2026-11-24. The engine crate, real CLI captures, offline conformance and
 prompt-literal check are in the feature worktree. The Architect's decisions
 after review are recorded, with local Windows and WSL2 evidence in the
 [R2.2 implementation record](./implementations/2026-11-24-r2-2-engine-adapters.md).
-The coverage floor and three-platform CI still depend on an approved push.
+The first push's macOS fixture stopped CI before it could capture coverage.
+Its approved test fix passed locally on WSL2. A new CI run, the coverage
+floor and the green three-platform gate are still owed.
 A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
 `.gitignore`, rendered at every boot, keeps `write_atomic`'s temporaries out of history
