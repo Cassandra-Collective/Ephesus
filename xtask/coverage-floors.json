@@ -18,18 +18,18 @@
   "corroboratingRuns": 3,
   "corroboratingRunsReason": "Carried from the TypeScript record (RUST-PLAN §4 item 7): one run cannot claim that a suite reproduces a figure, and two runs taken back to back share a machine's mood. A raise takes the lowest of three CI runs per platform, all of one tree. The validator refuses fewer than 3.",
   "measuredFrom": {
-    "tree": "fnv1a64:24b271b44e7dc27b",
+    "tree": "fnv1a64:b6e71dd4b8e9189f",
     "tool": "cargo-llvm-cov 0.9.1",
     "runs": [
-      "linux 45122195829/1",
-      "linux 45122195829/2",
-      "linux 45122195829/3",
-      "macos 45122195829/1",
-      "macos 45122195829/2",
-      "macos 45122195829/3",
-      "windows 45122195829/1",
-      "windows 45122195829/2",
-      "windows 45122195829/3"
+      "linux 45492011626/1",
+      "linux 45492011626/2",
+      "linux 45492011626/3",
+      "macos 45492011626/1",
+      "macos 45492011626/2",
+      "macos 45492011626/3",
+      "windows 45492011626/1",
+      "windows 45492011626/2",
+      "windows 45492011626/3"
     ]
   },
   "crates": {
@@ -37,29 +37,33 @@
       "floor": 98.84,
       "platforms": { "linux": 98.84, "macos": 98.84, "windows": 99.22 }
     },
+    "eph-engines": {
+      "floor": 94.58,
+      "platforms": { "linux": 94.58, "macos": 94.91, "windows": 95.58 }
+    },
     "eph-fs": {
       "floor": 97.48,
       "platforms": { "linux": 97.98, "macos": 97.98, "windows": 97.48 }
     },
     "eph-git": {
-      "floor": 99.55,
-      "platforms": { "linux": 99.55, "macos": 99.55, "windows": 99.64 }
+      "floor": 99.57,
+      "platforms": { "linux": 99.57, "macos": 99.57, "windows": 99.65 }
     },
     "eph-process": {
       "floor": 94.88,
       "platforms": { "linux": 94.88, "macos": 95.15, "windows": 95.70 }
     },
     "eph-pty": {
-      "floor": 94.94,
-      "platforms": { "linux": 95.04, "macos": 95.04, "windows": 94.94 }
+      "floor": 95.04,
+      "platforms": { "linux": 95.04, "macos": 95.04, "windows": 95.23 }
     },
     "eph-schema": {
       "floor": 98.92,
       "platforms": { "linux": 98.92, "macos": 98.92, "windows": 98.92 }
     },
     "xtask": {
-      "floor": 98.29,
-      "platforms": { "linux": 98.29, "macos": 98.29, "windows": 98.29 }
+      "floor": 98.52,
+      "platforms": { "linux": 98.52, "macos": 98.52, "windows": 98.52 }
     }
   }
 }

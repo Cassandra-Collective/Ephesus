@@ -182,6 +182,29 @@ replay, vetted dependencies and the prompt-literal guard.
   after restoration. Windows passed 27 engine and 140 xtask tests.
   The source diff is confined to the probe test module. Native macOS
   verification still needs CI.
+- **Tier A.** The repaired commit `78eca501bcc9f3cbcbd482f2e00078dfd7ada5de`
+  passed ten plain and ten instrumented workspace runs on both Windows and
+  WSL2. Each archive matched all 1,125 Git blobs before and after testing.
+  `git ls-remote` confirmed that SHA on the approved feature branch.
+- **Tier B.** The first attempt of
+  [CI run 45492011626](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45492011626)
+  passed the repaired descendant test on macOS in both test builds.
+  All three Rust jobs reached coverage and failed only for the unseeded
+  floor. The three artifacts name tree `fnv1a64:b6e71dd4b8e9189f`. They
+  measured Windows 865 of 905, Linux 874 of 924, and macOS 877 of 924 lines.
+- **Tier B.** Attempts 2 and 3 of the same run supplied the other six
+  measurements of the same tree. Linux stayed at 874 of 924 and macOS at
+  877 of 924 for all three attempts. Windows covered 865, 867 and 865 of
+  905 lines in attempt order.
+- **Tier A.** `cargo xtask coverage ratchet` accepted the nine downloaded
+  artifacts and seeded `eph-engines` at 94.58%. It raised `eph-git` from
+  99.55% to 99.57%, `eph-pty` from 94.94% to 95.04%, and `xtask` from
+  98.29% to 98.52%. The generated file retained every prior floor row
+  without a decrease. Its provenance names each of the nine measurements.
+- **Tier A.** After installing the generated floors, Windows
+  `cargo xtask gate` exited 0 with `gate: all steps green`.
+  `eph-engines` measured 95.80% (867 of 905 lines) against 94.58%.
+  The gate covered eight crates and 55 production files.
 
 ## Read-only checks
 
@@ -203,7 +226,6 @@ to schedule detached Unix reaping still has no fixture.
 
 ## Pending
 
-- Verify the repaired macOS fixture on a separately approved push.
-  Collect three attempts on that commit for the coverage ratchet, then
-  verify the floor on all three platforms.
+- Verify the ratcheted branch on all three CI platforms after a separate
+  push approval.
 - R2.3 integration and the signed-in reference-engine run at R2 exit.
