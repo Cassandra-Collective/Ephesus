@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "environment": {
+    "platform": "win32",
+    "osVersion": "10.0.26300",
+    "nodeVersion": "24.20.0"
+  },
+  "captures": [
+    {
+      "engine": "claude",
+      "engineVersion": "2.1.295",
+      "probe": "version",
+      "argv": [
+        "claude",
+        "--version"
+      ],
+      "file": "claude/version.txt",
+      "capturedAt": "2026-11-24",
+      "exitCode": 0,
+      "stderrBytes": 0,
+      "redacted": [],
+      "condition": "The installed npm launcher's native executable."
+    },
+    {
+      "engine": "claude",
+      "engineVersion": "2.1.295",
+      "probe": "authentication",
+      "argv": [
+        "claude",
+        "auth",
+        "status"
+      ],
+      "file": "claude/auth-status-logged-out.json",
+      "capturedAt": "2026-11-24",
+      "exitCode": 1,
+      "stderrBytes": 0,
+      "redacted": [
+        "projectsDirectory",
+        "configDirectory"
+      ],
+      "condition": "Local sandbox invocation with auto-updates and nonessential traffic disabled. The two path strings were substituted in stdout without reserializing its JSON."
+    },
+    {
+      "engine": "claude",
+      "engineVersion": "2.1.295",
+      "probe": "authentication",
+      "argv": [
+        "claude",
+        "auth",
+        "status",
+        "--text"
+      ],
+      "file": "claude/auth-status-isolated-logged-out.txt",
+      "capturedAt": "2026-11-24",
+      "exitCode": 1,
+      "stderrBytes": 0,
+      "redacted": [],
+      "condition": "Both engine config and secure storage were directed to the same disposable directory without a Claude login. The child environment omitted credential variables."
+    },
+    {
+      "engine": "codex",
+      "engineVersion": "0.171.0-alpha.13",
+      "probe": "version",
+      "argv": [
+        "codex",
+        "--version"
+      ],
+      "file": "codex/version.txt",
+      "capturedAt": "2026-11-24",
+      "exitCode": 0,
+      "stderrBytes": 0,
+      "redacted": [],
+      "condition": "The executable bundled with the installed Windows app, run with disposable CLI state."
+    },
+    {
+      "engine": "gemini",
+      "engineVersion": "0.57.0",
+      "probe": "version",
+      "argv": [
+        "node",
+        "node_modules/@google/gemini-cli/bundle/gemini.js",
+        "--version"
+      ],
+      "file": "gemini/version.txt",
+      "capturedAt": "2026-11-24",
+      "exitCode": 0,
+      "stderrBytes": 0,
+      "redacted": [],
+      "condition": "The npm package's gemini bin entry point, run from the isolated install with Node. npm lifecycle scripts were disabled and the install was removed after capture."
+    }
+  ],
+  "limits": [
+    "The recorded binaries establish the output of these invocations. The pinned captures are replayed offline in conformance. They establish no support guarantee for other versions.",
+    "This session captured logged-out authentication. A historical signed-in capture for 2.1.252 is recorded in test/fixtures/engine-output/PROVENANCE.json."
+  ]
+}

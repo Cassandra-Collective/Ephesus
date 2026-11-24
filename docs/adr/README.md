@@ -46,6 +46,7 @@ New ADRs append; accepted ADRs are never edited, only superseded.
 | [ADR-0041](./ADR-0041-ephesus-is-rewritten-in-rust.md) | Ephesus is rewritten in Rust, window included (supersedes ADR-0001; changes the mechanism, not the decision, of ADR-0002, ADR-0007, ADR-0014 and ADR-0036; the rewrite is in progress, see `../RUST-PLAN.md`) | accepted |
 | [ADR-0042](./ADR-0042-owned-process-group-shutdown.md) | Own the shutdown boundary at spawn | accepted |
 | [ADR-0043](./ADR-0043-preserve-the-terminal-spawn-plan.md) | Preserve the terminal spawn plan | accepted |
+| [ADR-0044](./ADR-0044-bound-engine-probes-and-regenerate-private-settings.md) | Bound engine probes and regenerate private settings | accepted |
 
 **Numbers 0037–0039 are reserved, not missing.** ADR-0037 (the bench), ADR-0038
 (the provider seam) and ADR-0039 (the gate as a native agent's permission system)

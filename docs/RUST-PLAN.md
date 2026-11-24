@@ -92,7 +92,8 @@ fewer than one package's worth of code is folded into its neighbour until it gro
 - `eph-ui` depends on `eph-api`, egui/eframe and `alacritty_terminal` (whose `tty`
   module it must not use), and on nothing else of ours.
 - Only `eph-git` constructs a `git` command. Only `eph-pty`, `eph-engines` (version
-  probes), `eph-library` (MemPalace) and `eph-harbor` (`gh`) may construct any other
+  and authentication probes, [ADR-0044](./adr/ADR-0044-bound-engine-probes-and-regenerate-private-settings.md)),
+  `eph-library` (MemPalace) and `eph-harbor` (`gh`) may construct any other
   process, each named in `clippy.toml`'s allowlist with its reason. `eph-git` and
   `eph-agora` also claim `process:`, in their tests only: kill tests that run the test
   binary again as the harness they kill, and in `eph-git` a Windows junction made with

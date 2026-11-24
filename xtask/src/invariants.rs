@@ -25,6 +25,8 @@
 //!   environment value, and code a macro generates.
 //! - **`parse`**: a source the rules cannot parse fails. A rule that cannot read
 //!   a file must not pass it.
+//! - **`prompt-literal`**: the engine argument boundary consumes an opaque
+//!   prompt rendered from the bundled asset or its home override (invariant 8).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -244,7 +246,12 @@ pub fn check(workspace: &Workspace) -> Vec<Violation> {
         dep_shape(member, &policy, &mut out);
         for source in &member.sources {
             match syn::parse_file(&source.text) {
-                Ok(file) => sources(member, &policy, source, &file, &mut out),
+                Ok(file) => {
+                    sources(member, &policy, source, &file, &mut out);
+                    if member.name == "eph-engines" {
+                        crate::prompt_rule::check(source, &file, &mut out);
+                    }
+                }
                 Err(error) => out.push(Violation {
                     rule: "parse",
                     file: source.path.clone(),
@@ -989,6 +996,19 @@ mod tests {
 
     fn rules(violations: &[Violation]) -> Vec<(&'static str, usize)> {
         violations.iter().map(|v| (v.rule, v.line)).collect()
+    }
+
+    #[test]
+    fn the_workspace_gate_audits_prompt_boundaries_in_eph_engines() {
+        let engine_file = "crates/eph-engines/src/adapter.rs";
+        let other_file = "crates/eph-agora/src/adapter.rs";
+        let source = "fn bypass() {\n    send_identity(prompt, &mut args);\n}";
+        let violations = run(vec![
+            member("eph-engines", OPTED_IN, &[(engine_file, source)]),
+            member("eph-agora", OPTED_IN, &[(other_file, source)]),
+        ]);
+        assert_eq!(rules(&violations), [("prompt-literal", 2)]);
+        assert_eq!(violations[0].file, PathBuf::from(engine_file));
     }
 
     // ---- lints ----------------------------------------------------------

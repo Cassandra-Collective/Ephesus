@@ -98,9 +98,13 @@ The R1.4b integration passed the Rust gate on Linux, macOS and Windows in
 R2.1 merged as #107 (`45dcff9`) on 2026-11-23, and
 [CI run 45196366436](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45196366436)
 on that commit is green on every job.
-**The next package in the approved sequence is R2.2, `eph-engines`.** It opens
-by writing SDD-RUST §3's engine-adapter half, and §3 then goes to the
-Architect for one approval (DECISIONS-LOG, 2026-11-23).
+**The next package in the approved sequence is R2.2, `eph-engines`.** The
+Architect approved [SDD-RUST §3](./sdd/SDD-RUST.md#3-the-terminal-plane) whole
+on 2026-11-24. The engine crate, real CLI captures, offline conformance and
+prompt-literal check are in the feature worktree. The Architect's decisions
+after review are recorded, with local Windows and WSL2 evidence in the
+[R2.2 implementation record](./implementations/2026-11-24-r2-2-engine-adapters.md).
+The coverage floor and three-platform CI still depend on an approved push.
 A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
 `.gitignore`, rendered at every boot, keeps `write_atomic`'s temporaries out of history

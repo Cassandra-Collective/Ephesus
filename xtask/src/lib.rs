@@ -12,6 +12,7 @@ pub mod deps;
 pub mod gate;
 pub mod invariants;
 pub mod mutants;
+mod prompt_rule;
 pub mod workspace;
 
 use std::path::Path;

@@ -102,6 +102,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "eph-engines"
+version = "0.0.0"
+dependencies = [
+ "eph-fs",
+ "eph-process",
+ "eph-pty",
+ "eph-schema",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "eph-fs"
 version = "0.0.0"
 dependencies = [

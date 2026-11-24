@@ -3,10 +3,10 @@
 **Status:** §2 and §4 APPROVED by the Architect on 2026-10-20 (R1.0; DECISIONS-LOG), and
 §10 on 2026-10-25 (R1.4a). R1.4b's edits to §4.5 and §10 apply the Architect's answers
 of 2026-10-25 (DECISIONS-LOG, *R1.4b — Architect decisions*, three rounds). §3 is
-written, not yet approved: R2.1 wrote its terminal half to ADR-0042, ADR-0043 and the
-Architect's R2.1 decisions (DECISIONS-LOG, 2026-11-16 to 2026-11-23). R2.2 adds the
-engine-adapter half, and §3 then goes to the Architect for one approval (DECISIONS-LOG,
-2026-11-23). The other sections are written, and approved, by the phases that build them.
+APPROVED as a whole on 2026-11-24 (DECISIONS-LOG). R2.1 wrote its terminal half to
+ADR-0042, ADR-0043 and the Architect's R2.1 decisions of 2026-11-16 to 2026-11-23. R2.2
+wrote the engine-adapter half. The other sections are written and approved by the phases
+that build them.
 
 **Scope and precedence (approved 2026-10-20).** This document governs the Rust
 workspace (`crates/`, `xtask/`). `docs/sdd/SDD.md` keeps governing the frozen
@@ -205,6 +205,145 @@ The launch and shutdown guarantees are in
   exits and descendants hold pipes past the deadline and output grace, the
   call fails and gets a separate bounded cleanup interval. POSIX keeps the
   root unreaped until it no longer needs to signal the group.
+
+### 3.1 Engine adapter contract (R2.2)
+
+FR-1.2 and NFR-12 put engine-specific command lines and external formats behind
+the adapter defined in [ADR-0009](../adr/ADR-0009-engine-adapters.md).
+[eph-pty](../../crates/eph-pty/) receives the executable, literal arguments, cwd
+and exact environment from the adapter's plan, with terminal geometry supplied
+by its caller. The adapter supplies the interrupt bytes and their display label.
+The agent manager owns spawn order, the install offer, queueing, unwind and
+respawn in R2.3. The adapters describe install commands for FR-1.6. Display and
+execution of one follow the Architect's consent in R2.3.
+
+The seam carries a stable engine id, binary and probe specifications, a spawn
+plan, identity injection, a settings install and uninstall plan, an interrupt
+sequence, and declared hook and autonomy grades. Its optional capabilities
+carry resume arguments, transcript reads, config-directory preparation,
+workspace trust, authentication probe environment and notification
+classification. A missing capability is explicit. Core callers use the
+registry and this contract. The reference is
+[the frozen adapter surface](../../src/main/engines/types.ts) and its
+[registry](../../src/main/engines/index.ts).
+
+| Subject | Registration | Hooks | Autonomy | Settings and interrupt |
+| --- | --- | --- | --- | --- |
+| Claude Code | Reference engine and sole production registration | Native | Enforced | Private settings file, Escape |
+| Codex | Conformance only | None | None | No settings, Escape |
+| Gemini | Conformance only | None | None | No settings, Escape |
+
+[ADR-0024](../adr/ADR-0024-claude-only-for-the-mvp.md) requires a refusal
+naming any non-reference engine at the profile and hire boundary. The registry
+refuses duplicate registration. The test suite constructs the unregistered
+subjects directly. The Codex plan carries its cwd both in the process plan and
+as `--cd` and passes its composed identity as one argument. Gemini receives the
+process cwd and its composed identity as one positional argument. For each of
+these subjects the installer yields no settings and the plan is invariant under
+changes of the requested autonomy. The separate fake subject gives the
+conformance suite a controllable engine for behavioral checks.
+See [Codex](../../src/main/engines/codex.ts),
+[Gemini](../../src/main/engines/gemini.ts) and the
+[subject roll call](../../test/conformance/engine-adapters.test.ts).
+
+### 3.2 Claude Code launch and local state
+
+- **Plan and identity.** The plan passes `--permission-mode`, the attached
+  empty argument `--setting-sources=`, the private `--settings` path, one
+  `--plugin-dir` argument pair for each resolved plugin directory, and
+  `--append-system-prompt` with the rendered identity as one argument. The
+  documented identity sources are the agent's identity, the Agora's protocol
+  and the memory already composed by the caller. Missing required sources
+  fail plan construction and identify the source. Templates live under
+  `prompts/` and use §4.4 overrides. Prompt construction and the model-facing
+  argument use a rendered-prompt type. `xtask` checks both boundaries (DECISIONS-LOG,
+  2026-11-24). Escape is byte `0x1b`. Resume supplies
+  `--resume <session-id>` from the recorded id (FR-1.4, FR-5.4).
+- **Autonomy.** The already composed `manual`, `supervised` and `autonomous`
+  levels map to `default`, `acceptEdits` and `auto` respectively. The caller
+  refuses a stricter-than-autonomous hire when the adapter declares no
+  enforcement (FR-1.10, [ADR-0031](../adr/ADR-0031-an-engine-declares-whether-it-can-enforce-autonomy.md)).
+- **Environment.** Compose the allowlisted CLI environment from
+  [the frozen allowlist](../../src/main/engines/spawn-env.ts), named grants
+  and harness-owned fields. Carry `EPH_AGENT_ID`, `EPH_HOOK_TOKEN` and
+  `EPH_HOOK_ENDPOINT`. Forward recall and credential refresh commands only
+  when supplied. Grant values stay in the child environment and are covered by
+  §3's terminal redaction. Paths to granted plugins come from canonical
+  containment checks under the declared tool roots ([ADR-0026](../adr/ADR-0026-engine-isolation-and-the-harness-as-sole-hook-author.md)).
+- **Private config and credentials.** Use §2's `engines/claude/<agent>/` as
+  `CLAUDE_CONFIG_DIR`. The versioned harness home and the engine's external
+  formats have different owners (§4.11). The engine's secure-storage lookup
+  uses `CLAUDE_SECURESTORAGE_CONFIG_DIR` for the Architect's session.
+  Probe and spawn use the same engine config and credentials lookup.
+  `DISABLE_AUTOUPDATER=1` prevents a self-upgrade during a company run
+  (FR-1.7, [ADR-0028](../adr/ADR-0028-the-company-does-not-upgrade-its-own-engine.md)).
+- **Onboarding and trust.** Prepare the private `.claude.json` by adding
+  `hasCompletedOnboarding: true` while retaining its other fields. A damaged
+  document yields a refusal with its path. After approval, an existing cwd's
+  project key comes from its resolved path. For an approved future worktree,
+  resolve the harness-owned parent and append the harness-chosen leaf. The
+  key uses forward slashes. Set only `projects[canonical].hasTrustDialogAccepted`
+  and report whether it was already set. The caller owns the approved workspace
+  and the creation order. File writes follow §4.0. The engine may later rewrite
+  its config, which can bring the trust dialog back
+  ([ADR-0021](../adr/ADR-0021-workspace-trust-at-activation.md),
+  [ADR-0025](../adr/ADR-0025-workspace-trust-covers-the-worktrees-an-activation-creates.md)).
+- **Settings.** The private `eph-settings.json` supplies the harness hook
+  declarations under ADR-0026. Both the spawn plan and install plan refer to
+  the same settings. Each launch regenerates the file from current declarations
+  after refusing damaged JSON, symbolic links, junctions and Windows reparse
+  points. Atomic replacement of an ordinary hard-linked file preserves the
+  bytes under its other names (DECISIONS-LOG, 2026-11-24). The generated file
+  is retained for inspection after exit. The target checkout stays
+  byte-identical, including when workspaces are shared
+  ([ADR-0044](../adr/ADR-0044-bound-engine-probes-and-regenerate-private-settings.md)).
+  Set `attribution.commit` and `attribution.pr` to
+  empty strings, `attribution.sessionUrl` and `includeCoAuthoredBy` to
+  `false` (FR-1.8). Identity and tool grants are distinct. The grants include
+  the hire's own Agora directory, read-only playbooks where present, a scoped
+  credential refresh command where present, and the explicit unattended
+  declarations of [ADR-0035](../adr/ADR-0035-an-engine-prompt-is-declared-in-advance.md).
+  The agent manager owns the effective grant boundary, including §4.5's `.git/`
+  restriction.
+
+The engine declares the lifecycle hook mapping and optional transcript reader
+at the seam. Hook delivery, payload validation, the executable shims and the
+avatar state machine are R3. Cost folding and Watch consumers are R6. The
+frozen [Claude adapter](../../src/main/engines/claude.ts) and
+[engine tests](../../test/main/engines/) are the behavior references for
+these declarations.
+
+### 3.3 Probes and conformance evidence
+
+The adapter describes `--version` for each subject and `claude auth status`
+for the reference. `eph-engines` runs both probes with a ten-second deadline
+and delegates native process ownership to `eph-process` (ADR-0044).
+On POSIX, once the root has exited and both output streams have closed, the
+probe requests shutdown of any remaining members of its owned group before
+reaping the root (DECISIONS-LOG, 2026-11-24).
+Preserve the distinction between failure to start, a
+completed process and an unrecognized result. For authentication the frozen
+contract distinguishes authenticated, needs login and inconclusive. An
+observed boolean `loggedIn` is the machine-readable answer. The login remedy
+belongs to the adapter's specification. The agent manager applies the result
+before it opens a terminal. A nonzero exit alone is inconclusive.
+
+Use the [Rust probe fixtures](../../crates/eph-engines/tests/fixtures/engine-output/PROVENANCE.json)
+and their capture metadata before writing any matcher (Architect, 2026-09-04
+and 2026-11-24). The [frozen provenance](../../test/fixtures/engine-output/PROVENANCE.json)
+also records signed-in authentication on Claude 2.1.252. Replay it and the
+captures from Claude 2.1.295, Codex 0.171.0-alpha.13 and Gemini 0.57.0 in offline
+conformance. These captures establish the observed output of those invocations.
+
+Hold the three adapters to one [conformance table](../../test/conformance/adapter-conformance.ts).
+Verify literal spawn inputs, declared environment and optional capabilities,
+settings ownership and cleanup, hook grade in both directions, and FR-1.10's
+autonomy comparison in both directions. An adapter that declares enforcement must vary the plan
+with the level. A non-enforcing adapter must yield the same plan and refuse a
+stricter hire at the spawn boundary. Assert the subject roll call and the
+production registry separately. The R2 exit also needs a signed-in reference
+CLI under the headless PTY, with a private config directory and attribution
+suppression demonstrated on actual output (RUST-PLAN §5).
 
 ## 4. Persisted formats
 
