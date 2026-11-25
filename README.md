@@ -456,7 +456,7 @@ requirements and the thirteen invariants do not change. The order, phase by phas
 [`docs/RUST-PLAN.md`](./docs/RUST-PLAN.md). Phase R0 builds the gates first, so every
 later phase is checked from its first line.
 
-<!-- landed: R2.1
+<!-- landed: R2.1 R2.2
      Checked by scripts/check-readme-current.cjs against the register (docs/PROGRESS.md
      and the milestones archived in docs/progress/): every package of the milestone or
      phase holding the most recent tick must be listed here, and listing one is a claim
@@ -465,6 +465,14 @@ later phase is checked from its first line.
      this section two milestones stale at M8.4 and three packages stale again by M8.9.
      It cannot catch someone editing this line without writing the sentence, and is not
      meant to. -->
+**R2.2, engine adapters, is verified on its feature branch** (2026-11-25).
+
+- `eph-engines` prepares Claude's private settings, launch arguments, environment
+  and prompts. The same adapter contract covers Codex and Gemini in offline
+  conformance tests backed by real CLI captures. The
+  [implementation record](./docs/implementations/2026-11-24-r2-2-engine-adapters.md)
+  covers the test results, mutation controls and green CI on Linux, macOS and Windows.
+
 **R2.1, native terminal sessions, is complete** (2026-11-23).
 
 - `eph-pty` launches the supplied program with its exact directory and

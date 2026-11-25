@@ -205,6 +205,22 @@ replay, vetted dependencies and the prompt-literal guard.
   `cargo xtask gate` exited 0 with `gate: all steps green`.
   `eph-engines` measured 95.80% (867 of 905 lines) against 94.58%.
   The gate covered eight crates and 55 production files.
+- **Tier A.** On WSL2, `cargo xtask gate` exited 0 from an archive of
+  ratchet commit `f8c6c41b846cd57cc46f6da15137698a0a7aae34`.
+  `eph-engines` measured 94.58% (874 of 924 lines). All 1,125 Git blobs
+  matched the commit before and after the gate.
+- **Tier A.** The four Unix-specific mutation cases were caught on the
+  same ratchet commit with the repaired EOF fixture. Each zero-tests
+  control missed its mutation. The archive again matched all 1,125
+  Git blobs after restoration, and all 28 engine tests passed.
+- **Tier A.** `node scripts/check-attribution.cjs` exited 0 on the ratchet
+  commit and reported `attribution ok (742 commit(s) reachable from HEAD;
+  251 on refs/heads/main's first-parent chain)`.
+- **Tier B.** All six jobs in
+  [CI run 45549313638](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45549313638)
+  passed on ratchet commit `f8c6c41b846cd57cc46f6da15137698a0a7aae34`.
+  `eph-engines` measured Linux 94.58% (874 of 924), macOS 94.91%
+  (877 of 924), and Windows 95.58% (865 of 905) against its 94.58% floor.
 
 ## Read-only checks
 
@@ -226,6 +242,5 @@ to schedule detached Unix reaping still has no fixture.
 
 ## Pending
 
-- Verify the ratcheted branch on all three CI platforms after a separate
-  push approval.
+- Hand over the R2.2 PR command. Integration into `main` is still owed.
 - R2.3 integration and the signed-in reference-engine run at R2 exit.

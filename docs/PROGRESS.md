@@ -21,7 +21,7 @@ recorded.
 
 ## Resume here
 
-*As of 2026-11-23: every package from R0.1 to R2.1 is merged to `main`. R0.1 is #102, R0.2 #104 (`9aa30bd`), R0.3 #105, R1.0 #106, R1.1 to R1.4b #108 to #112, and R2.1 #107 (`45dcff9`), the last to merge. R2.2 is next, on `feature/r2-2-eph-engines` cut from `main` (DECISIONS-LOG, 2026-11-23). A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
+*As of 2026-11-25: every package from R0.1 to R2.1 is merged to `main`. R0.1 is #102, R0.2 #104 (`9aa30bd`), R0.3 #105, R1.0 #106, R1.1 to R1.4b #108 to #112, and R2.1 #107 (`45dcff9`), the last to merge. R2.2 is verified on `feature/r2-2-eph-engines` and awaits its PR. R2.3 is next. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
 
 **Ephesus is being rewritten in Rust (ADR-0041, the Architect's direction of
 2026-10-19), and the rewrite comes before everything below.** The Architect
@@ -98,15 +98,16 @@ The R1.4b integration passed the Rust gate on Linux, macOS and Windows in
 R2.1 merged as #107 (`45dcff9`) on 2026-11-23, and
 [CI run 45196366436](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45196366436)
 on that commit is green on every job.
-**The next package in the approved sequence is R2.2, `eph-engines`.** The
-Architect approved [SDD-RUST §3](./sdd/SDD-RUST.md#3-the-terminal-plane) whole
-on 2026-11-24. The engine crate, real CLI captures, offline conformance and
-prompt-literal check are in the feature worktree. The Architect's decisions
-after review are recorded, with local Windows and WSL2 evidence in the
-[R2.2 implementation record](./implementations/2026-11-24-r2-2-engine-adapters.md).
-The macOS fixture passed in CI on the repaired commit. Its three CI
-attempts supplied the coverage floor. The green three-platform gate on
-the ratcheted branch is still owed.
+**R2.2, `eph-engines`, is verified on its feature branch.** The Architect
+approved [SDD-RUST §3](./sdd/SDD-RUST.md#3-the-terminal-plane) whole on
+2026-11-24. The engine crate, real CLI captures, offline conformance and
+prompt-literal check passed the local gates. Three CI attempts supplied
+the coverage floor. All jobs in
+[CI run 45549313638](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45549313638)
+passed on ratchet commit `f8c6c41`.
+The [R2.2 implementation record](./implementations/2026-11-24-r2-2-engine-adapters.md)
+gives the mutation outcomes and the exact trees used for the repeated local
+checks. **R2.3, the agent manager, is next in the approved sequence.**
 A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
 `.gitignore`, rendered at every boot, keeps `write_atomic`'s temporaries out of history
@@ -158,7 +159,7 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19. **R0 and R1 are done.** R2.1 is complete. R2.2 is next in the approved sequence. | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19. **R0 and R1 are done.** R2.1 is merged. R2.2 is verified on its feature branch. R2.3 is next. | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 
@@ -651,8 +652,12 @@ and R0.3 as #105 (`dc5b6ea`, 2026-11-23).
     counts, seeded both coverage floors. The local gate passed. Merged as #107 (`45dcff9`): CI run
     45196366436 and the Darwin guard run 45197694980 on that commit are green.
     [Proof record](./implementations/2026-11-20-r2-1-guard-proof.md).
-  - [ ] **R2.2 `eph-engines`** — the adapter trait, the `claude` adapter, `codex` and
-    `gemini` as conformance subjects.
+  - [x] **R2.2 `eph-engines`** — the adapter trait, the `claude` adapter, `codex` and
+    `gemini` as conformance subjects. *Evidence (2026-11-25):* nine CI measurements
+    seeded a 94.58% floor. The Windows and WSL2 local gates passed, and
+    [CI run 45549313638](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45549313638)
+    is green on `f8c6c41`. See the
+    [implementation record](./implementations/2026-11-24-r2-2-engine-adapters.md).
   - [ ] **R2.3 The agent manager** — spawn ordering, the install offer, the exit unwind,
     the command queue, the respawn ladder and crew survival.
 - [ ] **R3** The event plane
