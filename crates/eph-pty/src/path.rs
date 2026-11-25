@@ -97,30 +97,32 @@ fn candidates<'a>(
 }
 
 fn inspect(candidate: &Path) -> io::Result<bool> {
-    match fs::metadata(candidate) {
-        Ok(file) if file.is_file() => return Ok(true),
-        Ok(_) => {
+    match metadata_or_absent(fs::metadata(candidate))? {
+        Some(file) if file.is_file() => return Ok(true),
+        Some(_) => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("executable candidate {} is not a file", candidate.display()),
             ));
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
+        None => {}
     }
     // A missing leaf below a broken path component is an inspection failure.
     // Inspect the nearest existing entry without silently following its link.
     for path in candidate.ancestors() {
-        match fs::symlink_metadata(path) {
-            Ok(_) => {
-                fs::metadata(path)?;
-                return Ok(false);
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+        if metadata_or_absent(fs::symlink_metadata(path))?.is_some() {
+            fs::metadata(path)?;
+            return Ok(false);
         }
     }
     Ok(false)
+}
+
+fn metadata_or_absent(result: io::Result<fs::Metadata>) -> io::Result<Option<fs::Metadata>> {
+    match result {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        result => result.map(Some),
+    }
 }
 
 fn executable_target(candidate: PathBuf) -> PathBuf {
@@ -230,6 +232,24 @@ mod tests {
     }
 
     #[test]
+    fn only_not_found_metadata_counts_as_absent() {
+        assert!(
+            metadata_or_absent(Err(io::Error::from(io::ErrorKind::NotFound)))
+                .unwrap()
+                .is_none()
+        );
+        for kind in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::NotADirectory,
+        ] {
+            let error = io::Error::new(kind, "fixture inspection failed");
+            let observed = metadata_or_absent(Err(error)).unwrap_err();
+            assert_eq!(observed.kind(), kind);
+            assert_eq!(observed.to_string(), "fixture inspection failed");
+        }
+    }
+
+    #[test]
     fn checked_search_distinguishes_absence_from_a_conflicting_path() {
         let cwd = tempfile::tempdir().unwrap();
         let home = std::fs::canonicalize(cwd.path()).unwrap();
@@ -308,6 +328,29 @@ mod tests {
         assert_eq!(
             resolve_executable(OsStr::new("tool.exe"), cwd.path(), &[("PATH".into(), path)]),
             first.join("tool.exe")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_bare_windows_name_uses_nonempty_pathext_entries_in_order() {
+        let cwd = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(cwd.path()).unwrap();
+        let first = home.join("fixture.EXE");
+        for file in [
+            home.join("fixture"),
+            home.join("fixture.COM"),
+            first.clone(),
+        ] {
+            write_atomic(&file, b"fixture").unwrap();
+        }
+        let environment = [
+            ("PATH".into(), home.as_os_str().to_owned()),
+            ("PATHEXT".into(), " ; .missing ; .EXE ; .COM ; ".into()),
+        ];
+        assert_eq!(
+            find_executable(OsStr::new("fixture"), &home, &environment).unwrap(),
+            Some(first)
         );
     }
 
