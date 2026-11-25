@@ -5,7 +5,7 @@ use std::{
     path::PathBuf,
 };
 
-use crate::SpawnConfig;
+use crate::{ConfigDir, SpawnConfig};
 
 const BASE_KEYS: &[&str] = &[
     "PATH",
@@ -42,7 +42,8 @@ const BASE_KEYS: &[&str] = &[
     "PROCESSOR_ARCHITECTURE",
 ];
 
-pub(crate) fn base(parent: &[(OsString, OsString)]) -> Vec<(OsString, OsString)> {
+/// Select the shared allowlist used before role grants and per-engine fields.
+pub fn base_environment(parent: &[(OsString, OsString)]) -> Vec<(OsString, OsString)> {
     parent
         .iter()
         .filter(|(name, _)| {
@@ -81,7 +82,7 @@ pub(crate) fn put(
 }
 
 pub(crate) fn spawn(config: &SpawnConfig<'_>) -> Vec<(OsString, OsString)> {
-    let mut environment = base(config.parent_environment);
+    let mut environment = base_environment(config.parent_environment);
     for (name, value) in config.env_grants {
         put(&mut environment, name.as_str(), value);
     }
@@ -119,8 +120,11 @@ pub(crate) fn spawn(config: &SpawnConfig<'_>) -> Vec<(OsString, OsString)> {
     environment
 }
 
-pub(crate) fn claude(config: &SpawnConfig<'_>, environment: &mut Vec<(OsString, OsString)>) {
-    let parent = config.parent_environment;
+pub(crate) fn claude(
+    config: &ConfigDir,
+    parent: &[(OsString, OsString)],
+    environment: &mut Vec<(OsString, OsString)>,
+) {
     let credentials = match get(parent, "CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
         Some(directory) => directory.to_owned(),
         None => get(parent, "HOME")
@@ -129,11 +133,7 @@ pub(crate) fn claude(config: &SpawnConfig<'_>, environment: &mut Vec<(OsString, 
             .map(|directory| PathBuf::from(directory).join(".claude").into_os_string())
             .unwrap_or_default(),
     };
-    put(
-        environment,
-        "CLAUDE_CONFIG_DIR",
-        config.engine_config.path(),
-    );
+    put(environment, "CLAUDE_CONFIG_DIR", config.path());
     put(environment, "CLAUDE_SECURESTORAGE_CONFIG_DIR", credentials);
     put(environment, "DISABLE_AUTOUPDATER", "1");
 }

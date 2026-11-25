@@ -2,11 +2,13 @@
 
 **Status:** §2 and §4 APPROVED by the Architect on 2026-10-20 (R1.0; DECISIONS-LOG), and
 §10 on 2026-10-25 (R1.4a). R1.4b's edits to §4.5 and §10 apply the Architect's answers
-of 2026-10-25 (DECISIONS-LOG, *R1.4b — Architect decisions*, three rounds). §3 is
-APPROVED as a whole on 2026-11-24 (DECISIONS-LOG). R2.1 wrote its terminal half to
+of 2026-10-25 (DECISIONS-LOG, *R1.4b — Architect decisions*, three rounds). The
+terminal and engine-adapter design through §3.3 was APPROVED on 2026-11-24
+(DECISIONS-LOG). R2.1 wrote its terminal half to
 ADR-0042, ADR-0043 and the Architect's R2.1 decisions of 2026-11-16 to 2026-11-23. R2.2
-wrote the engine-adapter half. The other sections are written and approved by the phases
-that build them.
+wrote the engine-adapter half. The Architect approved §3.4 on 2026-11-25
+(DECISIONS-LOG and ADR-0045).
+The other sections are written and approved by the phases that build them.
 
 **Scope and precedence (approved 2026-10-20).** This document governs the Rust
 workspace (`crates/`, `xtask/`). `docs/sdd/SDD.md` keeps governing the frozen
@@ -344,6 +346,200 @@ stricter hire at the spawn boundary. Assert the subject roll call and the
 production registry separately. The R2 exit also needs a signed-in reference
 CLI under the headless PTY, with a private config directory and attribution
 suppression demonstrated on actual output (RUST-PLAN §5).
+
+### 3.4 Agent manager (R2.3)
+
+**Authority and scope.** The Architect selected the dedicated `eph-agents` crate and
+decisions 1A–5A in the 2026-11-25 [decision log](../DECISIONS-LOG.md). This draft
+applies those decisions to
+[`agents.ts`](../../src/main/agents.ts), [`commands.ts`](../../src/main/commands.ts),
+[`respawn.ts`](../../src/main/respawn.ts), and their shared rules and tests.
+The manager consumes the adapter contract for every hire. The production registry's
+eligibility rule remains in §3.1. The engine boundary serves wrapped and native
+engines under [ADR-0036](../adr/ADR-0036-two-engine-kinds.md) and the general-harness
+direction in [RUST-PLAN §1](../RUST-PLAN.md#1-the-architects-direction-as-claims-the-rewrite-is-held-to).
+
+#### Ownership and phase boundaries
+
+- One manager owns the lifecycle, queued text, deadlines and active PTY per hire.
+  Its caller drives events and deadlines against a monotonic clock. Tests advance the
+  same clock contract without sleeping. A launch generation ties probe and setup
+  results, installer consent, hook observations and timer events to one attempt.
+  PTY events also identify their session because the installer and engine can share
+  a launch generation. A stale result cannot publish state, write to the next PTY,
+  spend a respawn rung, or consume an offer. Keep the same hire's resources
+  reserved until outstanding work and teardown settle. Release
+  resources from stale work through their owning boundary before a replacement can
+  use the same checkout path, settings or token registration.
+- Keep slow probe, worktree and filesystem operations off the event owner's turn
+  while other hires have work to handle. Return their typed results with the launch
+  generation. The owner does the final admission check and opens the PTY during
+  the same event turn. A stop processed before admission prevents startup. A stop
+  processed after admission shuts down the owned session. Observe PTY exit separately
+  from output EOF. Drain redacted output while a session lives and through EOF after
+  exit as in §3. The manager publishes bytes for its caller, which owns delivery to
+  the terminal view in R4.
+- Direct workspace dependencies are `eph-engines`, `eph-pty`, `eph-git`,
+  `eph-fs`, `eph-agora` and `eph-schema`. The standard library supplies the clock
+  and event driving. Engine and installer commands use the adapter declaration and
+  `eph-pty`. Git and atomic writes stay with `eph-git` and `eph-fs`. Native process
+  ownership stays with `eph-process` through these boundaries.
+- A narrow caller contract supplies future-phase services. R3 owns token issuance,
+  hook transport, accepted-command and session observations, and avatar transitions.
+  A headless R2 caller exercises the required register/revoke contract with a
+  fixture issuer. R5 owns mail redelivery. R6 owns broker, capacity and transcript
+  consumers. R7 owns the orchestrator's boot hire and company wiring. R8 owns the
+  Library memory source. The manager can consume the inputs and signals those services
+  will supply and tests their timing at its boundary.
+
+#### Launch and install
+
+1. Check eligibility, composed autonomy and the standing stop before claiming the
+   agent ID. Read the durable stop record as specified in §4.2. A current stop or
+   damaged record refuses a start. Claim the ID before yielding for setup so a second
+   request cannot start another process for it. Keep hire facts in the Agora roster
+   under §4.5. Lifecycle, terminal phase, and attempt policy belong to runtime state.
+2. Probe the executable in the approved target context. Distinguish confirmed PATH
+   absence from an executable whose probe timed out, failed inspection or launch,
+   exited unsuccessfully, or gave an unrecognized version. Use an inspection-aware
+   resolver outcome shared with the terminal boundary. A missing executable is a
+   separate outcome from an OS launch error of kind `NotFound`.
+   Only confirmed absence makes a pending offer containing the adapter's literal
+   command. A current offer accepts affirmative consent once. Decline, cancellation
+   and staleness end the offer without running the command.
+3. Start an accepted installer in the same hire's visible terminal identity, with a
+   harness-owned working directory and the shared engine base environment. The
+   installer receives only that base environment. Check the standing stop,
+   cancellation, offer generation, and required audit record before opening the
+   installer PTY. Only exit 0 followed by a fresh recognized version can continue.
+   Release the installer terminal before opening the engine PTY. A failed installer
+   or re-probe reports the outcome and requires a new explicit attempt. Check the
+   owned worktree parent before allocating an optional checkout after the install
+   stage through `Worktrees`. Refuse an unsafe or unavailable worktree with its
+   reason. If isolation changes cwd, verify the executable again in the actual
+   workspace. Relative PATH entries resolve against the plan's cwd. Carry the
+   resolved program from the final version check into private authentication and
+   the PTY. Role grants enter the eventual child environment after resolution.
+   A grant named PATH cannot substitute a different launch executable. A failed
+   final check unwinds setup.
+4. Check the effective grants and use the private config from §3.2 for the normal
+   authentication check, including after installation. Definite logout shows
+   `needs-login` and the adapter's remedy. Build the probe environment from the base
+   allowlist and the adapter's private config and credential lookup without resolving
+   role grants or issuing a hook token. An inconclusive authentication probe allows
+   startup and reports that it could not establish login. An adapter with no probe
+   proceeds under its declared capability. Activation owns workspace trust under
+   ADR-0021 and ADR-0025, including canonical matching for its approved workspaces
+   and visible reporting if a trust write failed. Starts and retries consume that
+   consent model.
+5. At actual start, resolve only the hire's declared environment grants and read
+   current memory. Register a fresh launch token before a process can emit its first
+   hook. Materialize and validate identity, prepare the private config, and install
+   regenerated settings through the adapter. Recheck the standing stop, cancellation
+   and generation at the launch boundary. Pass the adapter's literal plan to the PTY
+   and publish `running` after the current session is acquired and its required
+   lifecycle record is accepted. A failure unwinds anything that attempt acquired.
+
+#### Effective grants and recorded outcomes
+
+- Form the hire's Agora directory from the known Agora root and validated ID.
+  Check resolved paths for the effective cwd, owned identity directory, and playbook
+  and tool grants. Refuse redirected harness-owned path components, including Windows
+  junctions and reparse points, and aliases or broader ancestor grants that would put
+  Agora metadata or another hire's storage within reach of this grant. Keep playbooks
+  read-only and resolve plugins through §3.2's named tool roots. An explicitly approved
+  target worktree is distinct from the Agora's administrative metadata. Git keeps
+  symbolic links as links, as decided in §4.5. A signed-in run in a disposable Agora
+  must exercise the reference engine's grant in each permission mode claimed for it.
+  Verify access to the hire's own data and read-only playbooks, refusal of direct
+  access to Agora metadata, and the effects of links and junctions within a granted
+  tree. Include ordinary file aliases on hosts that support them. The assurance is
+  the engine's effective grant under
+  [THREAT-MODEL §6.7](../THREAT-MODEL.md#67-the-harness-is-not-hardened-against-a-malicious-agent).
+  The session process runs under the same OS user.
+- Lifecycle records use the existing book envelope. Use the acknowledged
+  `spawn/requested` sequence as the attempt reference within the book's one-harness
+  scope. Type the event and payload in `eph-schema` and append through Agora into the
+  same writer. Every row identifies the hire and the attempt when it concerns one.
+  Grant names may appear in the record. Hook credentials and grant values stay
+  in memory.
+
+  | Kind | Events | Required facts |
+  | --- | --- | --- |
+  | `spawn` | `requested`, `install-offered`, `install-accepted`, `install-exited`, `started`, `refused` | Engine and requested workspace on request. Declared command on offer and acceptance, exit status and re-probe outcome on installer exit, version and effective workspace on start, typed reason on refusal. |
+  | `exit` | `observed`, `unwound` | Session kind and exit or shutdown status. Cleanup outcomes, including removed, retained or unconfirmed worktree and a visible reason for failure. |
+  | `ghost` | `offered` | Exit status, session resume availability, memory availability, tasks returned, and current stop or capacity disposition. |
+  | `respawn` | `scheduled`, `held`, `deferred`, `released`, `blocked`, `respawned`, `failed`, `exhausted` | Attempt count for rung events, wait for scheduling, and disposition reason on hold, refusal, failure or exhaustion. |
+  | `task` | `returned` | Returned task IDs and reason `agent-exit`, as in the frozen ledger. |
+- A roster or required audit failure refuses launch. Require acknowledgement of the
+  prelaunch record before opening a PTY. An append error can follow a write that
+  reached disk. If recording successful acquisition fails after the PTY exists,
+  terminate and unwind that session. Report the uncertain acknowledgement and
+  correlate any subsequent record with the attempt. On exit, report append failures
+  alongside the teardown outcome and keep cleanup running.
+  Serialize each roster and ledger read–modify–write at its durable owner, using
+  a fresh snapshot for the whole edit. The book and roster acknowledge their own
+  writes. A hire already recorded in the roster remains a hire if a later
+  launch step refuses to open its session.
+  The roster remains a record of the hire. Follow the 2026-10-25 ledger decision and
+  port the existing return-work operation with this caller. On live process exit,
+  including deliberate termination, return only that hire's `in_progress` tasks to
+  `todo`, retaining their assignee and recording which task IDs moved. Report a
+  ledger-write failure and continue teardown.
+
+#### Terminal commands, exit and survival
+
+- Send operator text immediately when the current process is idle or showing
+  success. Hold text with the frozen phase reason during other live phases, including
+  unknown live phase. Accumulate successive held submissions with a newline. Refuse
+  text submission when there is no agent process. Installer terminal I/O is distinct
+  from an agent command. Flush the held text when its own current agent is ready.
+  Write text through the bounded PTY input worker. After it acknowledges all bytes,
+  wait 150 ms and send CR. Retry the key at 2-second intervals pending
+  a current proof of turn, at most four keys, and report an unconfirmed submit. A
+  proof is `prompt-submitted`, `pre-tool`, or `post-tool` under the frozen hook rule.
+  The acknowledgement is idempotent. A newer send replaces the old key schedule.
+  Interrupt clears the held text and pending submit keys, disarms the acknowledgement
+  of an outstanding text write and sends the adapter's cancel bytes. Exit forgets
+  the queue and pending keys. The command
+  queue consumes R3's accepted-command and phase events when that plane lands.
+- Revoke the token once, discard the command state, and release or retain the
+  worktree through `Worktrees` once the agent's PTY has relinquished it. A termination
+  request or unconfirmed shutdown keeps the checkout reserved and reports the
+  outstanding cleanup without delaying other hires. The caller may retry a failed
+  revocation or cleanup start for that exact generation once its terminal and
+  outstanding effect settle ([ADR-0046](../adr/ADR-0046-queue-terminal-input-and-retry-cleanup.md)).
+  Preserve the full worktree
+  result, including dirty work, a unique detached commit, and residue after
+  unregistering. Reuse a retained checkout on respawn subject to the worktree checks.
+  Retain generated private settings per ADR-0044. Report cleanup steps independently,
+  and unwind every live session even if one fails. Shutdown disarms surviving attempts
+  before stopping sessions. A launch that never obtained a live agent PTY has no
+  session to resume or work to return.
+- The default is an explicit respawn offer. A hire with `onExit: "respawn"` receives
+  its own crew ladder at 5, 30 and 120 seconds, with a reset after 300 seconds alive.
+  The shared ladder also supports the frozen orchestrator schedule at 1, 2, 5, 15
+  and 30 seconds and its 60-second stability window for its R7 caller. Keep one pending
+  attempt per hire, allow a manual respawn to win a backoff race, and leave an exhausted
+  hire down with its reason visible. Capacity holds are uncharged. Check the durable
+  stop before scheduling, again when the deadline arrives, and immediately before
+  launch. Every respawn goes through the current grant, isolation and token checks.
+  Use the adapter's resume capability when the caller can establish a resumable
+  session. The frozen missing-transcript path starts fresh and reports that fact.
+
+#### Owed evidence
+
+Port the frozen manager, command and survival tests. Use the real manager entry point
+in a headless test with the existing PTY, adapter, worktree and Agora backends. Cover
+the install and ordinary start paths, pre- and post-launch record failures including
+an error after a sync, concurrent roster and ledger edits, a stop while setup is
+outstanding, duplicate and stale events, unconfirmed shutdown, independent unwind,
+dirty worktree reuse and a stale checkout acquire, relative PATH and competing
+PATH grants, grant redirects and overlaps, command retries and acknowledgements,
+and crew holds, exhaustion and recovery. Check app-level event, terminal, and budget
+claims in the phases that supply them. At R2 exit add the signed-in PTY and grant
+proof, complete the conformance table, measure GYM-014 metric 3, and account for the
+current `BOOT_CHECKED` causes and the residuals carried in RUST-GOAL.
 
 ## 4. Persisted formats
 

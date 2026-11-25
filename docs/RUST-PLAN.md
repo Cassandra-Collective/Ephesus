@@ -28,6 +28,13 @@ From his message of 2026-10-19 and the answers that followed:
 5. Once everything built to date runs in Rust, the roadmap continues: M9, then
    Phase 9.
 6. "Faster" is measured (GYM-013), not asserted.
+7. Ephesus is a general harness for artificial agents (Architect, 2026-11-25).
+   Its engine boundary is designed for Claude Code, Codex, Gemini, Grok,
+   local AI models, and eventually a Cassandra model. Wrapped CLIs and native
+   engines share the lifecycle and conformance contract in SDD-RUST §3 and
+   [ADR-0036](./adr/ADR-0036-two-engine-kinds.md). The production registry
+   follows the eligibility and conformance rules in
+   [ADR-0024](./adr/ADR-0024-claude-only-for-the-mvp.md).
 
 ## 2. What a clean break cannot break
 
@@ -65,6 +72,7 @@ crates/
   eph-agora/     registry, ledger, board, the book of record, degradations, state stores
   eph-pty/       PTY sessions; PATH resolution; output redaction
   eph-engines/   EngineAdapter trait; claude (reference); codex, gemini (conformance only)
+  eph-agents/    agent lifecycle, install offers, command queues, unwind and respawn
   eph-hooks/     events.sock endpoint; per-spawn tokens; recall answering
   eph-hermes/    mail routing, hop cap, bounce, wake watchdog, Stop-hook decisioning
   eph-watch/     gates, budgets + cost ledger, breaker, secret broker, pacing, telemetry
@@ -219,7 +227,7 @@ tree.
   config dir ADR-0026, workspace trust ADR-0021/0025, autonomy ADR-0031, attribution
   suppression FR-1.8, no self-upgrade ADR-0028, prompts declared in advance ADR-0035),
   and `codex`/`gemini` as unregistered conformance subjects (ADR-0024).
-- **R2.3** The agent manager: spawn ordering, the install offer (FR-1.6), the exit unwind,
+- **R2.3** `eph-agents`: spawn ordering, the install offer (FR-1.6), the exit unwind,
   the command queue (FR-1.3), the respawn ladder and crew survival.
 
 *Exit:* a real `claude` runs in a PTY under a headless test binary with its own config

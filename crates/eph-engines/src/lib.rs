@@ -15,8 +15,9 @@ pub use adapter::{
     TranscriptReader, UnattendedGrant, UsageFact, assert_autonomy, require_reference_engine,
 };
 pub use config::{ConfigDir, ConfigError, TrustRecord, Workspace};
+pub use env::base_environment;
 pub use grants::{ResolvedTools, ToolGrant, ToolRoot, ToolRoots, resolve_tool_grants};
-pub use probe::{ProbeCompletion, ProbeError};
+pub use probe::{ProbeCompletion, ProbeError, VerifiedExecutable, VersionCheck};
 pub use settings::SettingsPlan;
 pub use spec::{Authentication, AuthenticationSpec, BinarySpec, CommandSpec};
 

@@ -122,7 +122,10 @@ fn each_subject_answers_the_same_adapter_contract_in_both_directions() {
         let rig = Rig::new(binary.engine());
         let low = rig.config(Autonomy::Manual);
         assert_eq!(
-            adapter.authentication_environment(&low).unwrap().is_some(),
+            adapter
+                .authentication_environment(&rig.id, &rig.config, &rig.env)
+                .unwrap()
+                .is_some(),
             binary.authentication().is_some()
         );
         let mut high = rig.config(Autonomy::Autonomous);
@@ -391,8 +394,25 @@ fn claude_spawn_and_probe_use_one_private_config_and_credentials_lookup() {
     );
     assert_eq!(argv[4], rig.config.path().join("eph-settings.json"));
     assert_eq!(argv[5], "--append-system-prompt");
-    let auth = claude.authentication_environment(&config).unwrap().unwrap();
-    assert_eq!(plan.environment(), auth);
+    let auth = claude
+        .authentication_environment(&rig.id, &rig.config, &rig.env)
+        .unwrap()
+        .unwrap();
+    for key in [
+        "EPH_AGENT_ID",
+        "EPH_HOOK_TOKEN",
+        "EPH_HOOK_ENDPOINT",
+        "GH_TOKEN",
+    ] {
+        assert_eq!(env(&auth, key), None, "{key} belongs only to the launch");
+    }
+    for key in [
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+        "DISABLE_AUTOUPDATER",
+    ] {
+        assert_eq!(env(plan.environment(), key), env(&auth, key));
+    }
     assert_eq!(
         env(&auth, "CLAUDE_CONFIG_DIR"),
         Some(rig.config.path().as_os_str())
@@ -406,7 +426,7 @@ fn claude_spawn_and_probe_use_one_private_config_and_credentials_lookup() {
     rig.env
         .push(("USERPROFILE".into(), rig.home.as_os_str().to_owned()));
     let auth = claude
-        .authentication_environment(&rig.config(Autonomy::Manual))
+        .authentication_environment(&rig.id, &rig.config, &rig.env)
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -415,7 +435,7 @@ fn claude_spawn_and_probe_use_one_private_config_and_credentials_lookup() {
     );
     rig.env.clear();
     let auth = claude
-        .authentication_environment(&rig.config(Autonomy::Manual))
+        .authentication_environment(&rig.id, &rig.config, &rig.env)
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -442,7 +462,11 @@ fn the_config_uses_one_absolute_path_for_the_harness_and_the_child() {
     for replacement in [&other, &wrong_engine] {
         config.engine_config = replacement;
         assert!(rig.claude().plan(&config).is_err());
-        assert!(rig.claude().authentication_environment(&config).is_err());
+        assert!(
+            rig.claude()
+                .authentication_environment(&rig.id, replacement, &rig.env)
+                .is_err()
+        );
     }
     assert!(rig.claude().prepare(&wrong_engine).is_err());
     assert!(

@@ -107,7 +107,18 @@ the coverage floor. All jobs in
 passed on ratchet commit `f8c6c41`.
 The [R2.2 implementation record](./implementations/2026-11-24-r2-2-engine-adapters.md)
 gives the mutation outcomes and the exact trees used for the repeated local
-checks. **R2.3, the agent manager, is next in the approved sequence.**
+checks. [CI run 45552342374](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45552342374)
+passed on published closeout `9660bba`, which trial-merged into main at
+`9784131`. The PR command was handed to the Architect.
+**R2.3 `eph-agents` is next in the approved sequence.** Its local branch,
+`feature/r2-3-eph-agents`, starts at `9660bba`. The 2026-11-25 Architect
+decisions are in DECISIONS-LOG. The Architect approved
+[SDD-RUST §3.4](./sdd/SDD-RUST.md#34-agent-manager-r23) and
+[ADR-0045](./adr/ADR-0045-own-agent-launches-through-teardown.md) on 2026-11-25.
+[ADR-0046](./adr/ADR-0046-queue-terminal-input-and-retry-cleanup.md) records the
+follow-up decisions on terminal input and cleanup retries. The
+[R2.3 implementation record](./implementations/2026-11-25-r2-3-agent-manager.md)
+tracks the local tests and the remaining package verification.
 A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
 `.gitignore`, rendered at every boot, keeps `write_atomic`'s temporaries out of history

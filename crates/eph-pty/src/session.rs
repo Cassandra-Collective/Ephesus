@@ -1,6 +1,6 @@
 //! Spawn, control and drain an owned terminal (FR-1.1, ADR-0014, ADR-0042).
 
-use crate::{path, redaction::Redactor};
+use crate::{input::Input, path, redaction::Redactor};
 #[cfg(unix)]
 use eph_process::unix as native;
 #[cfg(windows)]
@@ -77,6 +77,7 @@ pub struct Session {
     backend: Option<Backend>,
     cleanup: Sender<(Backend, bool)>,
     output: Option<Receiver<io::Result<Vec<u8>>>>,
+    input: Option<Input>,
     values: Arc<RwLock<Values>>,
     exit: Option<ExitStatus>,
 }
@@ -91,7 +92,18 @@ impl Session {
     /// values are considered secrets. Workers are allocated before the child
     /// so thread startup failures cannot abandon a live process.
     pub fn spawn(plan: SpawnPlan<'_>, values: Vec<String>) -> io::Result<Self> {
+        Self::spawn_inner(plan, values, false)
+    }
+
+    /// Start a terminal with one asynchronous input write outstanding at a time.
+    /// Use `queue_write` and `write_result` while continuing to drain output.
+    pub fn spawn_queued(plan: SpawnPlan<'_>, values: Vec<String>) -> io::Result<Self> {
+        Self::spawn_inner(plan, values, true)
+    }
+
+    fn spawn_inner(plan: SpawnPlan<'_>, values: Vec<String>, queued: bool) -> io::Result<Self> {
         validate_size(plan.cols, plan.rows)?;
+        let queued_input = queued.then(Input::start).transpose()?;
         let (cleanup, finish) = mpsc::channel::<(Backend, bool)>();
         let _cleanup_worker = thread::Builder::new()
             .name("eph-pty-cleanup".to_owned())
@@ -119,15 +131,27 @@ impl Session {
                 forget_values(&worker_values);
             })?;
 
-        let (backend, reader) = Backend::spawn(plan)?;
+        let (mut backend, reader) = Backend::spawn(plan)?;
         if attach.send(reader).is_err() {
             let _queued = cleanup.send((backend, false));
             return Err(io::Error::other("PTY output worker ended at startup"));
         }
+        let input = if let Some((attach, input)) = queued_input {
+            if let Some(writer) = backend.input.take()
+                && attach.send(writer).is_err()
+            {
+                let _queued = cleanup.send((backend, false));
+                return Err(io::Error::other("PTY input worker ended at startup"));
+            }
+            Some(input)
+        } else {
+            None
+        };
         Ok(Self {
             backend: Some(backend),
             cleanup,
             output: Some(output),
+            input,
             values,
             exit: None,
         })
@@ -143,7 +167,34 @@ impl Session {
 
     /// Write bytes to the child's terminal input, with its normal line discipline.
     pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.running()?.input.write_all(bytes)
+        let input = self.running()?.input.as_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "this terminal uses queued input",
+            )
+        })?;
+        input.write_all(bytes)
+    }
+
+    /// Offer one input write without waiting for the terminal to read it.
+    /// An outstanding write refuses another request with `WouldBlock`.
+    pub fn queue_write(&mut self, bytes: Vec<u8>) -> io::Result<()> {
+        if self.backend.is_none() {
+            return Err(terminal_closed());
+        }
+        let input = self.input.as_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "this terminal uses synchronous input",
+            )
+        })?;
+        input.queue(bytes)
+    }
+
+    /// Poll the outstanding queued write. Only a successful result acknowledges
+    /// every byte. A closed terminal may have an unacknowledged write.
+    pub fn write_result(&mut self) -> Option<io::Result<()>> {
+        self.input.as_mut().and_then(Input::result)
     }
 
     /// Send the engine adapter's interrupt key sequence (ADR-0009).
@@ -180,6 +231,7 @@ impl Session {
             && let Some(exit) = backend.poll_exit()?
         {
             self.exit = Some(exit);
+            drop(self.input.take());
             if let Some(backend) = self.backend.take() {
                 self.cleanup
                     .send((backend, true))
@@ -208,6 +260,7 @@ impl Drop for Session {
     fn drop(&mut self) {
         // Unblock a worker waiting on a full output queue before ConPTY closes.
         drop(self.output.take());
+        drop(self.input.take());
         forget_values(&self.values);
         if let Some(backend) = self.backend.take() {
             let _queued = self.cleanup.send((backend, false));
@@ -217,7 +270,7 @@ impl Drop for Session {
 
 struct Backend {
     child: native::Child,
-    input: Box<dyn Write + Send>,
+    input: Option<Box<dyn Write + Send>>,
     console: native::Console,
 }
 
@@ -259,7 +312,7 @@ impl Backend {
         Ok((
             Self {
                 child: terminal.child,
-                input: Box::new(terminal.input),
+                input: Some(Box::new(terminal.input)),
                 console: terminal.console,
             },
             Box::new(terminal.output),
@@ -419,6 +472,12 @@ mod tests {
     }
 
     fn fixture() -> Session {
+        fixture_with_input(Session::spawn)
+    }
+
+    fn fixture_with_input(
+        start: impl FnOnce(SpawnPlan<'_>, Vec<String>) -> io::Result<Session>,
+    ) -> Session {
         let executable = env::current_exe().unwrap();
         let cwd = env::current_dir().unwrap();
         let args =
@@ -427,7 +486,7 @@ mod tests {
         if let Some(profile) = env::var_os(PROFILE) {
             environment.push((PROFILE.into(), profile));
         }
-        Session::spawn(
+        start(
             SpawnPlan {
                 executable: executable.as_os_str(),
                 args: &args,
@@ -439,6 +498,51 @@ mod tests {
             vec!["demo".to_owned(), VALUE.to_owned()],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn the_public_terminal_modes_refuse_the_wrong_input_path() {
+        let mut synchronous = fixture();
+        assert_eq!(
+            synchronous
+                .queue_write(b"wrong mode".to_vec())
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(synchronous.write_result().is_none());
+        let _scope = synchronous.kill().unwrap();
+        let _finished = finish(&mut synchronous, Vec::new());
+
+        let mut queued = fixture_with_input(Session::spawn_queued);
+        let seen = until_ready(&mut queued);
+        assert_eq!(
+            queued.write(b"wrong mode").unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        for line in [b"first\r".as_slice(), b"second\r".as_slice()] {
+            queued.queue_write(line.to_vec()).unwrap();
+            let deadline = Instant::now() + PARITY_TIMEOUT;
+            loop {
+                if let Some(result) = queued.write_result() {
+                    result.unwrap();
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "queued input was not acknowledged"
+                );
+                thread::sleep(Duration::from_millis(2));
+            }
+        }
+        let (status, output) = finish(&mut queued, seen);
+        assert_eq!(status, ExitStatus::Code(0));
+        assert!(output.contains("fixture-input=first"), "{output}");
+        assert!(output.contains("fixture-interrupt=second"), "{output}");
+        assert_eq!(
+            queued.queue_write(Vec::new()).unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
     }
 
     fn until_ready(session: &mut Session) -> Vec<u8> {
@@ -640,7 +744,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let absent = directory.path().join("missing");
         let executable = env::current_exe().unwrap();
-        let result = Session::spawn(
+        let result = Session::spawn_queued(
             SpawnPlan {
                 executable: executable.as_os_str(),
                 args: &[],

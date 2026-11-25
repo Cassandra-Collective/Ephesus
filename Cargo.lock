@@ -91,6 +91,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "eph-agents"
+version = "0.0.0"
+dependencies = [
+ "eph-agora",
+ "eph-engines",
+ "eph-fs",
+ "eph-git",
+ "eph-pty",
+ "eph-schema",
+]
+
+[[package]]
 name = "eph-agora"
 version = "0.0.0"
 dependencies = [

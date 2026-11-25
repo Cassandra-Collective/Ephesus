@@ -60,9 +60,9 @@ use std::fmt::Display;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use eph_fs::append::append_line;
@@ -73,9 +73,11 @@ use eph_schema::degradation::{Cause, Source};
 use eph_schema::document::Versioned;
 use eph_schema::error::SchemaError;
 use eph_schema::id::TaskId;
+use eph_schema::lifecycle::{LifecycleFields, LifecycleRecord};
 use eph_schema::log::{LogKind, LogLine};
+use eph_schema::names::AgentId;
 use eph_schema::registry::Registry;
-use eph_schema::tasks::{ArchivedTasks, Task, Tasks, render_archived};
+use eph_schema::tasks::{ArchivedTasks, Task, TaskStatus, Tasks, render_archived};
 use eph_schema::time::Timestamp;
 
 use crate::archive::{self, ArchiveError, Archived};
@@ -195,6 +197,14 @@ pub struct Retained {
     pub kept: Tasks,
 }
 
+fn record_writer(writer: &Mutex<()>) -> Result<MutexGuard<'_, ()>, StoreError> {
+    writer.lock().map_err(|_| {
+        StoreError::Io(io::Error::other(
+            "a previous Agora record edit did not finish",
+        ))
+    })
+}
+
 /// The Agora. See the module contract.
 #[derive(Debug)]
 pub struct Agora {
@@ -203,6 +213,8 @@ pub struct Agora {
     book: Arc<Book>,
     degradations: Arc<Degradations>,
     slow_read: std::time::Duration,
+    registry_write: Mutex<()>,
+    tasks_write: Mutex<()>,
 }
 
 impl Agora {
@@ -223,6 +235,8 @@ impl Agora {
             book,
             degradations,
             slow_read: SLOW_READ,
+            registry_write: Mutex::new(()),
+            tasks_write: Mutex::new(()),
         };
         match opened.index_lock {
             IndexLock::Absent => {}
@@ -356,8 +370,7 @@ impl Agora {
     /// is reported on the channel (invariant 7); the line still lands. A
     /// degradation line is refused: the channel is the one writer of that kind
     /// (DECISIONS-LOG 2026-10-25, *R1.4b — Architect decisions, fourth round*,
-    /// item 5). Until a later phase defines another kind's events, no line can
-    /// be written here.
+    /// item 5). Each kind's vocabulary belongs to the phase that builds it.
     pub fn append(&self, draft: Draft) -> Result<Appended, AppendError> {
         if draft.kind == LogKind::Degradation {
             return Err(AppendError::Invalid(SchemaError::invalid(
@@ -367,6 +380,23 @@ impl Agora {
             )));
         }
         self.degradations.append(draft)
+    }
+
+    /// Appends a typed lifecycle record to the same book as other Agora events.
+    pub fn append_lifecycle(&self, record: &LifecycleRecord) -> Result<Appended, AppendError> {
+        let LifecycleFields {
+            kind,
+            event,
+            source,
+            data,
+        } = record.fields().map_err(AppendError::Invalid)?;
+        self.append(Draft {
+            kind,
+            event,
+            source: Some(source),
+            refs: Vec::new(),
+            data,
+        })
     }
 
     /// A channel that receives every line appended from now on, in file
@@ -434,7 +464,26 @@ impl Agora {
 
     /// Writes the roster, validated, never over a damaged file.
     pub fn write_registry(&self, registry: &Registry) -> Result<(), StoreError> {
+        let _writer = record_writer(&self.registry_write)?;
         self.registry_store().save(registry)
+    }
+
+    /// Edit a fresh roster and write it under the same lock. An error from the
+    /// edit leaves the record untouched. The edit must not re-enter the writer.
+    pub fn edit_registry<T>(
+        &self,
+        edit: impl FnOnce(&mut Registry) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let _writer = record_writer(&self.registry_write)?;
+        let store = self.registry_store();
+        let mut roster = match store.load() {
+            Loaded::Present(roster) => roster,
+            Loaded::Absent => Registry::empty(),
+            Loaded::Damaged(damage) => return Err(StoreError::Damaged(damage)),
+        };
+        let result = edit(&mut roster)?;
+        store.save(&roster)?;
+        Ok(result)
     }
 
     /// The task ledger (SDD-RUST §4.5): absent, present, or damaged.
@@ -447,6 +496,38 @@ impl Agora {
     /// appended to the archive, then the trimmed ledger written. See the module
     /// contract.
     pub fn write_tasks(&self, ledger: &Tasks) -> Result<Retained, StoreError> {
+        let _writer = record_writer(&self.tasks_write)?;
+        self.save_tasks(ledger)
+    }
+
+    /// Return only this terminated hire's in-flight tasks to `todo`.
+    /// Keeps each assignee and returns exactly the IDs acknowledged on disk.
+    pub fn return_tasks_of(
+        &self,
+        agent: &AgentId,
+        at: Timestamp,
+    ) -> Result<Vec<TaskId>, StoreError> {
+        let _writer = record_writer(&self.tasks_write)?;
+        let mut ledger = match self.tasks() {
+            Loaded::Present(ledger) => ledger,
+            Loaded::Absent => return Ok(Vec::new()),
+            Loaded::Damaged(damage) => return Err(StoreError::Damaged(damage)),
+        };
+        let mut returned = Vec::new();
+        for task in &mut ledger.tasks {
+            if task.assignee.as_ref() == Some(agent) && task.status == TaskStatus::InProgress {
+                returned.push(task.id.clone());
+                task.status = TaskStatus::Todo;
+                task.updated_at = at;
+            }
+        }
+        if !returned.is_empty() {
+            let _retained = self.save_tasks(&ledger)?;
+        }
+        Ok(returned)
+    }
+
+    fn save_tasks(&self, ledger: &Tasks) -> Result<Retained, StoreError> {
         ledger.validate().map_err(StoreError::Invalid)?;
         let store = self.tasks_store();
         store.writable()?;
@@ -1557,6 +1638,102 @@ mod tests {
         assert!(matches!(refused, StoreError::Invalid(_)), "{refused:?}");
         drop(booted);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn roster_edits_and_exit_returns_handle_absence_and_preserve_damage() {
+        let dir = scratch("edit-records");
+        let root = dir.join("agora");
+        let booted = open(&root);
+        let agora = &booted.agora;
+        let agent: AgentId = "agent.fixture".parse().unwrap();
+        let roster = root.join("registry.json");
+        let tasks = root.join("tasks.json");
+        fs::remove_file(&roster).unwrap();
+        fs::remove_file(&tasks).unwrap();
+        agora
+            .edit_registry(|registry| {
+                assert_eq!(registry, &Registry::empty());
+                Ok(())
+            })
+            .unwrap();
+        assert!(matches!(agora.registry(), Loaded::Present(_)));
+        assert!(
+            agora
+                .return_tasks_of(&agent, Timestamp::now())
+                .unwrap()
+                .is_empty()
+        );
+        let mut active = task(1, false, 2_000);
+        active.status = TaskStatus::InProgress;
+        active.assignee = Some(agent.clone());
+        let mut waiting = task(2, false, 2_000);
+        waiting.status = TaskStatus::Blocked;
+        waiting.assignee = Some(agent.clone());
+        let saved = ledger(vec![active.clone(), waiting.clone()]);
+        let _retained = agora.write_tasks(&saved).unwrap();
+        let at = Timestamp::from_millis(3_000).unwrap();
+        assert_eq!(
+            agora.return_tasks_of(&agent, at).unwrap(),
+            [active.id.clone()]
+        );
+        active.status = TaskStatus::Todo;
+        active.updated_at = at;
+        assert_eq!(
+            agora.tasks(),
+            Loaded::Present(ledger(vec![active, waiting]))
+        );
+
+        let requested = agora
+            .append_lifecycle(&LifecycleRecord {
+                agent: agent.clone(),
+                attempt: None,
+                event: eph_schema::lifecycle::LifecycleEvent::Requested {
+                    engine: eph_schema::registry::EngineId::Claude,
+                    workspace: "/fixture".into(),
+                    grants: Vec::new(),
+                },
+            })
+            .unwrap();
+        assert_eq!(requested.line.source.as_deref(), Some(agent.as_str()));
+        assert_eq!(requested.line.event, "requested");
+        assert!(agora.tail(4).unwrap().entries.contains(&requested.line));
+
+        for path in [&roster, &tasks] {
+            write_atomic(path, b"damaged").unwrap();
+        }
+        assert!(matches!(
+            agora.edit_registry(|_| Ok(())),
+            Err(StoreError::Damaged(_))
+        ));
+        assert!(matches!(
+            agora.return_tasks_of(&agent, Timestamp::now()),
+            Err(StoreError::Damaged(_))
+        ));
+        for path in [&roster, &tasks] {
+            assert_eq!(fs::read(path).unwrap(), b"damaged");
+        }
+        drop(booted);
+        let canonical = fs::canonicalize(&dir).unwrap();
+        let parent = fs::canonicalize(dir.parent().unwrap()).unwrap();
+        assert_eq!(canonical, parent.join(dir.file_name().unwrap()));
+        fs::remove_dir_all(canonical).unwrap();
+    }
+
+    #[test]
+    fn a_poisoned_record_writer_refuses_further_edits() {
+        let writer = Arc::new(Mutex::new(()));
+        let other = Arc::clone(&writer);
+        let worker = std::thread::spawn(move || {
+            let _writer = other.lock().unwrap();
+            panic!("fixture interrupted the record edit");
+        });
+        assert!(worker.join().is_err());
+        let error = record_writer(&writer).unwrap_err().to_string();
+        assert!(
+            error.contains("previous Agora record edit did not finish"),
+            "{error}"
+        );
     }
 
     #[test]
