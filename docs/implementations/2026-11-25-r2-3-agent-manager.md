@@ -167,6 +167,47 @@ records the general-harness direction for wrapped CLI and native engines.
 - **Tier C.** The six Git misses are inside Windows launch, native
   shutdown confirmation or verbatim worktree path handling. Their
   Windows verdicts remain owed.
+- **Tier A.** The M1 WSL2 Git run on `6cc032e` reached the approved
+  240-second limit on the same root-exit mutant. Its log shows 117 of
+  118 test results, including 95 failures. The only test without a
+  result was `a_deadline_beyond_what_an_instant_can_hold_is_clamped`.
+  The round again exited 3 with 189 caught, six misses, 67 unviable
+  and one timeout. The control missed 60 of 60 viable with zero
+  timeouts. All 1,138 blobs and executable bits matched before and after.
+  Raw reports are retained under the WSL2 proof directory, out of `/tmp`.
+- **Tier C.** At that commit, the clamp test launched Git with the
+  one-hour maximum. N1 preserves the direct clamp assertion and uses
+  two seconds for the real Git call. H1 uses the Agora fixture's private
+  threshold override for both read outcomes and checks the default on
+  the opened Agora. J1 gives only the initial isolated launch a 60-second
+  fixture wait and reports a refusal immediately. Production deadlines
+  are as specified before these fixture edits.
+- **Tier A.** Windows targeted Clippy rejected an explicit panic in the
+  standalone headless harness. The fixture now uses a test assertion
+  and Clippy exited 0. The amended Windows suite passed five manager
+  unit tests, all nine headless tests and 95 Agora tests. Its Git clamp
+  test passed, but two existing Git pipe fixtures failed at their
+  two-second root deadline. Both passed twice in focused replays. A
+  second full Windows Git run had two deadline failures across those
+  fixtures and another pipe fixture. The clamp test passed again.
+- **Tier A.** On WSL2, `cargo clippy --locked -p eph-agora -p eph-agents
+  -p eph-git --all-targets -- -D warnings` and `cargo test --locked
+  -p eph-agora -p eph-agents -p eph-git` exited 0 after H1, J1 and N1.
+  Five manager unit tests, nine headless cases, 97 Agora tests and 118
+  Git tests passed. The Windows pipe fixtures and exact repeated proof
+  were still owed at that point.
+- **Tier A.** After P1, `cargo clippy --locked -p eph-git --all-targets
+  -- -D warnings` and `cargo test --locked -p eph-git` exited 0 on Windows.
+  All 122 Git tests passed, including the three pipe fixtures. The WSL2
+  Clippy and test run for all three affected packages also exited 0 with
+  five manager unit tests, nine headless cases, 97 Agora tests and 118
+  Git tests. These are package runs before the repeated I1 proof.
+- **Tier C.** P1 stages the actual root exit and holder marker within an
+  eight-second fixture bound, then uses the existing drain grace. The
+  late-marker case releases the holder after completion and observes
+  whether it can still write. On Windows that observation combines
+  explicit termination and job-handle close. It does not distinguish
+  which stopped the holder, and the observation window remains bounded.
 
 ## Owed evidence
 

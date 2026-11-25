@@ -2452,14 +2452,16 @@ mod tests {
         let dir = scratch("slow-read");
         let root = dir.join("agora");
         let mut booted = open(&root);
+        assert_eq!(booted.agora.slow_read, std::time::Duration::from_millis(50));
         booted
             .agora
             .degradations()
             .report("hermes/stranded:m1".parse().unwrap(), "a message waits");
+        booted.agora.slow_read = std::time::Duration::MAX;
         booted.agora.since(Cursor::START).unwrap();
         assert!(
             !has(&booted.agora, "agora/log-size"),
-            "a quick read is not news"
+            "a read below its threshold is not reported"
         );
         let len = fs::metadata(root.join(LOG_FILE)).unwrap().len();
         booted.agora.slow_read = std::time::Duration::ZERO;
@@ -2484,7 +2486,6 @@ mod tests {
                 .ends_with(" ms for 0 records over 0 bytes"),
             "a read from the end parsed nothing"
         );
-        assert_eq!(SLOW_READ, std::time::Duration::from_millis(50));
         drop(booted);
         fs::remove_dir_all(&dir).unwrap();
     }

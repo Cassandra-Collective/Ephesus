@@ -368,7 +368,11 @@ impl Rig {
     }
 
     fn drive_until(&mut self, ready: impl Fn(&Rig) -> bool) {
-        let end = Instant::now() + Duration::from_secs(12);
+        self.drive_until_with_timeout(Duration::from_secs(12), ready);
+    }
+
+    fn drive_until_with_timeout(&mut self, timeout: Duration, ready: impl Fn(&Rig) -> bool) {
+        let end = Instant::now() + timeout;
         loop {
             let now = Instant::now();
             for event in self.manager.drive(now) {
@@ -637,7 +641,14 @@ fn isolated_respawn() {
     let mut hire = rig.hire();
     hire.isolated = true;
     let first = rig.manager.start(hire).unwrap();
-    rig.drive_until(|rig| rig.state() == &Lifecycle::Running);
+    rig.drive_until_with_timeout(Duration::from_secs(60), |rig| {
+        let state = rig.state();
+        assert!(
+            !matches!(state, Lifecycle::Refused(_)),
+            "the initial isolated launch was refused: {state:?}"
+        );
+        state == &Lifecycle::Running
+    });
     let checkout = rig.home.join("worktrees").join(rig.id.as_str());
     let work = checkout.join("retained.txt");
     write_atomic(&work, b"unfinished").unwrap();
