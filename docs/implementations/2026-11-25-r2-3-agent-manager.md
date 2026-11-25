@@ -4,7 +4,7 @@
 
 ## Decisions
 
-The Architect approved SDD-RUST §3.4, decisions 1A–5A, A1–C1, and D1–E1
+The Architect approved SDD-RUST §3.4, decisions 1A–5A, A1–C1, D1–E1, and F1
 on 2026-11-25. The [decision log](../DECISIONS-LOG.md),
 [ADR-0045](../adr/ADR-0045-own-agent-launches-through-teardown.md), and
 [ADR-0046](../adr/ADR-0046-queue-terminal-input-and-retry-cleanup.md)
@@ -49,6 +49,22 @@ records the general-harness direction for wrapped CLI and native engines.
   existing crate floor after the targeted fixtures. Each reported
   `eph-agents: has no floor yet`. These reports precede the final
   committed-tree proof and coverage ratchet.
+- **Tier A.** The Windows archive of `6d89ec18519ff3fa570b9af65993ae95176b370a`
+  matched all 1,138 Git blobs before testing. The first plain run exited
+  101 because the descendant readiness marker was missing at the probe
+  fixture's one-second deadline. The second run exited 0. That proof
+  series stopped after the Architect approved the fixture repair.
+- **Tier C.** F1 makes the fixture wait up to five seconds for the real
+  descendant's readiness marker before starting its one-second assertion.
+  Startup failure is distinct from the deadline the test intends to
+  observe. The production probe still captures its ten-second deadline
+  before launching, and both paths use its owned cleanup.
+- **Tier A.** Windows `cargo clippy --locked -p eph-engines --all-targets --
+  -D warnings` and `cargo test --locked -p eph-engines` exited 0 with all
+  27 tests passing. The repaired descendant test passed on Windows and
+  WSL2 under `cargo llvm-cov --locked -p eph-engines --no-report --
+  a_descendant_holding_the_pipes_keeps_the_probe_incomplete` and also
+  passed in a plain focused WSL2 run.
 
 ## Owed evidence
 

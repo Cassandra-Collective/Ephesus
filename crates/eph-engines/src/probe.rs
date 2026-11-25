@@ -221,6 +221,16 @@ fn run_resolved(
     timeout: Duration,
 ) -> Result<Completed, ProbeError> {
     let deadline = Instant::now() + timeout;
+    run_with_deadline(executable, args, cwd, environment, || Ok(deadline))
+}
+
+fn run_with_deadline(
+    executable: &Path,
+    args: &[OsString],
+    cwd: &Path,
+    environment: &[(OsString, OsString)],
+    deadline: impl FnOnce() -> Result<Instant, ProbeError>,
+) -> Result<Completed, ProbeError> {
     let native::Piped {
         mut child,
         stdout,
@@ -235,7 +245,7 @@ fn run_resolved(
             stream: "stderr",
             source,
         })?;
-        wait_complete(child, &stdout, &stderr, deadline)
+        wait_complete(child, &stdout, &stderr, deadline()?)
     };
     match finish(&mut child) {
         Ok(complete) => Ok(complete),
@@ -450,7 +460,7 @@ mod tests {
             Ok("hold") => {
                 let marker = std::env::var_os(READY).unwrap();
                 write_atomic(Path::new(&marker), b"descendant got to sleep").unwrap();
-                thread::sleep(Duration::from_secs(3));
+                thread::sleep(Duration::from_secs(10));
             }
             Ok("descendant") => {
                 let _child = std::process::Command::new(std::env::current_exe().unwrap())
@@ -491,14 +501,23 @@ mod tests {
     }
 
     fn fixture(mode: &str, dir: &Path, timeout: Duration) -> Result<Completed, ProbeError> {
+        let deadline = Instant::now() + timeout;
+        fixture_with_deadline(mode, dir, || Ok(deadline))
+    }
+
+    fn fixture_with_deadline(
+        mode: &str,
+        dir: &Path,
+        deadline: impl FnOnce() -> Result<Instant, ProbeError>,
+    ) -> Result<Completed, ProbeError> {
         let exe = std::env::current_exe().unwrap();
         let mut env = env::base_environment(&std::env::vars_os().collect::<Vec<_>>());
         env.extend([
             (FIXTURE.into(), mode.into()),
             (READY.into(), dir.join("ready").into_os_string()),
         ]);
-        run(
-            exe.as_os_str(),
+        run_with_deadline(
+            &exe,
             &[
                 "--exact".into(),
                 "probe::tests::child_fixture".into(),
@@ -506,7 +525,7 @@ mod tests {
             ],
             dir,
             &env,
-            timeout,
+            deadline,
         )
     }
 
@@ -525,13 +544,49 @@ mod tests {
     #[test]
     fn a_descendant_holding_the_pipes_keeps_the_probe_incomplete() {
         let root = tempfile::tempdir().unwrap();
-        assert!(matches!(
-            fixture("descendant", root.path(), Duration::from_secs(1)),
-            Err(ProbeError::Deadline)
-        ));
-        assert_eq!(
-            std::fs::read(root.path().join("ready")).unwrap(),
-            b"descendant got to sleep"
+        let marker = root.path().join("ready");
+        let startup_deadline = Instant::now() + Duration::from_secs(5);
+        let assertion_started = Cell::new(None);
+        let result = fixture_with_deadline("descendant", root.path(), || {
+            let readiness = |source| ProbeError::Output {
+                stream: "fixture readiness",
+                source,
+            };
+            loop {
+                match std::fs::read(&marker) {
+                    Ok(bytes) if bytes == b"descendant got to sleep" => {
+                        let started = Instant::now();
+                        assertion_started.set(Some(started));
+                        return Ok(started + Duration::from_secs(1));
+                    }
+                    Ok(_) => {
+                        return Err(readiness(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "unexpected descendant marker",
+                        )));
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(readiness(error)),
+                }
+                let remaining = startup_deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(readiness(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "the pipe-holding descendant did not start",
+                    )));
+                }
+                thread::sleep(remaining.min(POLL));
+            }
+        });
+        assert!(
+            matches!(&result, Err(ProbeError::Deadline)),
+            "{:?}",
+            result.err()
+        );
+        assert!(
+            assertion_started
+                .get()
+                .is_some_and(|started| started.elapsed() >= Duration::from_secs(1))
         );
     }
 
