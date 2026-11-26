@@ -96,6 +96,40 @@ struct Slot {
 }
 
 impl Slot {
+    fn new(
+        hire: Arc<Hire>,
+        generation: Generation,
+        ladder: Ladder,
+        session_id: Option<String>,
+        rung: Option<usize>,
+        resume: bool,
+    ) -> Self {
+        Self {
+            hire,
+            generation,
+            attempt: None,
+            state: Lifecycle::Checking,
+            target: None,
+            checkout: None,
+            working: false,
+            registered: false,
+            terminal: None,
+            commands: Commands::default(),
+            ladder,
+            session_id,
+            resume,
+            rung,
+            ran: false,
+            task_return: false,
+            memory: false,
+            cancelled: false,
+            pending_end: None,
+            outcome: None,
+            install_attempt: false,
+            teardown: Vec::new(),
+        }
+    }
+
     fn reserved(&self) -> bool {
         self.working
             || self.terminal.is_some()
@@ -274,30 +308,14 @@ impl<S: Services> Manager<S> {
             .next
             .checked_add(1)
             .ok_or_else(|| Error::Refused("the launch sequence is exhausted".into()))?;
-        let mut slot = Slot {
+        let mut slot = Slot::new(
             hire,
-            generation: Generation(self.next),
-            attempt: None,
-            state: Lifecycle::Checking,
-            target: None,
-            checkout: None,
-            working: false,
-            registered: false,
-            terminal: None,
-            commands: Commands::default(),
+            Generation(self.next),
             ladder,
             session_id,
-            resume,
             rung,
-            ran: false,
-            task_return: false,
-            memory: false,
-            cancelled: false,
-            pending_end: None,
-            outcome: None,
-            install_attempt: false,
-            teardown: Vec::new(),
-        };
+            resume,
+        );
         let request = record(
             &slot,
             LifecycleEvent::Requested {
@@ -1053,33 +1071,8 @@ impl<S: Services> Manager<S> {
         };
         self.poll_input(slot, &mut terminal, now);
         if terminal.end.is_none() {
-            match terminal.pty.try_wait() {
-                Ok(Some(status)) => {
-                    let status = process_result(status);
-                    terminal.end = Some(status);
-                    slot.commands.interrupt();
-                    slot.state = Lifecycle::Cleaning;
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    slot.commands.interrupt();
-                    slot.state = Lifecycle::Cleaning;
-                    let detail = format!("terminal exit is unconfirmed: {error}");
-                    if terminal.warning.as_deref() != Some(&detail) {
-                        self.report_record(
-                            slot,
-                            LifecycleEvent::Observed {
-                                terminal: terminal.kind,
-                                status: ProcessResult::Unconfirmed {
-                                    reason: detail.clone(),
-                                },
-                            },
-                        );
-                        self.problem(&slot.hire.id, "teardown", detail.clone());
-                        terminal.warning = Some(detail);
-                    }
-                }
-            }
+            let status = terminal.pty.try_wait();
+            self.observe_terminal_exit(slot, &mut terminal, status);
         }
         for _ in 0..OUTPUT_PER_TURN {
             if terminal.eof {
@@ -1128,23 +1121,43 @@ impl<S: Services> Manager<S> {
         }
     }
 
-    fn poll_input(&mut self, slot: &mut Slot, terminal: &mut Terminal, now: Instant) {
-        if let Some(result) = terminal.pty.write_result() {
-            let purpose = terminal.input.take();
-            match result {
-                Ok(())
-                    if matches!(purpose, Some(InputKind::Text { arm_submit: true }))
-                        && slot.state == Lifecycle::Running =>
-                {
-                    slot.commands.sent(now);
-                }
-                Ok(()) if matches!(purpose, Some(InputKind::Key)) => slot.commands.key_written(now),
-                Ok(()) => {}
-                Err(error) => {
-                    slot.commands.accepted();
-                    self.problem(&slot.hire.id, "command", error.to_string());
+    fn observe_terminal_exit(
+        &mut self,
+        slot: &mut Slot,
+        terminal: &mut Terminal,
+        status: std::io::Result<Option<ExitStatus>>,
+    ) {
+        match status {
+            Ok(Some(status)) => {
+                terminal.end = Some(process_result(status));
+                slot.commands.interrupt();
+                slot.state = Lifecycle::Cleaning;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                slot.commands.interrupt();
+                slot.state = Lifecycle::Cleaning;
+                let detail = format!("terminal exit is unconfirmed: {error}");
+                if terminal.warning.as_deref() != Some(&detail) {
+                    self.report_record(
+                        slot,
+                        LifecycleEvent::Observed {
+                            terminal: terminal.kind,
+                            status: ProcessResult::Unconfirmed {
+                                reason: detail.clone(),
+                            },
+                        },
+                    );
+                    self.problem(&slot.hire.id, "teardown", detail.clone());
+                    terminal.warning = Some(detail);
                 }
             }
+        }
+    }
+
+    fn poll_input(&mut self, slot: &mut Slot, terminal: &mut Terminal, now: Instant) {
+        if let Some(result) = terminal.pty.write_result() {
+            self.acknowledge_input(slot, terminal.input.take(), result, now);
         }
         if terminal.input.is_none()
             && slot.state == Lifecycle::Running
@@ -1152,6 +1165,29 @@ impl<S: Services> Manager<S> {
             && let Err(error) = terminal.enqueue(bytes, InputKind::Interrupt)
         {
             self.problem(&slot.hire.id, "command", error.to_string());
+        }
+    }
+
+    fn acknowledge_input(
+        &mut self,
+        slot: &mut Slot,
+        purpose: Option<InputKind>,
+        result: std::io::Result<()>,
+        now: Instant,
+    ) {
+        match result {
+            Ok(())
+                if matches!(purpose, Some(InputKind::Text { arm_submit: true }))
+                    && slot.state == Lifecycle::Running =>
+            {
+                slot.commands.sent(now);
+            }
+            Ok(()) if matches!(purpose, Some(InputKind::Key)) => slot.commands.key_written(now),
+            Ok(()) => {}
+            Err(error) => {
+                slot.commands.accepted();
+                self.problem(&slot.hire.id, "command", error.to_string());
+            }
         }
     }
 
@@ -1548,5 +1584,271 @@ fn installer(command: CommandSpec, cwd: &Path) -> InstallCommand {
         program: command.program.into(),
         args: command.args.iter().map(|arg| (*arg).into()).collect(),
         cwd: cwd.display().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{env, io};
+
+    use eph_engines::Claude;
+    use eph_git::committer::Hooks;
+    use eph_schema::names::EnvName;
+
+    use super::*;
+    use crate::{HookRegistration, fixture_hire, scratch::Scratch};
+
+    struct NoPorts;
+
+    impl Services for NoPorts {
+        fn grant(&mut self, _: &AgentId, _: &EnvName) -> Result<Option<String>, Error> {
+            Ok(None)
+        }
+
+        fn memory(&mut self, _: &AgentId) -> Result<String, Error> {
+            Ok(String::new())
+        }
+
+        fn register(&mut self, _: &AgentId, _: Generation) -> Result<HookRegistration, Error> {
+            Err(Error::Refused("the fixture does not register hooks".into()))
+        }
+
+        fn revoke(&mut self, _: &AgentId, _: Generation) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+
+    fn manager(scratch: &Scratch) -> Manager<NoPorts> {
+        let prompts = scratch.0.join("prompts");
+        fs::create_dir(&prompts).unwrap();
+        let agora = Arc::new(
+            Agora::open(&scratch.0.join("agora"), &prompts, Hooks::none())
+                .unwrap()
+                .agora,
+        );
+        Manager::new(
+            &scratch.0,
+            agora,
+            AdapterRegistry::production(Claude::new(scratch.0.join("unused-hook"))),
+            Git::target().without_machine_config(),
+            Vec::new(),
+            TerminalSize {
+                columns: 80,
+                rows: 24,
+            },
+            NoPorts,
+        )
+        .unwrap()
+    }
+
+    fn slot(scratch: &Scratch) -> Slot {
+        let id = "agent.fixture".parse().unwrap();
+        Slot::new(
+            Arc::new(fixture_hire::hire(&id, &scratch.0)),
+            Generation(1),
+            Ladder::default(),
+            None,
+            None,
+            false,
+        )
+    }
+
+    fn terminal(manager: &Manager<NoPorts>, scratch: &Scratch) -> Terminal {
+        let executable = env::current_exe().unwrap();
+        let parent: Environment = env::vars_os().collect();
+        let mut environment = base_environment(&parent);
+        environment.push(("EPH_AGENTS_UNIT_PTY_HOLD".into(), "1".into()));
+        let session = manager
+            .open_pty(
+                &executable,
+                &[
+                    "--exact".into(),
+                    "manager::tests::pty_fixture_waits_for_owner".into(),
+                ],
+                scratch.0.parent().unwrap(),
+                &environment,
+                Vec::new(),
+            )
+            .unwrap();
+        Terminal::new(TerminalKind::Engine, session)
+    }
+
+    #[test]
+    fn pty_fixture_waits_for_owner() {
+        if env::var_os("EPH_AGENTS_UNIT_PTY_HOLD").is_some()
+            && env::args().any(|arg| arg == "--exact")
+        {
+            let mut line = String::new();
+            io::stdin().read_line(&mut line).unwrap();
+        }
+    }
+
+    fn requested(slot: &Slot) -> LifecycleRecord {
+        record(
+            slot,
+            LifecycleEvent::Requested {
+                engine: slot.hire.roster.engine,
+                workspace: slot.hire.target.display().to_string(),
+                grants: Vec::new(),
+            },
+        )
+    }
+
+    #[test]
+    fn the_default_transcript_observation_is_unknown() {
+        let id = "agent.fixture".parse().unwrap();
+        assert_eq!(NoPorts.transcript_present(&id, "session"), None);
+    }
+
+    #[test]
+    fn input_acknowledgements_preserve_ownership_and_key_timing() {
+        let scratch = Scratch::new();
+        let mut manager = manager(&scratch);
+        let mut slot = slot(&scratch);
+        let now = Instant::now();
+        slot.state = Lifecycle::Running;
+        slot.registered = true;
+        slot.terminal = Some(terminal(&manager, &scratch));
+        let id = slot.hire.id.clone();
+        let _previous = manager.agents.insert(id.clone(), slot);
+        assert_eq!(manager.next_deadline(now), Some(now + POLL));
+        let mut slot = manager.agents.remove(&id).unwrap();
+        let mut terminal = slot.terminal.take().unwrap();
+        terminal.input = Some(InputKind::Text { arm_submit: true });
+        terminal.disarm_text();
+        manager.acknowledge_input(&mut slot, terminal.input.take(), Ok(()), now);
+        assert_eq!(slot.commands.deadline(), None);
+
+        slot.state = Lifecycle::Cleaning;
+        manager.acknowledge_input(
+            &mut slot,
+            Some(InputKind::Text { arm_submit: true }),
+            Ok(()),
+            now,
+        );
+        assert_eq!(slot.commands.deadline(), None);
+
+        slot.state = Lifecycle::Running;
+        manager.acknowledge_input(
+            &mut slot,
+            Some(InputKind::Text { arm_submit: true }),
+            Ok(()),
+            now,
+        );
+        let first = now + Duration::from_millis(150);
+        assert_eq!(slot.commands.deadline(), Some(first));
+        assert!(matches!(slot.commands.due(first), Some(SubmitKey::Press)));
+        let late = first + Duration::from_millis(300);
+        manager.acknowledge_input(&mut slot, Some(InputKind::Key), Ok(()), late);
+        assert_eq!(
+            slot.commands.deadline(),
+            Some(late + Duration::from_secs(2))
+        );
+        manager.acknowledge_input(
+            &mut slot,
+            Some(InputKind::Key),
+            Err(io::Error::other("write failed")),
+            late,
+        );
+        assert_eq!(slot.commands.deadline(), None);
+        assert_eq!(
+            manager.events,
+            [Event::Problem {
+                agent: slot.hire.id.clone(),
+                detail: "write failed".into()
+            }]
+        );
+        terminal.interrupt = Some(vec![27]);
+        manager.poll_input(&mut slot, &mut terminal, late);
+        assert!(terminal.interrupt.is_none());
+        assert!(matches!(terminal.input, Some(InputKind::Interrupt)));
+    }
+
+    #[test]
+    fn started_cannot_revive_a_cancelled_or_failed_terminal() {
+        let scratch = Scratch::new();
+        let mut manager = manager(&scratch);
+        let mut slot = slot(&scratch);
+        let mut terminal = terminal(&manager, &scratch);
+        let now = Instant::now();
+        slot.attempt = NonZeroU64::new(manager.journal.acknowledge(requested(&slot)).unwrap());
+
+        slot.state = Lifecycle::Cleaning;
+        slot.cancelled = true;
+        slot.terminal = Some(terminal);
+        manager.on_started(&mut slot, Ok(()), false, now);
+        assert_eq!(slot.state, Lifecycle::Cleaning);
+        terminal = slot.terminal.take().unwrap();
+        slot.cancelled = false;
+
+        for message in [
+            "first observation failed",
+            "first observation failed",
+            "second observation failed",
+        ] {
+            manager.observe_terminal_exit(&mut slot, &mut terminal, Err(io::Error::other(message)));
+        }
+        assert_eq!(manager.events.len(), 2);
+        assert_eq!(
+            terminal.warning.as_deref(),
+            Some("terminal exit is unconfirmed: second observation failed")
+        );
+        assert!(terminal.end.is_none());
+        slot.terminal = Some(terminal);
+        manager.on_started(&mut slot, Ok(()), false, now);
+        assert_eq!(slot.state, Lifecycle::Cleaning);
+        terminal = slot.terminal.take().unwrap();
+        terminal.warning = None;
+
+        manager.observe_terminal_exit(&mut slot, &mut terminal, Ok(Some(ExitStatus::Code(7))));
+        assert_eq!(terminal.end, Some(ProcessResult::Code { code: 7 }));
+        slot.terminal = Some(terminal);
+        manager.on_started(&mut slot, Ok(()), false, now);
+        assert_eq!(slot.state, Lifecycle::Cleaning);
+
+        let mut barrier = requested(&slot);
+        barrier.attempt = None;
+        let _seq = manager.journal.acknowledge(barrier).unwrap();
+        let book = manager.runtime.agora.tail(20).unwrap();
+        assert_eq!(
+            book.entries
+                .iter()
+                .filter(|entry| entry.event == "observed")
+                .count(),
+            2
+        );
+        manager.runtime.agora.committer().drained();
+    }
+
+    #[test]
+    fn the_journal_poll_deadline_survives_an_unobserved_failure() {
+        let scratch = Scratch::new();
+        let mut manager = manager(&scratch);
+        let slot = slot(&scratch);
+        let now = Instant::now();
+        assert_eq!(manager.next_deadline(now), None);
+        let _seq = manager.journal.acknowledge(requested(&slot)).unwrap();
+        manager.runtime.agora.committer().drained();
+        let book = manager.runtime.agora.root().join("log.jsonl");
+        let saved = book.with_extension("saved");
+        fs::rename(&book, &saved).unwrap();
+        fs::create_dir(&book).unwrap();
+        manager.journal.record(requested(&slot)).unwrap();
+        assert_eq!(manager.next_deadline(now), Some(now + POLL));
+        let notice = manager
+            .notices
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(notice.agent, slot.hire.id);
+        assert!(
+            notice
+                .detail
+                .contains("lifecycle record was not acknowledged")
+        );
+        manager.journal.notice_received();
+        assert_eq!(manager.next_deadline(now), None);
+        fs::remove_dir(&book).unwrap();
+        fs::rename(saved, book).unwrap();
+        assert!(manager.drive(now).is_empty());
     }
 }

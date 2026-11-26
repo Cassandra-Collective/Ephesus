@@ -6,6 +6,15 @@ mod launch;
 mod manager;
 mod respawn;
 
+#[cfg(test)]
+mod fixture_hire {
+    include!("../tests/support/fixture_hire.rs");
+}
+#[cfg(test)]
+mod scratch {
+    include!("../tests/support/scratch.rs");
+}
+
 pub use commands::{CommandPhase, HeldCommand};
 pub use launch::DeclaredTool;
 pub use manager::{Manager, TerminalSize};

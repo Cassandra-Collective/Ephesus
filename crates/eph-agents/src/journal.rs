@@ -127,3 +127,82 @@ impl Journal {
         self.send(Request::Condition(condition))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, time::Duration};
+
+    use eph_git::committer::Hooks;
+    use eph_schema::{degradation::Source, lifecycle::LifecycleEvent, registry::EngineId};
+
+    use super::*;
+    use crate::scratch::Scratch;
+
+    #[test]
+    fn acknowledgement_orders_degradation_reports_and_clears() {
+        let scratch = Scratch::new();
+        let prompts = scratch.0.join("prompts");
+        fs::create_dir(&prompts).unwrap();
+        let agora = Arc::new(
+            Agora::open(&scratch.0.join("agora"), &prompts, Hooks::none())
+                .unwrap()
+                .agora,
+        );
+        let (journal, notices) = Journal::open(Arc::clone(&agora)).unwrap();
+        let agent: AgentId = "agent.fixture".parse().unwrap();
+        let report = Cause {
+            source: Source::Agents,
+            slug: "tools".into(),
+            subject: Some(agent.to_string()),
+        };
+        let condition = Condition {
+            cause: Cause {
+                source: Source::Home,
+                slug: "policy-behind".into(),
+                subject: Some("fixture.md".into()),
+            },
+            detail: "fixture policy requires an update".into(),
+        };
+        let barrier = || {
+            journal
+                .acknowledge(LifecycleRecord {
+                    agent: agent.clone(),
+                    attempt: None,
+                    event: LifecycleEvent::Requested {
+                        engine: EngineId::Claude,
+                        workspace: scratch.0.display().to_string(),
+                        grants: Vec::new(),
+                    },
+                })
+                .unwrap()
+        };
+
+        journal
+            .report(report.clone(), "fixture tool is missing".into())
+            .unwrap();
+        journal.condition(condition.clone()).unwrap();
+        let reported = barrier();
+        let active = agora.degradations().list();
+        assert!(
+            active
+                .iter()
+                .any(|entry| entry.cause == report && entry.detail == "fixture tool is missing")
+        );
+        assert!(
+            active
+                .iter()
+                .any(|entry| entry.cause == condition.cause && entry.detail == condition.detail)
+        );
+
+        journal.clear(report.clone()).unwrap();
+        assert!(barrier() > reported);
+        assert!(!agora.degradations().has(&report));
+        assert!(agora.degradations().has(&condition.cause));
+        drop(journal);
+        assert!(matches!(
+            notices.recv_timeout(Duration::from_secs(5)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+        agora.committer().drained();
+    }
+}

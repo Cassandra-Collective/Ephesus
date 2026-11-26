@@ -365,6 +365,15 @@ fn overlaps(left: &Path, right: &Path) -> bool {
 }
 
 pub(crate) fn owned_dir(root: &Path, relative: &Path, create: bool) -> Result<PathBuf, Error> {
+    owned_dir_with(root, relative, create, |path| fs::create_dir(path))
+}
+
+fn owned_dir_with(
+    root: &Path,
+    relative: &Path,
+    create: bool,
+    create_dir: impl Fn(&Path) -> io::Result<()>,
+) -> Result<PathBuf, Error> {
     let mut directory = root.to_path_buf();
     for component in relative.components() {
         let Component::Normal(name) = component else {
@@ -374,7 +383,7 @@ pub(crate) fn owned_dir(root: &Path, relative: &Path, create: bool) -> Result<Pa
         };
         directory.push(name);
         if create && !check_leaf_dir(&directory)? {
-            match fs::create_dir(&directory) {
+            match create_dir(&directory) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error.into()),
@@ -458,4 +467,205 @@ pub struct DeclaredTool {
     pub root: ToolRoot,
     /// The plugin path relative to that root.
     pub path: PathBuf,
+}
+
+#[cfg(test)]
+mod tests {
+    use eph_engines::Claude;
+    use eph_git::{committer::Hooks, runner::Git};
+
+    use super::*;
+    use crate::scratch::Scratch;
+
+    #[test]
+    fn workspace_and_grants_protect_metadata_private_paths_and_other_hires() {
+        let scratch = Scratch::new();
+        let home = scratch.0.join("home");
+        let agora_root = home.join("agora");
+        let prompts = home.join("prompts");
+        fs::create_dir_all(&prompts).unwrap();
+        let agora = Arc::new(
+            Agora::open(&agora_root, &prompts, Hooks::none())
+                .unwrap()
+                .agora,
+        );
+        let runtime = Runtime {
+            worktrees: Worktrees::new(Git::target().without_machine_config(), &agora_root),
+            adapters: AdapterRegistry::production(Claude::new(home.join("unused-hook"))),
+            home: home.clone(),
+            agora,
+            agora_root: agora_root.clone(),
+            parent: Vec::new(),
+        };
+        let hire = "agent.fixture".parse().unwrap();
+        let own_agora = agora_root.join("agents/agent.fixture/tools");
+        let own_checkout = home.join("worktrees/agent.fixture/tools");
+        let public_agora = agora_root.join("public-tools");
+        let outside = scratch.0.join("target/tools");
+        let protected = [
+            agora_root.join(".git/objects"),
+            agora_root.join("agents/agent.peer/tools"),
+            home.join("engines/claude/private"),
+            home.join("worktrees/agent.peer/tools"),
+            agora_root.join("agents"),
+            home.join("worktrees"),
+            home.clone(),
+        ];
+        for path in [&own_agora, &own_checkout, &public_agora, &outside]
+            .into_iter()
+            .chain(protected.iter())
+        {
+            fs::create_dir_all(path).unwrap();
+        }
+        for path in [&own_agora, &own_checkout, &outside] {
+            runtime.check_cwd(&hire, path).unwrap();
+            runtime.check_grant(&hire, path).unwrap();
+        }
+        runtime.check_grant(&hire, &public_agora).unwrap();
+        for path in protected.iter().chain([&outside.join("missing")]) {
+            assert!(
+                matches!(runtime.check_grant(&hire, path), Err(Error::Refused(_))),
+                "grant unexpectedly accepted {}",
+                path.display()
+            );
+        }
+        let file = scratch.0.join("file");
+        write_atomic(&file, b"not a working directory").unwrap();
+        for path in [&home, &public_agora, &file] {
+            assert!(
+                matches!(runtime.check_cwd(&hire, path), Err(Error::Refused(reason))
+                    if reason == format!("workspace {} overlaps Agora storage outside the hire's grant", path.display())),
+                "wrong decision for working directory {}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn owned_directory_validates_existing_missing_and_concurrent_entries() {
+        let scratch = Scratch::new();
+        let present = scratch.0.join("present");
+        fs::create_dir(&present).unwrap();
+        assert_eq!(
+            owned_dir(&scratch.0, Path::new("present"), true).unwrap(),
+            present
+        );
+
+        let absent = Path::new("absent");
+        assert!(matches!(
+            owned_dir(&scratch.0, absent, false),
+            Err(Error::Refused(_))
+        ));
+        assert!(!scratch.0.join(absent).exists());
+        assert!(matches!(
+            owned_dir(&scratch.0.join(absent), Path::new("leaf"), true),
+            Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound
+        ));
+
+        let concurrent = Path::new("concurrent");
+        let directory = owned_dir_with(&scratch.0, concurrent, true, |path| {
+            fs::create_dir(path)?;
+            Err(io::ErrorKind::AlreadyExists.into())
+        })
+        .unwrap();
+        assert_eq!(directory, scratch.0.join(concurrent));
+        assert!(directory.is_dir());
+
+        let collision = owned_dir_with(&scratch.0, Path::new("colliding-file"), true, |path| {
+            write_atomic(path, b"another writer's file")?;
+            Err(io::ErrorKind::AlreadyExists.into())
+        });
+        assert!(matches!(collision, Err(Error::Refused(reason)) if reason.contains("wrong type")));
+    }
+
+    #[test]
+    fn inspection_distinguishes_absence_wrong_type_and_invalid_path() {
+        let scratch = Scratch::new();
+        let file = scratch.0.join("file");
+        write_atomic(&file, b"fixture").unwrap();
+        check_leaf_file(&file).unwrap();
+        check_leaf_file(&scratch.0.join("not-created")).unwrap();
+        assert!(matches!(check_leaf_dir(&file), Err(Error::Refused(_))));
+        assert!(matches!(
+            check_leaf_file(&scratch.0),
+            Err(Error::Refused(_))
+        ));
+        assert!(matches!(
+            check_leaf_file(&scratch.0.join("bad\0name")),
+            Err(Error::Io(error)) if error.kind() == io::ErrorKind::InvalidInput
+        ));
+    }
+
+    #[test]
+    fn redirected_directory_is_refused_even_if_type_check_accepts_it() {
+        let scratch = Scratch::new();
+        let target = scratch.0.join("target");
+        let link = scratch.0.join("link");
+        fs::create_dir(&target).unwrap();
+        link_dir(&target, &link);
+        assert!(!redirected(&fs::symlink_metadata(&target).unwrap()));
+        assert!(redirected(&fs::symlink_metadata(&link).unwrap()));
+        assert!(matches!(
+            inspect_owned(&link, |_| true),
+            Err(Error::Refused(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    fn link_dir(target: &Path, link: &Path) {
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    #[cfg(windows)]
+    fn link_dir(target: &Path, link: &Path) {
+        use std::{
+            env,
+            time::{Duration, Instant},
+        };
+
+        use eph_pty::{ExitStatus, Output, Session, SpawnPlan};
+
+        let parent_directory = link.parent().unwrap();
+        assert_eq!(link, parent_directory.join("link"));
+        assert_eq!(target, parent_directory.join("target"));
+        let parent_path = parent_directory.to_string_lossy();
+        let cwd = Path::new(parent_path.trim_start_matches(r"\\?\"));
+        let executable = cwd.join("fixture-junction.cmd");
+        write_atomic(
+            &executable,
+            b"@echo off\r\nmklink /J link \"%~dp0target\"\r\nexit /b %errorlevel%\r\n",
+        )
+        .unwrap();
+        let parent: Environment = env::vars_os().collect();
+        let environment = base_environment(&parent);
+        let mut session = Session::spawn(
+            SpawnPlan {
+                executable: executable.as_os_str(),
+                args: &[],
+                cwd,
+                environment: &environment,
+                cols: 100,
+                rows: 24,
+            },
+            Vec::new(),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut output = Vec::new();
+        loop {
+            if let Output::Data(bytes) = session.output(Duration::from_millis(10)).unwrap() {
+                output.extend(bytes);
+            }
+            if let Some(status) = session.try_wait().unwrap() {
+                assert_eq!(
+                    status,
+                    ExitStatus::Code(0),
+                    "{}",
+                    String::from_utf8_lossy(&output)
+                );
+                return;
+            }
+            assert!(Instant::now() < deadline, "mklink did not exit");
+        }
+    }
 }

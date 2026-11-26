@@ -190,6 +190,7 @@ mod tests {
             ladder.release(at),
             Some(LifecycleEvent::Released { rung: 0 })
         );
+        assert_eq!(ladder.deadline(), Some(at));
         assert!(matches!(ladder.due(at), Some(Due::Launch(0))));
         assert!(ladder.schedule(at, ExitPolicy::Crew).is_some());
         ladder.manual();
@@ -198,5 +199,30 @@ mod tests {
             ladder.schedule(at, ExitPolicy::Crew),
             Some(LifecycleEvent::Scheduled { rung: 1, .. })
         ));
+    }
+
+    #[test]
+    fn an_offer_and_an_unused_capacity_hold_do_not_create_a_deadline() {
+        let now = Instant::now();
+        let mut ladder = Ladder::default();
+        assert_eq!(ladder.schedule(now, ExitPolicy::Offer), None);
+        assert_eq!(ladder.capacity(), None);
+        assert_eq!(
+            ladder.hold("operator capacity".into()),
+            Some(LifecycleEvent::Held {
+                rung: 0,
+                reason: "operator capacity".into(),
+            })
+        );
+        assert_eq!(ladder.capacity(), Some("operator capacity"));
+        assert_eq!(ladder.release(now), None);
+        assert_eq!(ladder.capacity(), None);
+        assert_eq!(ladder.deadline(), None);
+
+        assert!(ladder.schedule(now, ExitPolicy::Crew).is_some());
+        let deadline = now + Duration::from_secs(5);
+        assert_eq!(ladder.deadline(), Some(deadline));
+        assert_eq!(ladder.schedule(deadline, ExitPolicy::Crew), None);
+        assert_eq!(ladder.deadline(), Some(deadline));
     }
 }

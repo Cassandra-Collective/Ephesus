@@ -175,4 +175,41 @@ mod tests {
         queue.accepted();
         assert!(queue.due(now + Duration::from_secs(10)).is_none());
     }
+
+    #[test]
+    fn ready_text_waits_for_the_current_write_then_joins_new_input() {
+        let mut queue = Commands::default();
+        queue.observe(CommandPhase::Idle);
+        assert_eq!(queue.text("one".into(), false), None);
+        assert_eq!(
+            queue.held(),
+            Some(&HeldCommand {
+                text: "one".into(),
+                reason: "the terminal is still writing input".into(),
+            })
+        );
+        assert_eq!(queue.text("two".into(), true).as_deref(), Some("one\ntwo"));
+        assert!(queue.held().is_none());
+    }
+
+    #[test]
+    fn the_submit_deadline_moves_to_the_key_acknowledgement() {
+        let now = Instant::now();
+        let mut queue = Commands::default();
+        queue.sent(now);
+        let first = now + FIRST_KEY;
+        assert_eq!(queue.deadline(), Some(first));
+        assert!(matches!(queue.due(first), Some(SubmitKey::Press)));
+        let provisional = first + CONFIRM;
+        assert_eq!(queue.deadline(), Some(provisional));
+
+        let acknowledgement = first + Duration::from_millis(500);
+        queue.key_written(acknowledgement);
+        assert_eq!(queue.deadline(), Some(acknowledgement + CONFIRM));
+        assert!(queue.due(provisional).is_none());
+        assert!(matches!(
+            queue.due(acknowledgement + CONFIRM),
+            Some(SubmitKey::Press)
+        ));
+    }
 }

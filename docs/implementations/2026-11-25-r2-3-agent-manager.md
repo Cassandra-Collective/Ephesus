@@ -208,11 +208,147 @@ records the general-harness direction for wrapped CLI and native engines.
   whether it can still write. On Windows that observation combines
   explicit termination and job-handle close. It does not distinguish
   which stopped the holder, and the observation window remains bounded.
+- **Tier A.** The O1 WSL2 `cargo xtask mutants eph-git` round on
+  `ff07411` caught 190 of 263 candidates, with six misses, 67 unviable
+  and zero timeouts. The previously timed-out root-exit case was caught
+  after 108.28 seconds in the test phase. The no-tests control missed
+  all 60 viable cases with six unviable and zero timeouts. The command
+  exited 1 because of the six Windows-only misses. The mutation harness
+  compared 82 unchanged files, and all 1,138 Git blobs and executable
+  bits matched before and after the run. The stage retained both reports.
+- **Tier A.** On the verified Windows archive of `ff07411`, the six Git
+  cases missed on WSL2 produced five catches and one compile rejection
+  because `Piped` has no `Default` implementation. The no-tests control
+  missed all five viable cases. The targeted PTY replay produced six
+  catches and one compile rejection because `Metadata` has no `Default`
+  implementation. The PTY control missed all six viable cases. Neither
+  replay nor its control timed out, and all 1,138 Git blobs still matched
+  afterward.
+- **Tier A.** Windows `cargo xtask mutants eph-schema` on `ff07411`
+  exited 0 with `ROUND OK` under the approved K1 90-second launcher limit.
+  It caught all 290 viable cases, including the eight previously timed-out
+  cases. The 46 remaining cases each had a compiler diagnostic. The
+  no-tests control missed all 75 viable cases, with nine unviable and
+  zero timeouts. The harness compared 82 unchanged files, and all 1,138
+  archive blobs matched before and after. Reports are under
+  `ephesus-mutants-eph-schema-36816`.
+- **Tier A.** The I1 Windows archive of `ff07411` passed all ten plain
+  `cargo test --workspace --locked` runs and the independent LCOV run.
+  All 1,138 archive blobs matched before and after. The first launcher
+  supplied both `--no-report` and `--no-clean`. The tool rejected that
+  combination before executing any of the ten instrumented tests.
+  The retry ran `cargo llvm-cov --workspace --locked --no-report` on
+  the same archive and exited 0 all ten times. Each log ran 13 test
+  executables and recorded nine passing headless cases, with no
+  recompilation. All 1,138 blobs matched before and after the retry.
+  The separate LCOV report and original logs were retained.
+- **Tier A.** The I1 WSL2 archive of `ff07411` passed all ten plain
+  `cargo test --workspace --locked` runs, all ten `cargo llvm-cov
+  --workspace --locked --no-report` runs, and the independent LCOV run.
+  The first instrumented run built the suite. The other nine reused it
+  with no recompilation. Each ran 13 test executables and recorded nine
+  passing headless cases. All 1,138 blobs and executable bits matched
+  before and after. The launcher exited 0.
+- **Tier A.** The revised WSL2 `cargo xtask mutants eph-pty` round on
+  `ff07411` caught 100 of 121 candidates with 20 unviable and zero
+  timeouts. Its sole miss was `path.rs:70:33`, the Windows-only PATHEXT
+  case caught by the native replay. The no-tests control missed all
+  30 viable cases, with one unviable and zero timeouts. The command
+  exited 1 because of the platform-only miss. The harness compared 82
+  unchanged files, and all 1,138 archive blobs and executable bits
+  matched before and after. Both reports were retained.
+- **Tier A.** The WSL2 `cargo xtask mutants eph-engines` round on
+  `ff07411` caught 171 of 257 cases, with 82 unviable and zero timeouts.
+  The four misses were Windows-only reparse-point and job-shutdown
+  cases. The no-tests control missed all 61 viable cases with four
+  unviable and zero timeouts. The harness compared 82 unchanged files.
+  The Windows targeted replay caught all four cases, and its control
+  missed all four with zero timeouts. Both platforms verified all 1,138
+  archive blobs before and after their runs, with WSL2 also checking
+  executable bits. Both sets of reports were retained.
+- **Tier A.** The WSL2 `cargo xtask mutants eph-agora` round on
+  `ff07411` caught 223 of 306 cases with 81 unviable and zero timeouts.
+  Its no-tests control missed all 69 viable cases, with eight unviable
+  and zero timeouts. The two misses were the `File::open` absence guards
+  in `Book::ends_mid_line` and `Book::snapshot`. The Windows selector
+  included those two plus a `Book::since` cursor mutation. The first
+  launcher stopped before testing because it expected two candidates.
+  The retry caught all three. A later audit showed that it used the
+  Git library left by the shared build directory's Git control. A
+  rerun with a fresh Windows build directory for each phase also
+  caught all three. Its control missed all three, with zero timeouts
+  in either phase. Both platforms verified all 1,138 archive blobs
+  before and after, with WSL2 also checking executable bits.
+- **Tier A.** The WSL2 `cargo xtask mutants eph-agents` round on
+  `ff07411` used the automatically selected 20-second test limit and
+  exited 1 with survivors. It caught 166 of 311 cases, with 91 missed,
+  54 unviable, and zero timeouts. The no-tests control missed all 71
+  viable cases, with seven unviable and zero timeouts. Both baselines
+  passed. The harness compared 82 unchanged files, and all 1,138
+  archive blobs and executable bits matched before and after. Both
+  raw reports were retained. Compiler logs accounted for all rejected
+  builds. The round had 39 trait errors, six invalid binary operators,
+  and nine unsupported `||` let-chain expressions. All seven control
+  rejections were trait errors.
+- **Tier A.** The first Windows `eph-agents` replay stopped at the
+  unmutated baseline. It reused the Git library left by a control
+  mutation that disables drive-prefix conversion. Git refused the
+  resulting verbatim worktree path. With a fresh Windows build
+  directory for each phase, the replay caught all three reparse-bit
+  mutations, and the control missed all three with zero timeouts
+  in either phase. All 1,138 archive blobs matched before and after.
+- **Tier C.** Review traced the agent survivors to launch validation,
+  journal writes, terminal control, and respawn. Three reparse-bit
+  mutations run only on Windows. The native replay resolves those
+  three. Follow-up verification remains for the other 88 survivors.
+- **Tier C.** Refutation identified a late capacity release after
+  shutdown that can distinguish both respawn guard mutations. The
+  reservation expression and unconditional key acknowledgement each
+  have a candidate equivalent mutation under the existing owner
+  transitions. These are source findings awaiting follow-up proof.
+- **Tier A.** A standalone Rust probe returned `InvalidInput` for an
+  embedded NUL in `symlink_metadata` on both Windows and WSL2. A missing
+  component returned `NotFound` on both. Using a regular file as a
+  parent returned `NotFound` on Windows and `NotADirectory` on WSL2.
+  Creating a directory below an absent parent returned `NotFound` on
+  both. These are observations of the standard library calls. The
+  manager's propagation of these results still needs a regression test.
+- **Tier A.** The Windows `cargo xtask gate` preflight on `ff07411`
+  passed formatting, Clippy, workspace tests, dependency deny checks,
+  invariants, and the approved-dependency check. Coverage measured
+  `eph-agents` at 81.17% (1,466 of 1,806 lines). Every existing floor
+  passed, and the gate exited 1 solely for the absent new-crate floor.
+  All 1,138 archive blobs matched the commit before and after.
+- **Tier A.** The Q1 and R1 follow-up passed 18 unit tests, 14
+  headless tests, and package Clippy on native Windows in the working
+  tree. The first unit-only run found that the journal failure fixture
+  tried to move the book before any line created it. The fixture now
+  acknowledges a record and drains the committer before damaging that
+  book. The passing suite includes the repaired fixture.
+- **Tier C.** The follow-up exercises real installer input, stale
+  generations, authentication and tool results, effective working
+  directories, durable degradation, and the two respawn guards. Private
+  hooks supply controlled directory creation and terminal observations
+  alongside the real filesystem and PTY fixtures. The working-tree run
+  does not establish the remaining mutation verdicts or final-tree proof.
+- **Tier C.** Read-only review found a Windows fixture that would claim
+  a process exemption and test-only module declarations the coverage
+  classifier would reject. The fixture now uses the existing PTY batch
+  launcher, and the shared test files are included inside inline test
+  modules. A late capacity release after shutdown can still leave an
+  expired respawn deadline. The regression establishes that it launches
+  no hire. The Architect's separate shutdown decision is pending.
+- **Tier A.** After those fixture repairs, Windows again passed all 18
+  unit tests, all 14 headless tests, and package Clippy. The invariant
+  and approved-dependency checks each passed over nine crates and 75
+  source files. Direct `cmd.exe` arguments under the PTY failed in the
+  diagnostic runs. The Windows batch fixture passed through the approved
+  launcher and exercised the real junction.
 
 ## Owed evidence
 
-Mutation verdicts for every changed crate, exact-tree repeated Windows and
-WSL2 tests, the seeded coverage floor and final gates, approved publication,
-and three-platform CI are still owed. The fixture uses real PTYs and local
-test executables. The signed-in reference-engine PTY run and effective grant
-checks are owed at R2 exit.
+The agent mutation survivors remain open. Repeat the Windows and WSL2
+proofs on the final source tree. The seeded coverage floor, final gates,
+approved publication, and three-platform CI are still owed. The fixture
+uses real PTYs and local test executables. The signed-in reference-engine
+PTY run and effective grant checks are owed at R2 exit.
