@@ -8,11 +8,17 @@ mod respawn;
 
 #[cfg(test)]
 mod fixture_hire {
-    include!("../tests/support/fixture_hire.rs");
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/support/fixture_hire.rs"
+    ));
 }
 #[cfg(test)]
 mod scratch {
-    include!("../tests/support/scratch.rs");
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/support/scratch.rs"
+    ));
 }
 
 pub use commands::{CommandPhase, HeldCommand};

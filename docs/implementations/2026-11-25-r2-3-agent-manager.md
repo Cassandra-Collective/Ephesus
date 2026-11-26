@@ -344,6 +344,28 @@ records the general-harness direction for wrapped CLI and native engines.
   source files. Direct `cmd.exe` arguments under the PTY failed in the
   diagnostic runs. The Windows batch fixture passed through the approved
   launcher and exercised the real junction.
+- **Tier A.** WSL2 `cargo xtask mutants eph-agents` on `eb47593`
+  caught 255 of 314 cases, with 54 unviable, five missed and zero
+  timeouts. The control missed all 72 viable cases, with seven unviable
+  and zero timeouts. Both baselines passed. The harness compared 84
+  unchanged files. The Windows replay caught the three reparse-bit
+  survivors on a fresh build target and missed all three in its
+  separate no-tests control, with zero timeouts in either phase. Both
+  platforms verified all 1,140 archive files before and after, with
+  WSL2 also checking executable bits. Attribution on `eb47593` passed.
+- **Tier C.** The two remaining survivors change the reservation
+  predicate's token and checkout checks and the key-acknowledgement
+  guard. The read-only review found both equivalent on reachable
+  manager transitions. Their disposition remains an Architect decision.
+- **Tier A.** The Windows gate on `eb47593` passed formatting, Clippy,
+  tests, deny checks, invariants, and approved dependencies. The
+  verifier rejected the two shared-fixture paths with `src/../tests`
+  in their coverage records. The fixture imports now use absolute
+  crate paths. After that correction, `cargo xtask coverage` in the
+  Windows working tree passed all instrumented tests and accepted the
+  source paths. It measured `eph-agents` at 89.16% (1,646 of 1,846
+  lines) and exited 1 solely for the absent new-crate floor. Every
+  existing floor passed. The checked-in floor file was untouched.
 
 ## Owed evidence
 
