@@ -131,10 +131,9 @@ impl Slot {
     }
 
     fn reserved(&self) -> bool {
+        // Teardown keeps the slot in Cleaning while a checkout or registration remains reserved.
         self.working
             || self.terminal.is_some()
-            || self.registered
-            || self.checkout.is_some()
             || matches!(
                 self.state,
                 Lifecycle::Checking | Lifecycle::InstallOffered(_) | Lifecycle::Cleaning
@@ -1019,6 +1018,7 @@ impl<S: Services> Manager<S> {
     }
 
     /// Release a capacity hold. An exit served by this release costs no rung.
+    /// A release after shutdown can settle a deferral without scheduling a retry.
     pub fn release_capacity(
         &mut self,
         agent: &AgentId,
@@ -1029,7 +1029,7 @@ impl<S: Services> Manager<S> {
             if slot.generation != generation {
                 return Err(Error::Busy(agent.clone()));
             }
-            if let Some(event) = slot.ladder.release(now) {
+            if let Some(event) = slot.ladder.release((!manager.stopping).then_some(now)) {
                 manager.report_record(slot, event);
             }
             Ok(())
@@ -1175,16 +1175,15 @@ impl<S: Services> Manager<S> {
         result: std::io::Result<()>,
         now: Instant,
     ) {
-        match result {
-            Ok(())
-                if matches!(purpose, Some(InputKind::Text { arm_submit: true }))
-                    && slot.state == Lifecycle::Running =>
+        match (result, purpose) {
+            (Ok(()), Some(InputKind::Text { arm_submit: true }))
+                if slot.state == Lifecycle::Running =>
             {
                 slot.commands.sent(now);
             }
-            Ok(()) if matches!(purpose, Some(InputKind::Key)) => slot.commands.key_written(now),
-            Ok(()) => {}
-            Err(error) => {
+            (Ok(()), Some(InputKind::Key)) => slot.commands.key_written(now),
+            (Ok(()), _) => {}
+            (Err(error), _) => {
                 slot.commands.accepted();
                 self.problem(&slot.hire.id, "command", error.to_string());
             }
@@ -1430,9 +1429,7 @@ impl<S: Services> Manager<S> {
     }
 
     fn due_respawn(&mut self, slot: &mut Slot, now: Instant) {
-        if slot.reserved() || self.stopping || slot.cancelled {
-            return;
-        }
+        // Scheduling and release arm settled slots. Cancellation clears their deadlines.
         match slot.ladder.due(now) {
             Some(Due::Held(event)) => self.report_record(slot, event),
             Some(Due::Launch(rung)) => {

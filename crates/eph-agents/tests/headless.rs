@@ -109,7 +109,7 @@ fn main() -> ExitCode {
             admission_and_stops,
         ),
         (
-            "late_capacity_release_does_not_enqueue_admission_after_shutdown",
+            "late_capacity_release_is_recorded_without_a_respawn_deadline",
             release_after_shutdown,
         ),
         (
@@ -1104,14 +1104,29 @@ fn release_after_shutdown() {
     rig.manager
         .release_capacity(&rig.id, generation, now)
         .unwrap();
+    assert_ne!(rig.manager.next_deadline(now), Some(now));
     let _events = rig.manager.drive(now);
     rig.drive_until(|rig| rig.manager.drained());
     assert_eq!(
         rig.manager.state(&rig.id),
         Some((generation, &Lifecycle::Exited))
     );
+    assert!(rig.manager.next_deadline(Instant::now()).is_none());
     let book = rig.agora.tail(25).unwrap();
-    assert!(book.entries.iter().any(|entry| entry.event == "released"));
+    let requested = book
+        .entries
+        .iter()
+        .find(|entry| entry.event == "requested")
+        .unwrap();
+    let mut released = book
+        .entries
+        .iter()
+        .filter(|entry| entry.event == "released");
+    let release = released.next().unwrap();
+    assert!(released.next().is_none());
+    assert_eq!(release.source.as_deref(), Some(rig.id.as_str()));
+    assert_eq!(release.data["attempt"].as_u64(), Some(requested.seq));
+    assert_eq!(release.data["rung"].as_u64(), Some(0));
     assert!(!book.entries.iter().any(|entry| entry.event == "blocked"));
 }
 

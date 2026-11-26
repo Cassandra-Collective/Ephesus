@@ -98,11 +98,11 @@ impl Ladder {
         self.held.as_deref()
     }
 
-    pub(crate) fn release(&mut self, now: Instant) -> Option<LifecycleEvent> {
+    pub(crate) fn release(&mut self, wake_at: Option<Instant>) -> Option<LifecycleEvent> {
         self.held.take()?;
         if self.deferred && self.pending.is_none() {
             self.deferred = false;
-            self.pending = Some((now, false));
+            self.pending = wake_at.map(|at| (at, false));
             return Some(LifecycleEvent::Released { rung: self.spent });
         }
         None
@@ -187,7 +187,7 @@ mod tests {
             Some(Due::Held(LifecycleEvent::Deferred { rung: 0, .. }))
         ));
         assert_eq!(
-            ladder.release(at),
+            ladder.release(Some(at)),
             Some(LifecycleEvent::Released { rung: 0 })
         );
         assert_eq!(ladder.deadline(), Some(at));
@@ -215,7 +215,7 @@ mod tests {
             })
         );
         assert_eq!(ladder.capacity(), Some("operator capacity"));
-        assert_eq!(ladder.release(now), None);
+        assert_eq!(ladder.release(Some(now)), None);
         assert_eq!(ladder.capacity(), None);
         assert_eq!(ladder.deadline(), None);
 

@@ -337,7 +337,7 @@ records the general-harness direction for wrapped CLI and native engines.
   launcher, and the shared test files are included inside inline test
   modules. A late capacity release after shutdown can still leave an
   expired respawn deadline. The regression establishes that it launches
-  no hire. The Architect's separate shutdown decision is pending.
+  no hire. This observation led to the separate S1 decision below.
 - **Tier A.** After those fixture repairs, Windows again passed all 18
   unit tests, all 14 headless tests, and package Clippy. The invariant
   and approved-dependency checks each passed over nine crates and 75
@@ -352,11 +352,15 @@ records the general-harness direction for wrapped CLI and native engines.
   survivors on a fresh build target and missed all three in its
   separate no-tests control, with zero timeouts in either phase. Both
   platforms verified all 1,140 archive files before and after, with
-  WSL2 also checking executable bits. Attribution on `eb47593` passed.
+  WSL2 also checking executable bits. The WSL2 compiler logs account
+  for all rejected builds. The round had 39 trait errors, six invalid
+  binary operators and nine unsupported `||` let-chain expressions.
+  The seven control rejections were trait errors. Attribution on
+  `eb47593` passed.
 - **Tier C.** The two remaining survivors change the reservation
   predicate's token and checkout checks and the key-acknowledgement
   guard. The read-only review found both equivalent on reachable
-  manager transitions. Their disposition remains an Architect decision.
+  manager transitions. T1 records the Architect's disposition below.
 - **Tier A.** The Windows gate on `eb47593` passed formatting, Clippy,
   tests, deny checks, invariants, and approved dependencies. The
   verifier rejected the two shared-fixture paths with `src/../tests`
@@ -366,11 +370,39 @@ records the general-harness direction for wrapped CLI and native engines.
   source paths. It measured `eph-agents` at 89.16% (1,646 of 1,846
   lines) and exited 1 solely for the absent new-crate floor. Every
   existing floor passed. The checked-in floor file was untouched.
+- **Tier A.** An exact WSL2 archive of `cf0b259` passed package
+  Clippy and the instrumented workspace suite. Its LCOV report omitted
+  the test fixtures. The coverage verifier measured `eph-agents` at
+  89.21% (1,647 of 1,846 lines), passed every existing floor, and
+  exited 1 solely for the absent agent floor. All 1,140 Git blobs and
+  executable bits matched the commit before and after.
+- **Tier A.** The exact Windows gate on `cf0b259` passed formatting,
+  Clippy, plain workspace tests, deny checks, invariants, approved
+  dependencies, and the instrumented workspace tests. Coverage
+  recognized the fixture records under `tests/support` and excluded
+  them from the production tally. It measured `eph-agents` at 89.16%
+  (1,646 of 1,846 lines). Every existing floor passed, and the gate
+  exited 1 solely for the absent agent floor. All 1,140 archive blobs
+  matched the commit before and after. Attribution passed at `cf0b259`.
+- **Tier C.** The approved S1 release records a deferred exit without
+  arming a deadline once shutdown begins. T1 relies on the `Cleaning`
+  state for retained ownership and matches acknowledged keys by input
+  kind. The U1 follow-up removes duplicate checks at due dispatch.
+  Read-only review and refutation traced deadline creation to settled,
+  uncancelled slots while running. Manual replacement clears the old
+  deadline, automatic replacement consumes it, and cancellation and
+  shutdown clear it. The owner still checks generation and invokes
+  admission before replacement and again before PTY spawn.
+- **Tier A.** Native Windows passed all 18 unit tests, all 14 headless
+  tests, package Clippy and the invariant check after S1, T1 and U1.
+  The strengthened headless case checks for an immediate wake before
+  the first drive, then verifies no remaining deadline and a single
+  `released` record correlated with the same hire, request and rung.
 
 ## Owed evidence
 
-The agent mutation survivors remain open. Repeat the Windows and WSL2
-proofs on the final source tree. The seeded coverage floor, final gates,
+The agent mutation verdict and repeated Windows and WSL2 proofs are
+owed on the final source tree. The seeded coverage floor, final gates,
 approved publication, and three-platform CI are still owed. The fixture
 uses real PTYs and local test executables. The signed-in reference-engine
 PTY run and effective grant checks are owed at R2 exit.
