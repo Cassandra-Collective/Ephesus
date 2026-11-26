@@ -14,7 +14,11 @@ use std::{
     io::{self, BufRead, Write},
     path::{Path, PathBuf},
     process::ExitCode,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -31,6 +35,7 @@ use eph_agents::{
 };
 use eph_agora::{
     agora::Agora,
+    book::AppendPoint,
     store::{Loaded, OnDamaged, Store},
 };
 use eph_engines::{AdapterRegistry, Claude, ConfigDir, ToolRoot};
@@ -40,6 +45,7 @@ use eph_schema::{
     degradation::{Cause, Source as DegradationSource},
     id::TaskId,
     lifecycle::TerminalKind,
+    log::{LineRead, read_line},
     names::{AgentId, EnvName},
     refs::Ref,
     restart::{BreakerStops, Signal, Stop},
@@ -77,8 +83,24 @@ fn main() -> ExitCode {
             failed_started_record,
         ),
         (
+            "a_requested_record_refused_before_write_stops_the_launch",
+            failed_requested_record,
+        ),
+        (
+            "a_synced_started_record_without_acknowledgement_unwinds_the_terminal",
+            started_record_failed_after_sync,
+        ),
+        (
             "an_isolated_respawn_keeps_dirty_work_and_rejects_stale_events",
             isolated_respawn,
+        ),
+        (
+            "a_checkout_returned_after_cancellation_is_unregistered",
+            checkout_returned_after_cancellation,
+        ),
+        (
+            "overlapping_hires_preserve_roster_edits_and_return_the_latest_ledger_tasks",
+            overlapping_registry_and_ledger_edits,
         ),
         (
             "a_standing_stop_written_during_preparation_prevents_admission",
@@ -140,7 +162,8 @@ fn main() -> ExitCode {
 fn engine() -> ExitCode {
     match env::args().nth(1).as_deref() {
         Some("--version") => {
-            let trace = env::current_exe().unwrap().with_file_name("trace-version");
+            let executable = env::current_exe().unwrap();
+            let trace = executable.with_file_name("trace-version");
             if trace.is_file() {
                 let cwd = fs::canonicalize(env::current_dir().unwrap()).unwrap();
                 let mut paths = fs::read_to_string(&trace).unwrap();
@@ -148,6 +171,7 @@ fn engine() -> ExitCode {
                 paths.push('\n');
                 write_atomic(&trace, paths.as_bytes()).unwrap();
             }
+            await_checkout_release(&executable);
             println!("2.1.295 (Claude Code)");
         }
         Some("auth") => {
@@ -174,6 +198,29 @@ fn engine() -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+fn await_checkout_release(executable: &Path) {
+    if !executable.with_file_name("hold-checkout-probe").is_file() {
+        return;
+    }
+    let cwd = fs::canonicalize(env::current_dir().unwrap()).unwrap();
+    if !cwd.ends_with(Path::new("worktrees").join("agent.fixture")) {
+        return;
+    }
+    let ready = executable.with_file_name("checkout-probe-ready");
+    let release = executable.with_file_name("release-checkout-probe");
+    write_atomic(&ready, cwd.to_str().unwrap().as_bytes()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while !release.is_file() {
+        assert!(Instant::now() < deadline, "checkout probe barrier expired");
+        thread::sleep(Duration::from_millis(5));
+    }
+    write_atomic(
+        &executable.with_file_name("checkout-probe-released"),
+        b"released",
+    )
+    .unwrap();
 }
 
 fn install(exe: &Path) -> ExitCode {
@@ -301,6 +348,16 @@ struct Rig {
 
 impl Rig {
     fn new(installed: bool, fail_book: bool) -> Self {
+        Self::with_agora(installed, fail_book, |root, prompts, hooks| {
+            Agora::open(root, prompts, hooks).unwrap().agora
+        })
+    }
+
+    fn with_agora(
+        installed: bool,
+        fail_book: bool,
+        open: impl FnOnce(&Path, &Path, Hooks) -> Agora,
+    ) -> Self {
         let scratch = Scratch::new();
         let home = scratch.0.join("home");
         let target = scratch.0.join("target");
@@ -327,11 +384,7 @@ impl Rig {
                 .unwrap()
                 .extend(landing.outcome.subjects.iter().cloned());
         });
-        let agora = Arc::new(
-            Agora::open(&home.join("agora"), &home.join("prompts"), hooks)
-                .unwrap()
-                .agora,
-        );
+        let agora = Arc::new(open(&home.join("agora"), &home.join("prompts"), hooks));
         let calls = Arc::new(Mutex::new(Calls::default()));
         let mut parent: Vec<(OsString, OsString)> = env::vars_os()
             .filter(|(name, _)| !name.as_encoded_bytes().eq_ignore_ascii_case(b"PATH"))
@@ -492,10 +545,8 @@ impl Drop for Rig {
     }
 }
 
-fn ordinary_launch() {
-    let mut rig = Rig::new(true, false);
-    let now = Timestamp::now();
-    let task = |suffix: &str, status, assignee| Task {
+fn fixture_task(now: Timestamp, suffix: &str, status: TaskStatus, assignee: AgentId) -> Task {
+    Task {
         id: TaskId::mint(now, suffix).unwrap(),
         title: "Fixture task".into(),
         spec: String::new(),
@@ -512,12 +563,18 @@ fn ordinary_launch() {
         },
         created_at: now,
         updated_at: now,
-    };
+    }
+}
+
+fn ordinary_launch() {
+    let mut rig = Rig::new(true, false);
+    let now = Timestamp::now();
     let mut ledger = Tasks::empty();
     ledger.tasks = vec![
-        task("11111111", TaskStatus::InProgress, rig.id.clone()),
-        task("22222222", TaskStatus::Review, rig.id.clone()),
-        task(
+        fixture_task(now, "11111111", TaskStatus::InProgress, rig.id.clone()),
+        fixture_task(now, "22222222", TaskStatus::Review, rig.id.clone()),
+        fixture_task(
+            now,
             "33333333",
             TaskStatus::InProgress,
             "agent.other".parse().unwrap(),
@@ -742,6 +799,100 @@ fn failed_started_record() {
     );
 }
 
+fn failed_requested_record() {
+    let armed = Arc::new(AtomicBool::new(false));
+    let trigger = Arc::clone(&armed);
+    let mut rig = Rig::with_agora(true, false, |root, prompts, hooks| {
+        Agora::open_with_book_faults(root, prompts, hooks, move |point| {
+            if point == AppendPoint::BeforeWrite && trigger.swap(false, Ordering::SeqCst) {
+                return Err("fixture stopped before request write".into());
+            }
+            Ok(())
+        })
+        .unwrap()
+        .agora
+    });
+    rig.agora.committer().drained();
+    armed.store(true, Ordering::SeqCst);
+    let generation = rig.start();
+    rig.drive_until(|rig| matches!(rig.state(), Lifecycle::Refused(_) | Lifecycle::Running));
+    assert!(
+        matches!(rig.state(), Lifecycle::Refused(reason) if reason.contains("fixture stopped before request write"))
+    );
+    rig.drive_until(|rig| rig.manager.drained());
+    assert_eq!(rig.manager.state(&rig.id).unwrap().0, generation);
+    assert!(!armed.load(Ordering::SeqCst));
+    assert!(rig.calls.lock().unwrap().registered.is_empty());
+    assert!(rig.output.is_empty());
+    assert!(
+        matches!(rig.agora.registry(), Loaded::Present(registry) if !registry.agents.contains_key(&rig.id))
+    );
+    assert!(
+        !rig.agora
+            .tail(30)
+            .unwrap()
+            .entries
+            .iter()
+            .any(|entry| entry.event == "requested" || entry.event == "started")
+    );
+}
+
+fn started_record_failed_after_sync() {
+    let failed = Arc::new(AtomicBool::new(false));
+    let triggered = Arc::clone(&failed);
+    let mut rig =
+        Rig::with_agora(true, false, |root, prompts, hooks| {
+            let log = root.join("log.jsonl");
+            Agora::open_with_book_faults(root, prompts, hooks, move |point| {
+            if point == AppendPoint::AfterWrite && !triggered.load(Ordering::SeqCst) {
+                let bytes = fs::read_to_string(&log).map_err(|error| error.to_string())?;
+                if let Some(line) = bytes.lines().last()
+                    && matches!(read_line(line), LineRead::Entry(entry) if entry.event == "started")
+                {
+                    triggered.store(true, Ordering::SeqCst);
+                    return Err("fixture stopped after started sync".into());
+                }
+            }
+            Ok(())
+        }).unwrap().agora
+        });
+    let subscriber = rig.agora.subscribe();
+    let generation = rig.start();
+    rig.drive_until(|rig| {
+        assert_ne!(rig.state(), &Lifecycle::Running);
+        rig.state() == &Lifecycle::Stopped && rig.manager.drained()
+    });
+    assert!(failed.load(Ordering::SeqCst));
+    assert!(
+        rig.problems
+            .iter()
+            .any(|problem| problem.contains("fixture stopped after started sync"))
+    );
+    let calls = rig.calls.lock().unwrap();
+    assert_eq!(calls.registered, [generation]);
+    assert_eq!(calls.revoked, [generation]);
+    assert_eq!(calls.ended, [generation]);
+    let book = rig.agora.tail(40).unwrap();
+    let request = book
+        .entries
+        .iter()
+        .find(|entry| entry.event == "requested")
+        .unwrap();
+    let mut started = book.entries.iter().filter(|entry| entry.event == "started");
+    let durable = started.next().unwrap();
+    assert!(started.next().is_none());
+    assert_eq!(durable.source.as_deref(), Some(rig.id.as_str()));
+    assert_eq!(durable.data["attempt"].as_u64(), Some(request.seq));
+    assert!(
+        book.entries.iter().any(|entry| entry.event == "observed"
+            && entry.data["attempt"].as_u64() == Some(request.seq))
+    );
+    assert!(book.entries.iter().any(
+        |entry| entry.event == "unwound" && entry.data["attempt"].as_u64() == Some(request.seq)
+    ));
+    assert!(subscriber.try_iter().all(|entry| entry.event != "started"));
+}
+
 fn isolated_respawn() {
     let mut rig = Rig::new(true, false);
     rig.target_repo();
@@ -794,6 +945,180 @@ fn isolated_respawn() {
     rig.drive_until(|rig| rig.state() == &Lifecycle::Stopped);
     assert_eq!(fs::read(&work).unwrap(), b"unfinished");
     assert_eq!(rig.calls.lock().unwrap().registered, [first, second]);
+}
+
+fn checkout_returned_after_cancellation() {
+    let mut rig = Rig::new(true, false);
+    rig.target_repo();
+    write_atomic(&rig.bin.join("hold-checkout-probe"), b"hold").unwrap();
+    let mut hire = rig.hire();
+    hire.isolated = true;
+    let generation = rig.manager.start(hire).unwrap();
+    let ready = rig.bin.join("checkout-probe-ready");
+    rig.drive_until(|rig| {
+        assert_eq!(rig.state(), &Lifecycle::Checking);
+        ready.is_file()
+    });
+
+    let checkout = rig.home.join("worktrees").join(rig.id.as_str());
+    assert_eq!(
+        PathBuf::from(fs::read_to_string(ready).unwrap()),
+        fs::canonicalize(&checkout).unwrap()
+    );
+    assert!(checkout.join(".git").is_file());
+    rig.manager.cancel(&rig.id, generation).unwrap();
+    assert!(!rig.manager.drained());
+    assert!(matches!(rig.manager.start(rig.hire()), Err(Error::Busy(_))));
+    write_atomic(&rig.bin.join("release-checkout-probe"), b"release").unwrap();
+
+    rig.drive_until(|rig| rig.state() == &Lifecycle::Stopped && rig.manager.drained());
+    assert_eq!(
+        fs::read(rig.bin.join("checkout-probe-released")).unwrap(),
+        b"released"
+    );
+    assert_eq!(rig.manager.state(&rig.id).unwrap().0, generation);
+    assert!(!checkout.exists());
+    let worktrees = Git::target()
+        .without_machine_config()
+        .run(&rig.target, &["worktree", "list", "--porcelain"]);
+    assert!(worktrees.ok(), "{worktrees:?}");
+    assert_eq!(
+        worktrees
+            .stdout
+            .lines()
+            .filter(|line| line.starts_with("worktree "))
+            .count(),
+        1
+    );
+
+    let calls = rig.calls.lock().unwrap();
+    assert!(calls.registered.is_empty());
+    assert!(calls.ended.is_empty());
+    assert!(rig.output.is_empty());
+    let book = rig.agora.tail(30).unwrap();
+    let requested = book
+        .entries
+        .iter()
+        .find(|entry| entry.event == "requested")
+        .unwrap();
+    assert!(book.entries.iter().any(|entry| {
+        entry.event == "unwound"
+            && entry.source.as_deref() == Some(rig.id.as_str())
+            && entry.data["attempt"].as_u64() == Some(requested.seq)
+            && entry.data["checkout"]["kind"].as_str() == Some("removed")
+    }));
+    assert!(
+        !book
+            .entries
+            .iter()
+            .any(|entry| entry.event == "started" || entry.event == "returned")
+    );
+}
+
+fn overlapping_registry_and_ledger_edits() {
+    let mut rig = Rig::new(true, false);
+    let second_id: AgentId = "agent.second-fixture".parse().unwrap();
+    let editor_id: AgentId = "agent.editor-fixture".parse().unwrap();
+    let mut editor_row = rig.hire().roster;
+    editor_row.name = "Concurrent roster edit".into();
+    let editor_expected = editor_row.clone();
+    let editor_key = editor_id.clone();
+    let agora = Arc::clone(&rig.agora);
+    let (entered, ready) = mpsc::channel();
+    let (release, hold) = mpsc::channel();
+    let editor = thread::spawn(move || {
+        agora
+            .edit_registry(|registry| {
+                let _old = registry.agents.insert(editor_key, editor_row);
+                entered.send(()).unwrap();
+                hold.recv_timeout(Duration::from_secs(15)).unwrap();
+                Ok(())
+            })
+            .unwrap();
+    });
+    ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    let first = rig.start();
+    let second = rig
+        .manager
+        .start(fixture_hire::hire(&second_id, &rig.target))
+        .unwrap();
+    rig.drive_until(|rig| {
+        let book = rig.agora.tail(20).unwrap();
+        [&rig.id, &second_id].into_iter().all(|id| {
+            book.entries.iter().any(|line| {
+                line.event == "requested" && line.source.as_deref() == Some(id.as_str())
+            })
+        })
+    });
+    assert_eq!(
+        rig.manager.state(&rig.id),
+        Some((first, &Lifecycle::Checking))
+    );
+    assert_eq!(
+        rig.manager.state(&second_id),
+        Some((second, &Lifecycle::Checking))
+    );
+    release.send(()).unwrap();
+    editor.join().unwrap();
+    rig.drive_until(|rig| {
+        [&rig.id, &second_id]
+            .into_iter()
+            .all(|id| matches!(rig.manager.state(id), Some((_, Lifecycle::Running))))
+    });
+    let Loaded::Present(registry) = rig.agora.registry() else {
+        unreachable!()
+    };
+    let cwd = fs::canonicalize(&rig.target).unwrap();
+    assert_eq!(registry.agents[&editor_id], editor_expected);
+    assert_eq!(Path::new(&registry.agents[&rig.id].cwd), cwd);
+    assert_eq!(Path::new(&registry.agents[&second_id].cwd), cwd);
+
+    let now = Timestamp::now();
+    let mut ledger = Tasks::empty();
+    ledger.tasks = vec![
+        fixture_task(now, "11111111", TaskStatus::InProgress, rig.id.clone()),
+        fixture_task(now, "22222222", TaskStatus::InProgress, second_id.clone()),
+    ];
+    let _seed = rig.agora.write_tasks(&ledger).unwrap();
+    rig.manager.kill(&rig.id, first).unwrap();
+    rig.manager.kill(&second_id, second).unwrap();
+    ledger.tasks[0].title = "Edited while both exits were pending".into();
+    ledger.tasks[1].spec = "Keep the operator's latest instructions".into();
+    ledger.tasks.push(fixture_task(
+        now,
+        "33333333",
+        TaskStatus::InProgress,
+        editor_id,
+    ));
+    let _edited = rig.agora.write_tasks(&ledger).unwrap();
+    rig.drive_until(|rig| {
+        rig.manager.state(&rig.id) == Some((first, &Lifecycle::Exited))
+            && rig.manager.state(&second_id) == Some((second, &Lifecycle::Exited))
+            && rig.manager.drained()
+    });
+
+    let Loaded::Present(saved) = rig.agora.tasks() else {
+        unreachable!()
+    };
+    assert_eq!(saved.tasks.len(), 3);
+    assert_eq!(saved.tasks[0].title, ledger.tasks[0].title);
+    assert_eq!(saved.tasks[1].spec, ledger.tasks[1].spec);
+    assert_eq!(saved.tasks[2], ledger.tasks[2]);
+    let book = rig.agora.tail(40).unwrap();
+    for (before, after) in ledger.tasks[..2].iter().zip(&saved.tasks[..2]) {
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.assignee, before.assignee);
+        assert_eq!(after.status, TaskStatus::Todo);
+        let task_id = after.id.to_string();
+        let hire = after.assignee.as_ref().unwrap();
+        assert!(book.entries.iter().any(|line| {
+            line.event == "returned"
+                && line.source.as_deref() == Some(hire.as_str())
+                && line.data["tasks"].as_array().is_some_and(|tasks| {
+                    tasks.len() == 1 && tasks[0].as_str() == Some(task_id.as_str())
+                })
+        }));
+    }
 }
 
 fn stop_during_preparation() {

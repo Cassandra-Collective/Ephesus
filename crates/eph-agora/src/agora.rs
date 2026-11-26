@@ -222,8 +222,28 @@ impl Agora {
     /// overrides in `prompts`. `hooks` are the caller's: the Agora adds its own
     /// reporter and landing report to them. See the module contract.
     pub fn open(root: &Path, prompts: &Path, hooks: Hooks) -> Result<Booted, OpenError> {
+        Self::open_book(root, prompts, hooks, Book::open(root))
+    }
+
+    /// Opens a test Agora whose real book can fail at a selected append point.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn open_with_book_faults(
+        root: &Path,
+        prompts: &Path,
+        hooks: Hooks,
+        fault: impl Fn(crate::book::AppendPoint) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Result<Booted, OpenError> {
+        Self::open_book(root, prompts, hooks, Book::open(root).with_faults(fault))
+    }
+
+    fn open_book(
+        root: &Path,
+        prompts: &Path,
+        hooks: Hooks,
+        book: Book,
+    ) -> Result<Booted, OpenError> {
         let held = holds_files(root);
-        let book = Arc::new(Book::open(root));
+        let book = Arc::new(book);
         let degradations = Arc::new(Degradations::new(Arc::clone(&book)));
         // What the last run left, read before this boot writes anything.
         let mut conditions = book_conditions(&book, &degradations);
@@ -885,6 +905,46 @@ mod tests {
 
     fn open(root: &Path) -> Booted {
         Agora::open(root, &prompts(root), Hooks::none()).unwrap()
+    }
+
+    #[test]
+    fn fixture_boot_attaches_the_fault_to_the_shared_book() {
+        let root = scratch("shared-book-fault");
+        let armed = Arc::new(AtomicBool::new(false));
+        let trigger = Arc::clone(&armed);
+        let agora =
+            Agora::open_with_book_faults(&root, &prompts(&root), Hooks::none(), move |point| {
+                if point == crate::book::AppendPoint::AfterWrite
+                    && trigger.swap(false, Ordering::SeqCst)
+                {
+                    return Err("fixture stopped after sync".into());
+                }
+                Ok(())
+            })
+            .unwrap()
+            .agora;
+        agora.committer().drained();
+        let subscriber = agora.subscribe();
+        let record = LifecycleRecord {
+            agent: "agent.fixture".parse().unwrap(),
+            attempt: None,
+            event: eph_schema::lifecycle::LifecycleEvent::Requested {
+                engine: EngineId::Claude,
+                workspace: root.display().to_string(),
+                grants: Vec::new(),
+            },
+        };
+        let expected = record.fields().unwrap().data;
+        armed.store(true, Ordering::SeqCst);
+        let failure = agora.append_lifecycle(&record).unwrap_err();
+        assert!(
+            matches!(&failure, AppendError::Fault(reason) if reason == "fixture stopped after sync"),
+            "{failure:?}"
+        );
+        assert_eq!(agora.tail(1).unwrap().entries[0].data, expected);
+        assert!(subscriber.try_recv().is_err());
+        drop(agora);
+        fs::remove_dir_all(root).unwrap();
     }
 
     /// git on the Agora, reading no machine configuration.

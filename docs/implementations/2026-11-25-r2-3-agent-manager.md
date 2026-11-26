@@ -398,6 +398,64 @@ records the general-harness direction for wrapped CLI and native engines.
   The strengthened headless case checks for an immediate wake before
   the first drive, then verifies no remaining deadline and a single
   `released` record correlated with the same hire, request and rung.
+- **Tier A.** The WSL2 `cargo xtask mutants eph-agents` round on
+  `1dbbdfc` caught 251 of 308 cases with 54 unviable, three misses,
+  and zero timeouts. Its no-tests control missed all 70 viable cases,
+  with seven unviable and zero timeouts. The compiler logs account
+  for every rejected build. Windows caught the three reparse-only
+  misses and its no-tests control missed all three, with zero timeouts
+  in either phase. Windows used a fresh target for each phase. All
+  1,140 archive blobs matched before and after on both platforms,
+  with executable bits also checked on WSL2. Attribution passed on
+  `1dbbdfc`.
+- **Tier C.** The pre-close audit found only component or adjacent
+  evidence for the manager's post-sync journal failure, overlapping
+  roster and ledger edits, and a checkout acquisition returned after
+  cancellation. SDD-RUST §3.4 requires these cases. The Architect
+  approved the follow-up test approach in V1 and W1.
+- **Tier A.** Both existing focused Book tests passed on verified
+  Windows and WSL2 archives of `1dbbdfc`. The fault-return test found an on-disk
+  line only after the write and no subscriber notification at either
+  fault point. The abrupt-exit test recovered the synced line without
+  an acknowledgement and verified that the book could append again.
+  All 1,140 archive blobs matched before and after on both platforms,
+  with executable bits also checked on WSL2. This verifies the Book
+  boundary. The manager response is still owed.
+
+## Recovery before laptop reset
+
+The Architect paused implementation on 2026-11-26 and requested publication
+of the current work in a draft for recovery. The R2.3 draft is stacked on
+the published R2.2 branch. Use this record to resume the implementation.
+
+- **Tier B.** Published R2.2 closeout `9660bba286441fdfd814403d493cf435230705aa`
+  passed Linux, macOS, and Windows CI in [run 45552342374](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45552342374).
+  Its predecessor trial merge against `main` at `9784131` was clean.
+- **Tier A.** The last tested R2.3 checkpoint is
+  `1dbbdfce2f65e39afd7621c0cd92ecffcfd9f538`. Above are its Windows
+  package results and the exact WSL2 mutation round and Windows replay.
+  Their controls missed every viable case and there were zero timeouts.
+- **Tier C.** The recovery commit includes the V1 Agora test feature,
+  the opt-in constructor for the real Book fault, the pre-write and
+  after-sync manager fixtures, the real checkout cancellation fixture,
+  and the overlapping roster and ledger cases. It also includes the
+  shared native-link fixture in `tests/support/scratch.rs`.
+- **Tier A and C.** The initial Windows V1 test stopped at
+  `fixture_boot_attaches_the_fault_to_the_shared_book`. The test draft
+  was a degradation, which the Agora intentionally refuses at that
+  API. The saved edit uses a typed lifecycle record. The edit and the
+  new headless cases await their first passing run.
+
+Resume by running the corrected Agora fixture, then the full headless
+suite. Complete the composed relative `PATH`, competing `PATH` grant,
+redirect and overlap checks in SDD-RUST §3.4. Recheck the mutation inputs
+for `eph-agora` because V1 changes its source and feature setup. Verify
+the affected crates and repeat the complete plain and instrumented
+workspace suites on Windows and WSL2 against the final commit. Seed the
+`eph-agents` floor using three CI attempts on one tree. Close R2.3 only
+after the required gates and three-platform CI pass. R2 exit still owes
+the signed-in reference terminal, effective grants, conformance table,
+Gymnasium metric, and carried boot conditions.
 
 ## Owed evidence
 

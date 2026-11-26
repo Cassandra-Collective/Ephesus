@@ -475,7 +475,7 @@ mod tests {
     use eph_git::{committer::Hooks, runner::Git};
 
     use super::*;
-    use crate::scratch::Scratch;
+    use crate::scratch::{Scratch, link_dir};
 
     #[test]
     fn workspace_and_grants_protect_metadata_private_paths_and_other_hires() {
@@ -611,61 +611,4 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
-    fn link_dir(target: &Path, link: &Path) {
-        std::os::unix::fs::symlink(target, link).unwrap();
-    }
-
-    #[cfg(windows)]
-    fn link_dir(target: &Path, link: &Path) {
-        use std::{
-            env,
-            time::{Duration, Instant},
-        };
-
-        use eph_pty::{ExitStatus, Output, Session, SpawnPlan};
-
-        let parent_directory = link.parent().unwrap();
-        assert_eq!(link, parent_directory.join("link"));
-        assert_eq!(target, parent_directory.join("target"));
-        let parent_path = parent_directory.to_string_lossy();
-        let cwd = Path::new(parent_path.trim_start_matches(r"\\?\"));
-        let executable = cwd.join("fixture-junction.cmd");
-        write_atomic(
-            &executable,
-            b"@echo off\r\nmklink /J link \"%~dp0target\"\r\nexit /b %errorlevel%\r\n",
-        )
-        .unwrap();
-        let parent: Environment = env::vars_os().collect();
-        let environment = base_environment(&parent);
-        let mut session = Session::spawn(
-            SpawnPlan {
-                executable: executable.as_os_str(),
-                args: &[],
-                cwd,
-                environment: &environment,
-                cols: 100,
-                rows: 24,
-            },
-            Vec::new(),
-        )
-        .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut output = Vec::new();
-        loop {
-            if let Output::Data(bytes) = session.output(Duration::from_millis(10)).unwrap() {
-                output.extend(bytes);
-            }
-            if let Some(status) = session.try_wait().unwrap() {
-                assert_eq!(
-                    status,
-                    ExitStatus::Code(0),
-                    "{}",
-                    String::from_utf8_lossy(&output)
-                );
-                return;
-            }
-            assert!(Instant::now() < deadline, "mklink did not exit");
-        }
-    }
 }

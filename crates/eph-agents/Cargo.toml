@@ -16,6 +16,9 @@ eph-git = { path = "../eph-git" }
 eph-pty = { path = "../eph-pty" }
 eph-schema = { path = "../eph-schema" }
 
+[dev-dependencies]
+eph-agora = { path = "../eph-agora", features = ["test-fixtures"] }
+
 [lints]
 workspace = true
 

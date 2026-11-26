@@ -21,7 +21,7 @@ recorded.
 
 ## Resume here
 
-*As of 2026-11-25: every package from R0.1 to R2.1 is merged to `main`. R0.1 is #102, R0.2 #104 (`9aa30bd`), R0.3 #105, R1.0 #106, R1.1 to R1.4b #108 to #112, and R2.1 #107 (`45dcff9`), the last to merge. R2.2 is verified on `feature/r2-2-eph-engines` and awaits its PR. R2.3 is next. A branch and a PR per package (DECISIONS-LOG, 2026-10-19).*
+*As of 2026-11-26: every package from R0.1 to R2.1 is merged to `main`. R0.1 is #102, R0.2 #104 (`9aa30bd`), R0.3 #105, R1.0 #106, R1.1 to R1.4b #108 to #112, and R2.1 #107 (`45dcff9`), the last to merge. R2.2 is verified on `feature/r2-2-eph-engines` and awaits its PR. R2.3 implementation is paused at a [recovery checkpoint](./implementations/2026-11-25-r2-3-agent-manager.md#recovery-before-laptop-reset) on `feature/r2-3-eph-agents`. Resume there.*
 
 **Ephesus is being rewritten in Rust (ADR-0041, the Architect's direction of
 2026-10-19), and the rewrite comes before everything below.** The Architect
@@ -110,7 +110,7 @@ gives the mutation outcomes and the exact trees used for the repeated local
 checks. [CI run 45552342374](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45552342374)
 passed on published closeout `9660bba`, which trial-merged into main at
 `9784131`. The PR command was handed to the Architect.
-**R2.3 `eph-agents` is next in the approved sequence.** Its local branch,
+**R2.3 `eph-agents` has a recovery checkpoint.** Its branch,
 `feature/r2-3-eph-agents`, starts at `9660bba`. The 2026-11-25 Architect
 decisions are in DECISIONS-LOG. The Architect approved
 [SDD-RUST §3.4](./sdd/SDD-RUST.md#34-agent-manager-r23) and
@@ -118,7 +118,10 @@ decisions are in DECISIONS-LOG. The Architect approved
 [ADR-0046](./adr/ADR-0046-queue-terminal-input-and-retry-cleanup.md) records the
 follow-up decisions on terminal input and cleanup retries. The
 [R2.3 implementation record](./implementations/2026-11-25-r2-3-agent-manager.md)
-tracks the local tests and the remaining package verification.
+tracks the local tests and the remaining package verification. The shutdown
+and mutation follow-up passed on `1dbbdfc`. The draft checkpoint also saves
+the later V1/W1 fixtures, which still need a passing run. Package closure and
+the live R2 exit proof remain open.
 A `.tmp` file left by a crash before its rename is a
 recorded residual until the boot that runs ADR-0034's probe (R7); meanwhile the Agora's
 `.gitignore`, rendered at every boot, keeps `write_atomic`'s temporaries out of history
@@ -170,7 +173,7 @@ keeps every input path deferred. Recorded in [M6](./progress/M6.md).
 | M9b–M9f — the agentic harness, to v1 | Planned; build not authorised | below · [`PHASE-9-PLAN.md`](./PHASE-9-PLAN.md) |
 | M7b — The recursive company + shipping | Planned; follows M9f (DD-M9-18) | below |
 | M9g–M9h — after v1 | Planned; follow M7b | below |
-| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19. **R0 and R1 are done.** R2.1 is merged. R2.2 is verified on its feature branch. R2.3 is next. | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
+| **R0–R14 — The Rust rewrite** | Plan approved 2026-10-19. **R0 and R1 are done.** R2.1 is merged. R2.2 is verified on its feature branch. R2.3 is paused in verification. | below · [`RUST-PLAN.md`](./RUST-PLAN.md) |
 
 ---
 
