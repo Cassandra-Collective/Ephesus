@@ -1,0 +1,27 @@
+[package]
+name = "eph-agents"
+version = "0.0.0"
+description = "Ephesus agent lifecycle and terminal command manager (ADR-0045)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+eph-agora = { path = "../eph-agora" }
+eph-engines = { path = "../eph-engines" }
+eph-fs = { path = "../eph-fs" }
+eph-git = { path = "../eph-git" }
+eph-pty = { path = "../eph-pty" }
+eph-schema = { path = "../eph-schema" }
+
+[dev-dependencies]
+eph-agora = { path = "../eph-agora", features = ["test-fixtures"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "headless"
+harness = false

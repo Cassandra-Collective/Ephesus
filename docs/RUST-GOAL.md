@@ -1,5 +1,10 @@
 # The Rust rewrite goal prompt — a handover
 
+**Recovery checkpoint, 2026-11-26.** Resume with
+[`PROGRESS.md`](./PROGRESS.md#resume-here) and the
+[R2.3 recovery record](./implementations/2026-11-25-r2-3-agent-manager.md#recovery-before-laptop-reset)
+on `feature/r2-3-eph-agents`. The original R2.2 setup below records the earlier handover.
+
 Paste the block under [The prompt](#the-prompt), whole, as one `/goal` command, in a
 session whose working tree has the branch named below checked out: on 2026-11-23,
 `feature/r2-2-eph-engines`. That branch does not exist yet. The stack each package was
@@ -33,8 +38,8 @@ through R2.1 had merged to `main`.*
 | R0.1, R0.2, R0.3 | Merged | #102, #104 (`9aa30bd`), #105 |
 | R1.0 to R1.4b | Merged. **R1 is DONE** (2026-10-25), its verdict in PROGRESS | #106, #108 to #112 |
 | R2.1 `eph-pty` | **Done, ticked and merged** (2026-11-23). CI run 45196366436 on `45dcff9` is green on every job | #107 (`45dcff9`), the last to merge |
-| **R2.2 `eph-engines`** | **Next.** Not started: no branch and no code | — |
-| R2.3 the agent manager | Not started | — |
+| **R2.2 `eph-engines`** | Verified on its published branch, awaiting its PR | `9660bba`, [CI 45552342374](https://github.com/Cassandra-Collective/Ephesus/actions/runs/45552342374) |
+| R2.3 the agent manager | Implementation paused with V1/W1 integration proof in progress | `feature/r2-3-eph-agents`, [recovery record](./implementations/2026-11-25-r2-3-agent-manager.md#recovery-before-laptop-reset) |
 
 R2.1's close is recorded in PROGRESS (its tick and the resume block), in the
 [probe](./implementations/2026-11-16-r2-1-pty-tree-probe.md) and

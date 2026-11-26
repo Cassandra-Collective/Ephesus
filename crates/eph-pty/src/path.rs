@@ -3,6 +3,7 @@
 use std::{
     env,
     ffi::{OsStr, OsString},
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -20,7 +21,45 @@ pub fn resolve_executable(
     if explicit(command) || command.is_empty() {
         return PathBuf::from(command);
     }
+    candidates(command, cwd, environment)
+        .find(|candidate| candidate.is_file())
+        .map_or_else(|| PathBuf::from(command), executable_target)
+}
 
+/// Resolve a program and establish absence without hiding inspection errors.
+///
+/// Relative PATH entries use `cwd`. A conflicting candidate, inaccessible
+/// entry or dangling link reports an error. Only an exhausted search returns
+/// `None`. It is still possible for the later OS launch to fail.
+pub fn find_executable(
+    command: &OsStr,
+    cwd: &Path,
+    environment: &[(OsString, OsString)],
+) -> io::Result<Option<PathBuf>> {
+    let cwd = std::path::absolute(cwd)?;
+    if command.is_empty() || !fs::metadata(&cwd)?.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "executable resolution requires a program and a working directory",
+        ));
+    }
+    if explicit(command) {
+        let candidate = cwd.join(command);
+        return inspect(&candidate).map(|found| found.then(|| executable_target(candidate)));
+    }
+    for candidate in candidates(command, &cwd, environment) {
+        if inspect(&candidate)? {
+            return Ok(Some(executable_target(candidate)));
+        }
+    }
+    Ok(None)
+}
+
+fn candidates<'a>(
+    command: &'a OsStr,
+    cwd: &'a Path,
+    environment: &'a [(OsString, OsString)],
+) -> impl Iterator<Item = PathBuf> + 'a {
     #[cfg(windows)]
     let extensions: Vec<&str> = if Path::new(command).extension().is_none() {
         declared(environment, "PATHEXT")
@@ -37,28 +76,61 @@ pub fn resolve_executable(
     let extensions = [""];
 
     let path = declared(environment, "PATH").unwrap_or_default();
-    for dir in env::split_paths(path) {
-        let dir = dir
-            .to_str()
-            .map(|value| Path::new(value.trim().trim_matches('"')))
-            .unwrap_or(&dir);
-        if dir.as_os_str().is_empty() {
-            continue;
+    env::split_paths(path)
+        .filter_map(|dir| {
+            let dir = dir
+                .to_str()
+                .map(|value| Path::new(value.trim().trim_matches('"')))
+                .unwrap_or(&dir);
+            (!dir.as_os_str().is_empty()).then(|| cwd.join(dir))
+        })
+        .flat_map(move |dir| {
+            // PATHEXT is small and only needs a new iterator for each directory.
+            #[cfg(windows)]
+            let extensions = extensions.clone();
+            extensions.into_iter().map(move |extension| {
+                let mut name = command.to_os_string();
+                name.push(extension);
+                dir.join(name)
+            })
+        })
+}
+
+fn inspect(candidate: &Path) -> io::Result<bool> {
+    match metadata_or_absent(fs::metadata(candidate))? {
+        Some(file) if file.is_file() => return Ok(true),
+        Some(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("executable candidate {} is not a file", candidate.display()),
+            ));
         }
-        for extension in &extensions {
-            let mut name = command.to_os_string();
-            name.push(extension);
-            let candidate = cwd.join(dir).join(name);
-            if candidate.is_file() {
-                #[cfg(windows)]
-                if let Some(target) = unwrap_windows_shim(&candidate) {
-                    return target;
-                }
-                return candidate;
-            }
+        None => {}
+    }
+    // A missing leaf below a broken path component is an inspection failure.
+    // Inspect the nearest existing entry without silently following its link.
+    for path in candidate.ancestors() {
+        if metadata_or_absent(fs::symlink_metadata(path))?.is_some() {
+            fs::metadata(path)?;
+            return Ok(false);
         }
     }
-    PathBuf::from(command)
+    Ok(false)
+}
+
+fn metadata_or_absent(result: io::Result<fs::Metadata>) -> io::Result<Option<fs::Metadata>> {
+    match result {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        result => result.map(Some),
+    }
+}
+
+fn executable_target(candidate: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(target) = unwrap_windows_shim(&candidate) {
+        return target;
+    }
+    candidate
 }
 
 pub(crate) fn for_spawn(
@@ -160,6 +232,90 @@ mod tests {
     }
 
     #[test]
+    fn only_not_found_metadata_counts_as_absent() {
+        assert!(
+            metadata_or_absent(Err(io::Error::from(io::ErrorKind::NotFound)))
+                .unwrap()
+                .is_none()
+        );
+        for kind in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::NotADirectory,
+        ] {
+            let error = io::Error::new(kind, "fixture inspection failed");
+            let observed = metadata_or_absent(Err(error)).unwrap_err();
+            assert_eq!(observed.kind(), kind);
+            assert_eq!(observed.to_string(), "fixture inspection failed");
+        }
+    }
+
+    #[test]
+    fn checked_search_distinguishes_absence_from_a_conflicting_path() {
+        let cwd = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(cwd.path()).unwrap();
+        let path = env::join_paths(["first", "second"]).unwrap();
+        let environment = [("PATH".into(), path)];
+        let command = OsStr::new("fixture.exe");
+        assert_eq!(find_executable(command, &home, &environment).unwrap(), None);
+
+        std::fs::create_dir_all(home.join("second")).unwrap();
+        let chosen = home.join("second/fixture.exe");
+        write_atomic(&chosen, b"test").unwrap();
+        assert_eq!(
+            find_executable(command, &home, &environment).unwrap(),
+            Some(chosen)
+        );
+
+        std::fs::create_dir_all(home.join("first/fixture.exe")).unwrap();
+        assert_eq!(
+            find_executable(command, &home, &environment)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData,
+        );
+    }
+
+    #[test]
+    fn an_explicit_checked_path_preserves_errors_instead_of_searching_path() {
+        let cwd = tempfile::tempdir().unwrap();
+        let cwd = fs::canonicalize(cwd.path()).unwrap();
+        let found = cwd.join("fixture.exe");
+        write_atomic(&found, b"test").unwrap();
+        assert_eq!(
+            find_executable(OsStr::new("./fixture.exe"), &cwd, &[])
+                .unwrap()
+                .as_deref(),
+            Some(found.as_path())
+        );
+        assert_eq!(
+            find_executable(OsStr::new("./missing"), &cwd, &[]).unwrap(),
+            None
+        );
+        assert_eq!(
+            find_executable(OsStr::new(""), &cwd, &[])
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            find_executable(OsStr::new("./bad\0path"), &cwd, &[])
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(find_executable(OsStr::new("fixture.exe"), &found, &[]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_path_component_is_not_confirmed_absence() {
+        let cwd = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(cwd.path().join("absent"), cwd.path().join("tool-dir")).unwrap();
+        let environment = [("PATH".into(), OsString::from("tool-dir"))];
+        assert!(find_executable(OsStr::new("tool"), cwd.path(), &environment).is_err());
+    }
+
+    #[test]
     fn uses_the_plans_cwd_and_the_first_declared_path_match() {
         let cwd = tempfile::tempdir().unwrap();
         let first = cwd.path().join("first dir");
@@ -172,6 +328,29 @@ mod tests {
         assert_eq!(
             resolve_executable(OsStr::new("tool.exe"), cwd.path(), &[("PATH".into(), path)]),
             first.join("tool.exe")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_bare_windows_name_uses_nonempty_pathext_entries_in_order() {
+        let cwd = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(cwd.path()).unwrap();
+        let first = home.join("fixture.EXE");
+        for file in [
+            home.join("fixture"),
+            home.join("fixture.COM"),
+            first.clone(),
+        ] {
+            write_atomic(&file, b"fixture").unwrap();
+        }
+        let environment = [
+            ("PATH".into(), home.as_os_str().to_owned()),
+            ("PATHEXT".into(), " ; .missing ; .EXE ; .COM ; ".into()),
+        ];
+        assert_eq!(
+            find_executable(OsStr::new("fixture"), &home, &environment).unwrap(),
+            Some(first)
         );
     }
 

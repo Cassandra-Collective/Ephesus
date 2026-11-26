@@ -28,6 +28,7 @@ pub mod home;
 pub mod id;
 pub mod json;
 pub mod known_targets;
+pub mod lifecycle;
 pub mod log;
 pub mod message;
 pub mod names;

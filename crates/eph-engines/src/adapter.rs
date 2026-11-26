@@ -208,7 +208,7 @@ pub trait TranscriptReader {
 }
 
 /// The adapter contract. The manager and the terminal consume only this surface.
-pub trait EngineAdapter {
+pub trait EngineAdapter: Send + Sync {
     /// Installed binary, install offer and probe declarations.
     fn binary(&self) -> BinarySpec;
     /// The lifecycle events this adapter's settings can supply.
@@ -240,10 +240,12 @@ pub trait EngineAdapter {
     ) -> Option<Result<TrustRecord, ConfigError>> {
         None
     }
-    /// The exact environment to use for authentication when the probe exists.
+    /// The private authentication environment before grants or hook registration.
     fn authentication_environment(
         &self,
-        _config: &SpawnConfig<'_>,
+        _agent: &AgentId,
+        _config: &ConfigDir,
+        _parent: &[(OsString, OsString)],
     ) -> Result<Option<Environment>, ConfigError> {
         Ok(None)
     }
@@ -381,7 +383,11 @@ impl EngineAdapter for Claude {
     fn plan(&self, config: &SpawnConfig<'_>) -> Result<SpawnPlan, AdapterError> {
         let settings = settings::render(config, &self.hook, self.usage.as_ref())?;
         let mut environment = env::spawn(config);
-        env::claude(config, &mut environment);
+        env::claude(
+            config.engine_config,
+            config.parent_environment,
+            &mut environment,
+        );
         build_plan(
             config,
             CLAUDE,
@@ -409,12 +415,14 @@ impl EngineAdapter for Claude {
 
     fn authentication_environment(
         &self,
-        config: &SpawnConfig<'_>,
+        agent: &AgentId,
+        config: &ConfigDir,
+        parent: &[(OsString, OsString)],
     ) -> Result<Option<Environment>, ConfigError> {
-        config.engine_config.require_engine(EngineId::Claude)?;
-        config.engine_config.require_agent(config.agent_id)?;
-        let mut environment = env::spawn(config);
-        env::claude(config, &mut environment);
+        config.require_engine(EngineId::Claude)?;
+        config.require_agent(agent)?;
+        let mut environment = env::base_environment(parent);
+        env::claude(config, parent, &mut environment);
         Ok(Some(environment))
     }
 }
@@ -592,7 +600,7 @@ mod tests {
         );
         let id = "agent.fake".parse().unwrap();
         let private = ConfigDir::for_agent(root.path(), EngineId::Custom, &id).unwrap();
-        let mut parent = env::base(&std::env::vars_os().collect::<Vec<_>>());
+        let mut parent = env::base_environment(&std::env::vars_os().collect::<Vec<_>>());
         env::put(&mut parent, "PATH", root.path());
         let config = SpawnConfig {
             agent_id: &id,

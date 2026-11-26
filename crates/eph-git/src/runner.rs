@@ -1393,15 +1393,51 @@ pub(crate) mod tests {
         );
     }
 
+    fn run_with_pipe_holder(cwd: &Path, args: &[&str]) -> (GitResult, Instant) {
+        let native::Piped {
+            mut child,
+            stdout,
+            stderr,
+        } = git().launch(cwd, args).unwrap();
+        let stdout = drain(stdout);
+        let stderr = drain(stderr);
+        let setup_deadline = Instant::now() + Duration::from_secs(8);
+        let root_exited = matches!(
+            finish(&mut child, setup_deadline, drain_until(setup_deadline)),
+            Exit::Exited
+        );
+        let ready = cwd.join("holder-ready");
+        while root_exited && !ready.is_file() && Instant::now() < setup_deadline {
+            thread::sleep(POLL);
+        }
+        let holder_ready = ready.is_file();
+
+        // Root startup and the holder's first write have their own window.
+        // Once both are observed, give the real pipes the normal drain grace.
+        let drain_started = Instant::now();
+        #[cfg(unix)]
+        let result =
+            complete_and_reap(child, &stdout, &stderr, Duration::ZERO, native::Child::reap);
+        #[cfg(windows)]
+        let result = complete(&mut child, &stdout, &stderr, Duration::ZERO);
+        assert!(root_exited, "the fixture root did not exit: {result:?}");
+        assert!(
+            holder_ready,
+            "the pipe holder did not become ready: {result:?}"
+        );
+        (result, drain_started)
+    }
+
     #[test]
     fn output_that_never_arrives_is_a_failure_not_an_empty_success() {
-        let dir = std::env::temp_dir();
-        let started = Instant::now();
-        // git exits well inside its deadline, even on a loaded machine; the
-        // backgrounded sleep keeps its pipes open well past deadline and grace.
-        let result = git().with_timeout(Duration::from_secs(2)).run(
+        let dir = scratch("output-never-arrives");
+        let (result, drain_started) = run_with_pipe_holder(
             &dir,
-            &["-c", "alias.linger=!(sleep 10 &); echo hi", "linger"],
+            &[
+                "-c",
+                "alias.linger=!(echo ready > holder-ready; sleep 12) & echo hi",
+                "linger",
+            ],
         );
         assert_eq!(result.code, None, "{result:?}");
         assert!(
@@ -1415,24 +1451,28 @@ pub(crate) mod tests {
             "git itself exited: {result:?}"
         );
         assert!(
-            started.elapsed() < Duration::from_secs(6),
-            "deadline plus grace, not the sleep"
+            drain_started.elapsed() < Duration::from_secs(6),
+            "the drain should return before the holder's sleep ends"
         );
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn a_descendant_holding_output_past_the_deadline_cannot_continue_after_the_root_exits() {
         let dir = scratch("output-deadline-owned-descendant");
-        let start = Instant::now();
-        let result = git().with_timeout(Duration::from_secs(2)).run(
+        let (result, _) = run_with_pipe_holder(
             &dir,
             &[
                 "-c",
-                "alias.linger=!(echo ready > started; sleep 4; echo survived > late) & echo root-exiting",
+                concat!(
+                    "alias.linger=!(echo ready > holder-ready; attempt=0; ",
+                    r#"while [ "$attempt" -lt 48 ] && [ ! -f release ]; do "#,
+                    "sleep 0.25; attempt=$((attempt+1)); done; ",
+                    "if [ -f release ]; then echo survived > late; fi) & echo root-exiting",
+                ),
                 "linger",
             ],
         );
-        assert!(dir.join("started").is_file(), "the descendant actually ran");
         assert!(
             result
                 .stderr
@@ -1443,7 +1483,9 @@ pub(crate) mod tests {
             !result.stderr.contains("could not be stopped"),
             "{result:?}"
         );
-        thread::sleep(Duration::from_secs(5).saturating_sub(start.elapsed()));
+        // A live holder would respond to release by writing its late marker.
+        write_atomic(&dir.join("release"), b"release\n").unwrap();
+        thread::sleep(Duration::from_secs(2));
         assert!(
             !dir.join("late").exists(),
             "a descendant survived the deadline"
@@ -1457,23 +1499,29 @@ pub(crate) mod tests {
         let clamped = git().with_timeout(Duration::MAX);
         assert_eq!(clamped.timeout, MAX_TIMEOUT);
         assert_eq!(MAX_TIMEOUT, Duration::from_secs(3600), "one hour");
-        let result = clamped.run(&dir, &["--version"]);
+        let result = clamped
+            .with_timeout(Duration::from_secs(2))
+            .run(&dir, &["--version"]);
         assert!(result.ok(), "{result:?}");
         fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn output_lost_on_either_pipe_alone_is_a_failure() {
-        let dir = scratch("one-pipe");
         // Each backgrounded sleep keeps one pipe open and sends the other to
         // /dev/null, so exactly one stream never ends.
         for (holds, alias) in [
-            ("stdout", "alias.linger=!(sleep 10 2>/dev/null &); echo hi"),
-            ("stderr", "alias.linger=!(sleep 10 >/dev/null &); echo hi"),
+            (
+                "stdout",
+                "alias.linger=!(echo ready > holder-ready; sleep 12) 2>/dev/null & echo hi",
+            ),
+            (
+                "stderr",
+                "alias.linger=!(echo ready > holder-ready; sleep 12) >/dev/null & echo hi",
+            ),
         ] {
-            let result = git()
-                .with_timeout(Duration::from_secs(2))
-                .run(&dir, &["-c", alias, "linger"]);
+            let dir = scratch(&format!("one-pipe-{holds}"));
+            let (result, _) = run_with_pipe_holder(&dir, &["-c", alias, "linger"]);
             assert_eq!(result.code, None, "{holds}: {result:?}");
             assert!(
                 result
@@ -1481,8 +1529,8 @@ pub(crate) mod tests {
                     .ends_with("\ngit's output did not arrive in time"),
                 "{holds}: {result:?}"
             );
+            fs::remove_dir_all(&dir).unwrap();
         }
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

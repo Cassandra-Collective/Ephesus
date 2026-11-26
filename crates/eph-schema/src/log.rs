@@ -113,6 +113,11 @@ impl LogKind {
     pub fn events(self) -> &'static [&'static str] {
         match self {
             LogKind::Degradation => crate::degradation::EVENTS,
+            LogKind::Spawn => crate::lifecycle::SPAWN,
+            LogKind::Exit => crate::lifecycle::EXIT,
+            LogKind::Ghost => crate::lifecycle::GHOST,
+            LogKind::Respawn => crate::lifecycle::RESPAWN,
+            LogKind::Task => crate::lifecycle::TASK,
             _ => &[],
         }
     }
@@ -172,6 +177,12 @@ impl Versioned for LogLine {
                     "1 to 64 characters with no spaces or control characters",
                 ));
             }
+        }
+        if matches!(
+            self.kind,
+            LogKind::Spawn | LogKind::Exit | LogKind::Ghost | LogKind::Respawn | LogKind::Task
+        ) {
+            crate::lifecycle::validate(self)?;
         }
         Ok(())
     }

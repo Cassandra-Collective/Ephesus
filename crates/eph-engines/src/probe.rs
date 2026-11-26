@@ -3,7 +3,7 @@
 use std::{
     ffi::{OsStr, OsString},
     io::{self, Read},
-    path::Path,
+    path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, TryRecvError},
     thread,
     time::{Duration, Instant},
@@ -13,7 +13,10 @@ use std::{
 use eph_process::unix as native;
 #[cfg(windows)]
 use eph_process::windows as native;
-use eph_pty::{ExitStatus, path::resolve_executable};
+use eph_pty::{
+    ExitStatus,
+    path::{find_executable, resolve_executable},
+};
 use thiserror::Error;
 
 use crate::{Authentication, AuthenticationSpec, BinarySpec, CommandSpec};
@@ -32,9 +35,42 @@ pub struct ProbeCompletion<T> {
     pub answer: T,
 }
 
+/// The version and exact executable found by an acknowledged version probe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedExecutable {
+    path: PathBuf,
+    version: String,
+}
+
+impl VerifiedExecutable {
+    /// The resolved path to use for authentication and the terminal.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The release reported by this executable.
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+}
+
+/// What version preflight can establish about a declared engine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VersionCheck {
+    /// Every PATH candidate was inspected and the executable was absent.
+    Missing,
+    /// The executable completed successfully with a recognized version.
+    Ready(VerifiedExecutable),
+    /// The executable ran but did not report a usable version.
+    Unrecognized(ExitStatus),
+}
+
 /// A probe that did not return a complete result.
 #[derive(Debug, Error)]
 pub enum ProbeError {
+    /// PATH inspection could not reliably establish whether a candidate exists.
+    #[error("could not inspect the engine probe's executable: {0}")]
+    Inspect(#[source] io::Error),
     /// The command could not start in its specified environment.
     #[error("could not start the engine probe: {0}")]
     Start(#[source] io::Error),
@@ -63,6 +99,29 @@ pub enum ProbeError {
 }
 
 impl BinarySpec {
+    /// Inspect PATH, probe the exact match, and distinguish absence from failure.
+    pub fn check_version(
+        self,
+        cwd: &Path,
+        environment: &[(OsString, OsString)],
+    ) -> Result<VersionCheck, ProbeError> {
+        let Some(path) = find_executable(OsStr::new(self.version.program), cwd, environment)
+            .map_err(ProbeError::Inspect)?
+        else {
+            return Ok(VersionCheck::Missing);
+        };
+        let completed = command_at(&path, self.version, cwd, environment)?;
+        if completed.status == ExitStatus::Code(0)
+            && let Some(version) = self.parse_version(&completed.stdout)
+        {
+            return Ok(VersionCheck::Ready(VerifiedExecutable {
+                path,
+                version: version.to_owned(),
+            }));
+        }
+        Ok(VersionCheck::Unrecognized(completed.status))
+    }
+
     /// Run the recorded version command, using only the supplied environment.
     pub fn run_version(
         self,
@@ -82,6 +141,20 @@ impl BinarySpec {
 }
 
 impl AuthenticationSpec {
+    /// Run the private auth probe with the exact executable verified earlier.
+    pub fn run_at(
+        self,
+        executable: &VerifiedExecutable,
+        cwd: &Path,
+        environment: &[(OsString, OsString)],
+    ) -> Result<ProbeCompletion<Authentication>, ProbeError> {
+        let complete = command_at(executable.path(), self.probe, cwd, environment)?;
+        Ok(ProbeCompletion {
+            status: complete.status,
+            answer: self.classify(&complete.stdout),
+        })
+    }
+
     /// Run the auth probe in the engine environment for this hire.
     pub fn run(
         self,
@@ -106,6 +179,17 @@ fn command(
     run(OsStr::new(spec.program), &args, cwd, environment, DEADLINE)
 }
 
+fn command_at(
+    executable: &Path,
+    spec: CommandSpec,
+    cwd: &Path,
+    environment: &[(OsString, OsString)],
+) -> Result<Completed, ProbeError> {
+    let cwd = std::path::absolute(cwd).map_err(ProbeError::Start)?;
+    let args: Vec<OsString> = spec.args.iter().map(OsString::from).collect();
+    run_resolved(executable, &args, &cwd, environment, DEADLINE)
+}
+
 struct Completed {
     status: ExitStatus,
     stdout: Vec<u8>,
@@ -126,12 +210,32 @@ fn run(
             "program was not found on the probe plan's PATH",
         )));
     }
+    run_resolved(&resolved, args, &cwd, environment, timeout)
+}
+
+fn run_resolved(
+    executable: &Path,
+    args: &[OsString],
+    cwd: &Path,
+    environment: &[(OsString, OsString)],
+    timeout: Duration,
+) -> Result<Completed, ProbeError> {
     let deadline = Instant::now() + timeout;
+    run_with_deadline(executable, args, cwd, environment, || Ok(deadline))
+}
+
+fn run_with_deadline(
+    executable: &Path,
+    args: &[OsString],
+    cwd: &Path,
+    environment: &[(OsString, OsString)],
+    deadline: impl FnOnce() -> Result<Instant, ProbeError>,
+) -> Result<Completed, ProbeError> {
     let native::Piped {
         mut child,
         stdout,
         stderr,
-    } = launch(&resolved, args, &cwd, environment).map_err(ProbeError::Start)?;
+    } = launch(executable, args, cwd, environment).map_err(ProbeError::Start)?;
     let finish = |child: &mut native::Child| {
         let stdout = drain(stdout).map_err(|source| ProbeError::Output {
             stream: "stdout",
@@ -141,7 +245,7 @@ fn run(
             stream: "stderr",
             source,
         })?;
-        wait_complete(child, &stdout, &stderr, deadline)
+        wait_complete(child, &stdout, &stderr, deadline()?)
     };
     match finish(&mut child) {
         Ok(complete) => Ok(complete),
@@ -356,7 +460,7 @@ mod tests {
             Ok("hold") => {
                 let marker = std::env::var_os(READY).unwrap();
                 write_atomic(Path::new(&marker), b"descendant got to sleep").unwrap();
-                thread::sleep(Duration::from_secs(3));
+                thread::sleep(Duration::from_secs(10));
             }
             Ok("descendant") => {
                 let _child = std::process::Command::new(std::env::current_exe().unwrap())
@@ -397,14 +501,23 @@ mod tests {
     }
 
     fn fixture(mode: &str, dir: &Path, timeout: Duration) -> Result<Completed, ProbeError> {
+        let deadline = Instant::now() + timeout;
+        fixture_with_deadline(mode, dir, || Ok(deadline))
+    }
+
+    fn fixture_with_deadline(
+        mode: &str,
+        dir: &Path,
+        deadline: impl FnOnce() -> Result<Instant, ProbeError>,
+    ) -> Result<Completed, ProbeError> {
         let exe = std::env::current_exe().unwrap();
-        let mut env = env::base(&std::env::vars_os().collect::<Vec<_>>());
+        let mut env = env::base_environment(&std::env::vars_os().collect::<Vec<_>>());
         env.extend([
             (FIXTURE.into(), mode.into()),
             (READY.into(), dir.join("ready").into_os_string()),
         ]);
-        run(
-            exe.as_os_str(),
+        run_with_deadline(
+            &exe,
             &[
                 "--exact".into(),
                 "probe::tests::child_fixture".into(),
@@ -412,7 +525,7 @@ mod tests {
             ],
             dir,
             &env,
-            timeout,
+            deadline,
         )
     }
 
@@ -431,13 +544,49 @@ mod tests {
     #[test]
     fn a_descendant_holding_the_pipes_keeps_the_probe_incomplete() {
         let root = tempfile::tempdir().unwrap();
-        assert!(matches!(
-            fixture("descendant", root.path(), Duration::from_secs(1)),
-            Err(ProbeError::Deadline)
-        ));
-        assert_eq!(
-            std::fs::read(root.path().join("ready")).unwrap(),
-            b"descendant got to sleep"
+        let marker = root.path().join("ready");
+        let startup_deadline = Instant::now() + Duration::from_secs(5);
+        let assertion_started = Cell::new(None);
+        let result = fixture_with_deadline("descendant", root.path(), || {
+            let readiness = |source| ProbeError::Output {
+                stream: "fixture readiness",
+                source,
+            };
+            loop {
+                match std::fs::read(&marker) {
+                    Ok(bytes) if bytes == b"descendant got to sleep" => {
+                        let started = Instant::now();
+                        assertion_started.set(Some(started));
+                        return Ok(started + Duration::from_secs(1));
+                    }
+                    Ok(_) => {
+                        return Err(readiness(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "unexpected descendant marker",
+                        )));
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(readiness(error)),
+                }
+                let remaining = startup_deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(readiness(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "the pipe-holding descendant did not start",
+                    )));
+                }
+                thread::sleep(remaining.min(POLL));
+            }
+        });
+        assert!(
+            matches!(&result, Err(ProbeError::Deadline)),
+            "{:?}",
+            result.err()
+        );
+        assert!(
+            assertion_started
+                .get()
+                .is_some_and(|started| started.elapsed() >= Duration::from_secs(1))
         );
     }
 
@@ -530,7 +679,7 @@ mod tests {
             "@echo off\r\ntype \"%EPH_PROBE_OUTPUT%\"\r\nexit /b %EPH_PROBE_EXIT%\r\n",
             "#!/bin/sh\n/bin/cat \"$EPH_PROBE_OUTPUT\"\nexit \"$EPH_PROBE_EXIT\"\n",
         );
-        let mut environment = env::base(&std::env::vars_os().collect::<Vec<_>>());
+        let mut environment = env::base_environment(&std::env::vars_os().collect::<Vec<_>>());
         let bytes = root.path().join("fixture.stdout");
         env::put(&mut environment, "PATH", root.path());
         env::put(&mut environment, "EPH_PROBE_OUTPUT", bytes.as_path());
@@ -549,6 +698,13 @@ mod tests {
                 answer: Some("2.1.295".to_owned())
             }
         );
+        let VersionCheck::Ready(executable) =
+            version.check_version(root.path(), &environment).unwrap()
+        else {
+            panic!("expected the recorded version to identify the executable");
+        };
+        assert!(executable.path().is_absolute());
+        assert_eq!(executable.version(), "2.1.295");
         env::put(&mut environment, "EPH_PROBE_EXIT", "17");
         assert_eq!(
             version.run_version(root.path(), &environment).unwrap(),
@@ -556,6 +712,10 @@ mod tests {
                 status: ExitStatus::Code(17),
                 answer: None
             }
+        );
+        assert_eq!(
+            version.check_version(root.path(), &environment).unwrap(),
+            VersionCheck::Unrecognized(ExitStatus::Code(17)),
         );
         let mut auth = version.authentication.unwrap();
         auth.probe.program = "eph-probe-replay";
@@ -572,6 +732,24 @@ mod tests {
                 answer: Authentication::NeedsLogin
             }
         );
+        env::put(&mut environment, "PATH", "");
+        assert_eq!(
+            auth.run_at(&executable, root.path(), &environment)
+                .unwrap()
+                .answer,
+            Authentication::NeedsLogin,
+        );
+        assert_eq!(
+            version.check_version(root.path(), &environment).unwrap(),
+            VersionCheck::Missing
+        );
+        env::put(&mut environment, "PATH", root.path());
+        std::fs::create_dir(root.path().join("not-an-executable.exe")).unwrap();
+        version.version.program = "not-an-executable.exe";
+        assert!(matches!(
+            version.check_version(root.path(), &environment),
+            Err(ProbeError::Inspect(_))
+        ));
     }
 
     #[test]

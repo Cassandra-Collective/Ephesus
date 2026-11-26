@@ -225,7 +225,7 @@ impl Worktrees {
             // A parent that cannot be made fails the add below, in git's words.
             let _made = fs::create_dir_all(parent);
         }
-        let at = path.to_string_lossy();
+        let at = git_worktree_path(&path);
         let args: Vec<&str> = if branch_created {
             vec!["worktree", "add", "-b", &plan.branch, &at]
         } else {
@@ -293,6 +293,7 @@ impl Worktrees {
         // git's own clean check reads the repository's config too, so it gets
         // the same override: a file written after `state()` looked is still
         // refused, not deleted.
+        let at = git_worktree_path(path);
         let removed = self.git.run(
             repo,
             &[
@@ -300,7 +301,7 @@ impl Worktrees {
                 "status.showUntrackedFiles=all",
                 "worktree",
                 "remove",
-                &path.to_string_lossy(),
+                &at,
             ],
         );
         if !removed.ok() {
@@ -476,6 +477,22 @@ fn resolved(path: &Path) -> PathBuf {
     }
 }
 
+fn git_worktree_path(path: &Path) -> std::borrow::Cow<'_, str> {
+    let path = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{rest}").into();
+        }
+        if let Some(rest) = path.strip_prefix(r"\\?\")
+            && rest.as_bytes().get(1) == Some(&b':')
+        {
+            return rest.to_owned().into();
+        }
+    }
+    path
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -560,6 +577,27 @@ mod tests {
         assert_eq!(
             must(&path, &["branch", "--show-current"]).trim(),
             "agent/mason"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_canonical_windows_worktree_path_is_accepted_by_git() {
+        let rig = Rig::new("canonical");
+        let mut plan = rig.plan("mason");
+        let relative = plan.path.strip_prefix(&rig.dir).unwrap();
+        plan.path = fs::canonicalize(&rig.dir).unwrap().join(relative);
+        let (path, branch, _) = rig.create(&plan);
+        assert_eq!(branch, "agent/mason");
+        assert!(path.join("README.md").is_file());
+        assert_eq!(
+            rig.worktrees.remove(&rig.target, &path),
+            WorktreeRemoval::Removed { residue: None }
+        );
+        assert!(!path.exists());
+        assert_eq!(
+            git_worktree_path(Path::new(r"\\?\UNC\server\share\folder")),
+            r"\\server\share\folder",
         );
     }
 

@@ -47,6 +47,8 @@ New ADRs append; accepted ADRs are never edited, only superseded.
 | [ADR-0042](./ADR-0042-owned-process-group-shutdown.md) | Own the shutdown boundary at spawn | accepted |
 | [ADR-0043](./ADR-0043-preserve-the-terminal-spawn-plan.md) | Preserve the terminal spawn plan | accepted |
 | [ADR-0044](./ADR-0044-bound-engine-probes-and-regenerate-private-settings.md) | Bound engine probes and regenerate private settings | accepted |
+| [ADR-0045](./ADR-0045-own-agent-launches-through-teardown.md) | Own agent launches through teardown | accepted |
+| [ADR-0046](./ADR-0046-queue-terminal-input-and-retry-cleanup.md) | Queue terminal input and retry cleanup by generation | accepted |
 
 **Numbers 0037–0039 are reserved, not missing.** ADR-0037 (the bench), ADR-0038
 (the provider seam) and ADR-0039 (the gate as a native agent's permission system)
